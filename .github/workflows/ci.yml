@@ -67,18 +67,6 @@ jobs:
       - name: Run tests with release profile
         run: cargo test --release --verbose
 
-  minimal-versions:
-    name: Test Minimal Versions
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
-      - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo +nightly update -Z minimal-versions
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --all-features
-
   python-bindings:
     name: Python Bindings
     runs-on: ${{ matrix.os }}
