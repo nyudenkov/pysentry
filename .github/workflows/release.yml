@@ -153,15 +153,18 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Build wheels
-      uses: PyO3/maturin-action@v1.49.3
-      with:
-        args: --release --features python --out dist --interpreter python3.8 python3.9 python3.10 python3.11 python3.12
+      uses: pypa/cibuildwheel@v2.29.0
+      env:
+        CIBW_FEATURES_LINUX: python
+        CIBW_FEATURES_MACOS: python
+        CIBW_FEATURES_WINDOWS: python
+        CIBW_BUILD_VERBOSITY: 1
 
     - name: Upload wheels
       uses: actions/upload-artifact@v4
       with:
         name: wheels-${{ matrix.os }}
-        path: dist/*.whl
+        path: wheelhouse/*.whl
 
   publish-pypi:
     name: Publish to PyPI
@@ -172,18 +175,19 @@ jobs:
     - name: Download wheels
       uses: actions/download-artifact@v4
       with:
-        path: wheels
+        path: artifacts
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
+    - name: Prepare wheels for upload
+      run: |
+        mkdir -p wheels
+        find artifacts -name "*.whl" -exec cp {} wheels/ \;
+        ls -la wheels/
 
     - name: Publish to PyPI
-      uses: PyO3/maturin-action@v1.49.3
+      uses: pypa/gh-action-pypi-publish@release/v1
       with:
-        command: upload
-        args: --non-interactive --username __token__ --password ${{ secrets.PYPI_API_TOKEN }} wheels/*/*.whl
+        password: ${{ secrets.PYPI_API_TOKEN }}
+        packages-dir: wheels/
 
   update-release:
     name: Update Release
