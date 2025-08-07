@@ -1,4 +1,4 @@
-# PySentry
+# 🐍 PySentry
 
 A fast, reliable security vulnerability scanner for Python projects, written in Rust.
 
