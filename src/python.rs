@@ -9,7 +9,7 @@ use std::path::Path;
 #[pyo3(signature = (path, format=None))]
 fn audit_python(path: String, format: Option<String>) -> PyResult<String> {
     let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {}", e)))?;
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
 
     rt.block_on(async {
         let temp_dir = std::env::temp_dir().join("pysentry-cache");
@@ -35,12 +35,11 @@ fn audit_python(path: String, format: Option<String>) -> PyResult<String> {
                 match ReportGenerator::generate(&report, audit_format, Some(project_path)) {
                     Ok(output) => Ok(output),
                     Err(e) => Err(PyRuntimeError::new_err(format!(
-                        "Failed to generate report: {}",
-                        e
+                        "Failed to generate report: {e}"
                     ))),
                 }
             }
-            Err(e) => Err(PyRuntimeError::new_err(format!("Audit failed: {}", e))),
+            Err(e) => Err(PyRuntimeError::new_err(format!("Audit failed: {e}"))),
         }
     })
 }
@@ -55,7 +54,7 @@ fn audit_with_options(
     ignore_ids: Option<Vec<String>>,
 ) -> PyResult<String> {
     let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {}", e)))?;
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
 
     rt.block_on(async {
         let temp_dir = std::env::temp_dir().join("pysentry-cache");
@@ -92,12 +91,11 @@ fn audit_with_options(
                 match ReportGenerator::generate(&report, audit_format, Some(project_path)) {
                     Ok(output) => Ok(output),
                     Err(e) => Err(PyRuntimeError::new_err(format!(
-                        "Failed to generate report: {}",
-                        e
+                        "Failed to generate report: {e}"
                     ))),
                 }
             }
-            Err(e) => Err(PyRuntimeError::new_err(format!("Audit failed: {}", e))),
+            Err(e) => Err(PyRuntimeError::new_err(format!("Audit failed: {e}"))),
         }
     })
 }

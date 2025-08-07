@@ -22,6 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -68,6 +72,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo +nightly update -Z minimal-versions
       - uses: dtolnay/rust-toolchain@stable
@@ -83,6 +89,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -109,7 +119,7 @@ jobs:
         run: maturin build --features python
 
       - name: Install built wheel
-        run: pip install --find-links target/wheels pysentry
+        run: pip install --find-links target/wheels pysentry-rs
 
       - name: Test Python bindings
         run: python -c "import pysentry; print('Python bindings work!')"

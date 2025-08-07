@@ -2,6 +2,7 @@
 name = "pysentry"
 version = "0.1.2"
 edition = "2021"
+rust-version = "1.82"
 description = "Security vulnerability auditing for Python packages"
 license = "GPL-3.0"
 repository = "https://github.com/nyudenkov/pysentry"
