@@ -1,0 +1,34 @@
+[package]
+name = "pysentry"
+version = "0.1.0"
+edition = "2021"
+description = "Security vulnerability auditing for Python packages"
+license = "GPL-3.0"
+repository = "https://github.com/nyudenkov/pysentry"
+keywords = ["python", "security", "audit", "vulnerabilities"]
+categories = ["development-tools"]
+
+[[bin]]
+name = "pysentry"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.98"
+async-trait = "0.1.88"
+chrono = { version = "0.4.41", features = ["serde"] }
+clap = { version = "4.5.43", features = ["derive"] }
+dirs = "6.0.0"
+fs-err = "3.1.1"
+futures = "0.3.31"
+pep440_rs = "0.7.3"
+reqwest = { version = "0.12.22", features = ["json", "stream"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.142"
+serde_yaml = "0.9.34"
+tempfile = "3.20.0"
+thiserror = "2.0.12"
+tokio = { version = "1.47.1", features = ["fs", "io-util", "rt-multi-thread", "macros"] }
+toml = "0.9.5"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
