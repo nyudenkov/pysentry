@@ -3,7 +3,7 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "pysentry"
+name = "pysentry-rs"
 description = "Security vulnerability auditing tool for Python packages"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -33,7 +33,7 @@ Repository = "https://github.com/nyudenkov/pysentry"
 Issues = "https://github.com/nyudenkov/pysentry/issues"
 
 [project.scripts]
-pysentry = "pysentry:main"
+pysentry-rs = "pysentry:main"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
