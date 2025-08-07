@@ -14,6 +14,8 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -66,6 +68,8 @@ jobs:
             artifact_name: pysentry.exe
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
 
@@ -137,46 +141,9 @@ jobs:
     name: Build Python Wheels
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
-        include:
-          - os: ubuntu-latest
-            platform: linux
-          - os: macos-latest
-            platform: macos
-          - os: windows-latest
-            platform: windows
 
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install maturin
-      run: pip install maturin
-
-    - name: Build wheels
-      run: maturin build --release --features python --python python${{ matrix.python-version }}
-
-    - name: Upload wheels
-      uses: actions/upload-artifact@v4
-      with:
-        name: wheels-${{ matrix.platform }}-py${{ matrix.python-version }}
-        path: target/wheels/*.whl
-
-  publish-pypi:
-    name: Publish to PyPI
-    runs-on: ubuntu-latest
-    needs: build-python-wheels
-    if: startsWith(github.ref, 'refs/tags/v')
     steps:
     - uses: actions/checkout@v4
 
@@ -188,19 +155,46 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Install maturin
-      run: pip install maturin
+    - name: Build wheels
+      uses: PyO3/maturin-action@v1.49.3
+      with:
+        args: --release --features python --out dist --interpreter python3.8 python3.9 python3.10 python3.11 python3.12
 
-    - name: Build and publish to PyPI
-      env:
-        MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-      run: maturin publish --features python --username __token__ --password $MATURIN_PYPI_TOKEN
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: dist/*.whl
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build-python-wheels
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - name: Download wheels
+      uses: actions/download-artifact@v4
+      with:
+        path: wheels
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Publish to PyPI
+      uses: PyO3/maturin-action@v1.49.3
+      with:
+        command: upload
+        args: --non-interactive --username __token__ --password ${{ secrets.PYPI_API_TOKEN }} wheels/*/*.whl
 
   update-release:
     name: Update Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs: [build-binaries, publish-crates, publish-pypi]
-    if: always() && needs.create-release.result == 'success'
+    if: always()
     steps:
     - name: Mark release as published
       uses: softprops/action-gh-release@v1
