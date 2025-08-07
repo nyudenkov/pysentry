@@ -26,7 +26,65 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
 
 ## Installation
 
-### From Source
+Choose the installation method that works best for you:
+
+### ⚡ Via uvx (Recommended for occasional use)
+
+Run directly without installing (requires [uv](https://docs.astral.sh/uv/)):
+
+```bash
+uvx pysentry-rs /path/to/project
+```
+
+This method:
+
+- Runs the latest version without installation
+- Automatically manages Python environment
+- Perfect for CI/CD or occasional security audits
+- No need to manage package versions or updates
+
+### 📦 From PyPI (Python Package)
+
+For Python 3.8+ on Linux and macOS:
+
+```bash
+pip install pysentry-rs
+```
+
+Then use it with Python:
+
+```bash
+python -m pysentry /path/to/project
+# or directly if scripts are in PATH
+pysentry-rs /path/to/project
+```
+
+### ⚡ From Crates.io (Rust Package)
+
+If you have Rust installed:
+
+```bash
+cargo install pysentry
+```
+
+### 💾 From GitHub Releases (Pre-built Binaries)
+
+Download the latest release for your platform:
+
+- **Linux x64**: `pysentry-linux-x64.tar.gz`
+- **Linux x64 (musl)**: `pysentry-linux-x64-musl.tar.gz`
+- **Linux ARM64**: `pysentry-linux-arm64.tar.gz`
+- **macOS x64**: `pysentry-macos-x64.tar.gz`
+- **macOS ARM64**: `pysentry-macos-arm64.tar.gz`
+- **Windows x64**: `pysentry-windows-x64.zip`
+
+```bash
+# Example for Linux x64
+curl -L https://github.com/nyudenkov/pysentry/releases/latest/download/pysentry-linux-x64.tar.gz | tar -xz
+./pysentry-linux-x64/pysentry --help
+```
+
+### 🔧 From Source
 
 ```bash
 git clone https://github.com/nyudenkov/pysentry
@@ -36,20 +94,36 @@ cargo build --release
 
 The binary will be available at `target/release/pysentry`.
 
-### System Requirements
+### Requirements
 
-- Rust 1.70+ (for building from source)
-- Internet connection (for vulnerability database updates)
+- **For uvx**: Python 3.8+ and [uv](https://docs.astral.sh/uv/) installed (Linux/macOS only)
+- **For binaries**: No additional dependencies
+- **For Python package**: Python 3.8+ (Linux/macOS only)
+- **For Rust package and source**: Rust 1.79+
+
+### Platform Support
+
+| Installation Method | Linux | macOS | Windows |
+| ------------------- | ----- | ----- | ------- |
+| uvx                 | ✅    | ✅    | ❌      |
+| PyPI (pip)          | ✅    | ✅    | ❌      |
+| Crates.io (cargo)   | ✅    | ✅    | ✅      |
+| GitHub Releases     | ✅    | ✅    | ✅      |
+| From Source         | ✅    | ✅    | ✅      |
+
+**Note**: Windows Python wheels are not available due to compilation complexity. Windows users should use the pre-built binary from GitHub releases, install via cargo and build from source.
 
 ## Quick Start
 
 ### Basic Usage
 
 ```bash
-# Audit current directory
-pysentry
+# Using uvx (recommended for occasional use)
+uvx pysentry-rs
+uvx pysentry-rs /path/to/python/project
 
-# Audit specific project
+# Using installed binary
+pysentry
 pysentry /path/to/python/project
 
 # Include development dependencies
@@ -65,10 +139,14 @@ pysentry --format json --output audit-results.json
 ### Advanced Usage
 
 ```bash
-# Comprehensive audit with all dependency types
-pysentry --dev --optional --format sarif --output security-report.sarif
+# Using uvx for comprehensive audit
+uvx pysentry-rs --dev --optional --format sarif --output security-report.sarif
 
 # Check only direct dependencies using OSV database
+uvx pysentry-rs --direct-only --source osv
+
+# Or with installed binary
+pysentry --dev --optional --format sarif --output security-report.sarif
 pysentry --direct-only --source osv
 
 # Ignore specific vulnerabilities
