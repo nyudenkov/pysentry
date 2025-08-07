@@ -8,9 +8,16 @@ repository = "https://github.com/nyudenkov/pysentry"
 keywords = ["python", "security", "audit", "vulnerabilities"]
 categories = ["development-tools"]
 
+[lib]
+name = "pysentry"
+crate-type = ["cdylib", "rlib"]
+
 [[bin]]
 name = "pysentry"
 path = "src/main.rs"
+
+[features]
+python = ["pyo3"]
 
 [dependencies]
 anyhow = "1.0.98"
@@ -21,6 +28,7 @@ dirs = "6.0.0"
 fs-err = "3.1.1"
 futures = "0.3.31"
 pep440_rs = "0.7.3"
+pyo3 = { version = "0.25.1", features = ["extension-module"], optional = true }
 reqwest = { version = "0.12.22", features = ["json", "stream"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.142"

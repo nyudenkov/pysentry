@@ -1,1 +1,52 @@
+# Rust build artifacts
 /target
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+build/
+dist/
+.Python
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# PyO3/Maturin artifacts
+python/**/*.so
+python/**/*.pyd
+python/**/*.dylib
+*.whl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Cache directories
+.cache/
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+htmlcov/
+
+# Temporary files
+*.tmp
+*.bak
+*.log

@@ -25,6 +25,9 @@ mod error;
 
 pub use error::{AuditError, Result};
 
+#[cfg(feature = "python")]
+mod python;
+
 /// Main entry point for performing audits
 ///
 /// This is a high-level API that coordinates the entire audit process:
