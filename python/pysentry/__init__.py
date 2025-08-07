@@ -2,7 +2,7 @@
 
 from ._internal import audit_python, audit_with_options
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __all__ = ["audit_python", "audit_with_options", "main"]
 
 

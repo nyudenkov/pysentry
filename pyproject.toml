@@ -36,6 +36,6 @@ Issues = "https://github.com/nyudenkov/pysentry/issues"
 pysentry-rs = "pysentry:main"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["python", "pyo3/extension-module"]
 python-source = "python"
 module-name = "pysentry._internal"

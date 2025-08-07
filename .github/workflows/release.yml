@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    tags: 
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.id }}
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Release ${{ github.ref_name }}
+        draft: true
+        prerelease: ${{ contains(github.ref_name, '-') }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-binaries:
+    name: Build Binaries
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-x64
+            artifact_name: pysentry
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: linux-x64-musl
+            artifact_name: pysentry
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-arm64
+            artifact_name: pysentry
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: macos-x64
+            artifact_name: pysentry
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-arm64
+            artifact_name: pysentry
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x64
+            artifact_name: pysentry.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install cross-compilation tools
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+
+    - name: Install musl tools
+      if: matrix.target == 'x86_64-unknown-linux-musl'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools
+
+    - name: Build binary
+      run: cargo build --release --target ${{ matrix.target }} --bin pysentry
+
+    - name: Package binary (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        name=pysentry-${{ matrix.name }}
+        mkdir $name
+        cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} $name/
+        cp README.md $name/
+        cp LICENSE $name/
+        tar -czf $name.tar.gz $name
+        echo "ASSET=$name.tar.gz" >> $GITHUB_ENV
+
+    - name: Package binary (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        $name = "pysentry-${{ matrix.name }}"
+        mkdir $name
+        cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} $name/
+        cp README.md $name/
+        cp LICENSE $name/
+        Compress-Archive -Path $name -DestinationPath "$name.zip"
+        echo "ASSET=$name.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        files: ${{ env.ASSET }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-crates:
+    name: Publish to Crates.io
+    runs-on: ubuntu-latest
+    needs: build-binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Publish to crates.io
+      run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  build-python-wheels:
+    name: Build Python Wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+          - os: windows-latest
+            platform: windows
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build wheels
+      run: maturin build --release --features python --python python${{ matrix.python-version }}
+
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.platform }}-py${{ matrix.python-version }}
+        path: target/wheels/*.whl
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: build-python-wheels
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build and publish to PyPI
+      env:
+        MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      run: maturin publish --features python --username __token__ --password $MATURIN_PYPI_TOKEN
+
+  update-release:
+    name: Update Release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, publish-crates, publish-pypi]
+    if: always() && needs.create-release.result == 'success'
+    steps:
+    - name: Mark release as published
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        draft: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
