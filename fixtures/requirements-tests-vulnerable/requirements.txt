@@ -1,0 +1,5 @@
+# Test file with potentially vulnerable packages
+django==2.1.0
+requests==2.20.0
+urllib3==1.24.0
+jinja2==2.8.0

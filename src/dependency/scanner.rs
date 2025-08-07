@@ -23,6 +23,21 @@ impl DependencyScanner {
         }
     }
 
+    /// Create a new dependency scanner with specified resolver for requirements.txt
+    pub fn new_with_resolver(
+        include_dev: bool,
+        include_optional: bool,
+        direct_only: bool,
+        resolver_type: crate::dependency::resolvers::ResolverType,
+    ) -> Self {
+        Self {
+            parser_registry: ParserRegistry::new_with_resolver(resolver_type),
+            include_dev,
+            include_optional,
+            direct_only,
+        }
+    }
+
     /// Scan dependencies from a project directory using the best available parser
     pub async fn scan_project(&self, project_dir: &Path) -> Result<Vec<ScannedDependency>> {
         debug!("Scanning dependencies in: {}", project_dir.display());

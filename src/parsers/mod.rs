@@ -5,6 +5,7 @@ use std::path::Path;
 
 pub mod lock;
 pub mod pyproject;
+pub mod requirements;
 
 /// A dependency parsed from a project file
 #[derive(Debug, Clone)]
@@ -106,9 +107,24 @@ pub struct ParserRegistry {
 impl ParserRegistry {
     /// Create a new parser registry with all available parsers
     pub fn new() -> Self {
+        use crate::dependency::resolvers::ResolverType;
+
         let parsers: Vec<Box<dyn ProjectParser>> = vec![
             Box::new(lock::UvLockParser::new()),
             Box::new(pyproject::PyProjectParser::new()),
+            // Use UV resolver as default for requirements.txt
+            Box::new(requirements::RequirementsParser::new(ResolverType::Uv)),
+        ];
+
+        Self { parsers }
+    }
+
+    /// Create a new parser registry with specified resolver for requirements.txt
+    pub fn new_with_resolver(resolver_type: crate::dependency::resolvers::ResolverType) -> Self {
+        let parsers: Vec<Box<dyn ProjectParser>> = vec![
+            Box::new(lock::UvLockParser::new()),
+            Box::new(pyproject::PyProjectParser::new()),
+            Box::new(requirements::RequirementsParser::new(resolver_type)),
         ];
 
         Self { parsers }

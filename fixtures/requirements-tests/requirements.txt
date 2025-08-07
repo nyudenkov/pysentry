@@ -1,0 +1,12 @@
+# Basic requirements for testing
+flask>=2.0,<3.0
+requests>=2.25.0
+click>=8.0.0
+# Test comment
+jinja2>=3.0
+
+# URL dependency (should be handled)
+# git+https://github.com/pallets/werkzeug.git@main#egg=werkzeug
+
+# Extra specification
+urllib3[secure]>=1.26.0
