@@ -1,9 +1,9 @@
 """pysentry: Security vulnerability auditing tool for Python packages."""
 
-from ._internal import audit_python, audit_with_options, check_resolvers
+from ._internal import audit_python, audit_with_options, check_resolvers, check_version
 
-__version__ = "0.1.3"
-__all__ = ["audit_python", "audit_with_options", "check_resolvers", "main"]
+__version__ = "0.1.4"
+__all__ = ["audit_python", "audit_with_options", "check_resolvers", "check_version", "main"]
 
 
 def main():
@@ -27,6 +27,28 @@ def main():
 
         try:
             result = check_resolvers(args.verbose)
+            print(result)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # Handle the case where first argument is 'check-version'
+    if len(sys.argv) > 1 and sys.argv[1] == "check-version":
+        # Parse check-version subcommand
+        parser = argparse.ArgumentParser(
+            prog="pysentry-rs check-version",
+            description="Check if a newer version is available",
+        )
+        parser.add_argument(
+            "--verbose", "-v", action="store_true", help="Enable verbose output"
+        )
+
+        # Remove 'check-version' from args and parse the rest
+        args = parser.parse_args(sys.argv[2:])
+
+        try:
+            result = check_version(args.verbose)
             print(result)
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)

@@ -248,6 +248,121 @@ fn audit_with_options(
 }
 
 #[pyfunction]
+fn check_version(verbose: bool) -> PyResult<String> {
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
+
+    rt.block_on(async {
+        const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+        const GITHUB_REPO: &str = "nyudenkov/pysentry";
+
+        let mut output = Vec::new();
+
+        if verbose {
+            output.push("Checking for updates...".to_string());
+            output.push(format!("Current version: {CURRENT_VERSION}"));
+            output.push(format!("Repository: {GITHUB_REPO}"));
+        } else {
+            output.push("Checking for updates...".to_string());
+        }
+
+        // Create HTTP client
+        let client = reqwest::Client::new();
+        let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+
+        if verbose {
+            output.push(format!("Fetching: {url}"));
+        }
+
+        // Fetch latest release info
+        let response = match client
+            .get(&url)
+            .header("User-Agent", format!("pysentry/{CURRENT_VERSION}"))
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                return Ok(format!("Failed to check for updates: {e}"));
+            }
+        };
+
+        if !response.status().is_success() {
+            return Ok(format!(
+                "Failed to check for updates: HTTP {}",
+                response.status()
+            ));
+        }
+
+        // Parse response
+        let release_info: serde_json::Value = match response.json().await {
+            Ok(json) => json,
+            Err(e) => {
+                return Ok(format!("Failed to parse release information: {e}"));
+            }
+        };
+
+        // Extract tag name (version)
+        let latest_tag = match release_info["tag_name"].as_str() {
+            Some(tag) => tag,
+            None => {
+                return Ok("Failed to get latest version information".to_string());
+            }
+        };
+
+        // Remove 'v' prefix if present
+        let latest_version_str = latest_tag.strip_prefix('v').unwrap_or(latest_tag);
+
+        if verbose {
+            output.push(format!("Latest release tag: {latest_tag}"));
+        }
+
+        // Parse versions for comparison
+        use crate::types::Version;
+        use std::str::FromStr;
+        let current_version = match Version::from_str(CURRENT_VERSION) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(format!("Failed to parse current version: {e}"));
+            }
+        };
+
+        let latest_version = match Version::from_str(latest_version_str) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(format!(
+                    "Failed to parse latest version '{latest_version_str}': {e}"
+                ));
+            }
+        };
+
+        // Compare versions
+        if latest_version > current_version {
+            output.push("✨ Update available!".to_string());
+            output.push(format!("Current version: {CURRENT_VERSION}"));
+            output.push(format!("Latest version:  {latest_version_str}"));
+            output.push(String::new());
+            output.push("To update:".to_string());
+            output.push("  • Rust CLI: cargo install pysentry".to_string());
+            output.push("  • Python package: pip install --upgrade pysentry-rs".to_string());
+            if let Some(release_url) = release_info["html_url"].as_str() {
+                output.push(format!("  • Release notes: {release_url}"));
+            }
+        } else if latest_version < current_version {
+            output.push("🚀 You're running a development version!".to_string());
+            output.push(format!("Current version: {CURRENT_VERSION}"));
+            output.push(format!("Latest stable:   {latest_version_str}"));
+        } else {
+            output.push("✅ You're running the latest version!".to_string());
+            output.push(format!("Current version: {CURRENT_VERSION}"));
+        }
+
+        Ok(output.join("\n"))
+    })
+}
+
+#[pyfunction]
 fn check_resolvers(verbose: bool) -> PyResult<String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
@@ -323,5 +438,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(audit_python, m)?)?;
     m.add_function(wrap_pyfunction!(audit_with_options, m)?)?;
     m.add_function(wrap_pyfunction!(check_resolvers, m)?)?;
+    m.add_function(wrap_pyfunction!(check_version, m)?)?;
     Ok(())
 }

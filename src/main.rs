@@ -6,10 +6,12 @@ use tracing_subscriber::EnvFilter;
 
 use pysentry::dependency::resolvers::{ResolverRegistry, ResolverType};
 use pysentry::parsers::{requirements::RequirementsParser, DependencyStats};
+use pysentry::types::Version;
 use pysentry::{
     AuditCache, AuditReport, DependencyScanner, MatcherConfig, ReportGenerator,
     VulnerabilityMatcher, VulnerabilitySource,
 };
+use std::str::FromStr;
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum AuditFormat {
@@ -70,6 +72,8 @@ pub struct Cli {
 pub enum Commands {
     /// Check available dependency resolvers
     Resolvers(ResolversArgs),
+    /// Check if a newer version is available
+    CheckVersion(CheckVersionArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -142,6 +146,13 @@ pub struct ResolversArgs {
     pub verbose: bool,
 }
 
+#[derive(Debug, Parser)]
+pub struct CheckVersionArgs {
+    /// Enable verbose output
+    #[arg(long, short)]
+    pub verbose: bool,
+}
+
 /// Check available dependency resolvers on the system
 async fn check_resolvers(verbose: bool) -> Result<()> {
     if !verbose {
@@ -200,6 +211,113 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
         Err(_) => {
             println!("⚠️  No resolver can be auto-detected");
         }
+    }
+
+    Ok(())
+}
+
+/// Check if a newer version is available
+async fn check_version(verbose: bool) -> Result<()> {
+    const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const GITHUB_REPO: &str = "nyudenkov/pysentry";
+
+    if verbose {
+        println!("Checking for updates...");
+        println!("Current version: {CURRENT_VERSION}");
+        println!("Repository: {GITHUB_REPO}");
+    } else {
+        println!("Checking for updates...");
+    }
+
+    // Create HTTP client
+    let client = reqwest::Client::new();
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+
+    if verbose {
+        println!("Fetching: {url}");
+    }
+
+    // Fetch latest release info
+    let response = match client
+        .get(&url)
+        .header("User-Agent", format!("pysentry/{CURRENT_VERSION}"))
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            eprintln!("Failed to check for updates: {e}");
+            return Ok(());
+        }
+    };
+
+    if !response.status().is_success() {
+        eprintln!("Failed to check for updates: HTTP {}", response.status());
+        return Ok(());
+    }
+
+    // Parse response
+    let release_info: serde_json::Value = match response.json().await {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Failed to parse release information: {e}");
+            return Ok(());
+        }
+    };
+
+    // Extract tag name (version)
+    let latest_tag = match release_info["tag_name"].as_str() {
+        Some(tag) => tag,
+        None => {
+            eprintln!("Failed to get latest version information");
+            return Ok(());
+        }
+    };
+
+    // Remove 'v' prefix if present
+    let latest_version_str = latest_tag.strip_prefix('v').unwrap_or(latest_tag);
+
+    if verbose {
+        println!("Latest release tag: {latest_tag}");
+    }
+
+    // Parse versions for comparison
+    let current_version = match Version::from_str(CURRENT_VERSION) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to parse current version: {e}");
+            return Ok(());
+        }
+    };
+
+    let latest_version = match Version::from_str(latest_version_str) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to parse latest version '{latest_version_str}': {e}");
+            return Ok(());
+        }
+    };
+
+    // Compare versions
+    if latest_version > current_version {
+        println!("✨ Update available!");
+        println!("Current version: {CURRENT_VERSION}");
+        println!("Latest version:  {latest_version_str}");
+        println!();
+        println!("To update:");
+        println!("  • Rust CLI: cargo install pysentry");
+        println!("  • Python package: pip install --upgrade pysentry-rs");
+        if let Some(release_url) = release_info["html_url"].as_str() {
+            println!("  • Release notes: {release_url}");
+        }
+    } else if latest_version < current_version {
+        println!("🚀 You're running a development version!");
+        println!("Current version: {CURRENT_VERSION}");
+        println!("Latest stable:   {latest_version_str}");
+    } else {
+        println!("✅ You're running the latest version!");
+        println!("Current version: {CURRENT_VERSION}");
     }
 
     Ok(())
@@ -268,6 +386,20 @@ async fn main() -> Result<()> {
                 .init();
 
             check_resolvers(resolvers_args.verbose).await?;
+            std::process::exit(0);
+        }
+        Some(Commands::CheckVersion(check_version_args)) => {
+            let log_level = if check_version_args.verbose {
+                "debug"
+            } else {
+                "error"
+            };
+
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
+                .init();
+
+            check_version(check_version_args.verbose).await?;
             std::process::exit(0);
         }
     }
