@@ -14,24 +14,14 @@ pub struct DependencyScanner {
 
 impl DependencyScanner {
     /// Create a new dependency scanner with specified options
-    pub fn new(include_dev: bool, include_optional: bool, direct_only: bool) -> Self {
-        Self {
-            parser_registry: ParserRegistry::new(),
-            include_dev,
-            include_optional,
-            direct_only,
-        }
-    }
-
-    /// Create a new dependency scanner with specified resolver for requirements.txt
-    pub fn new_with_resolver(
+    pub fn new(
         include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-        resolver_type: crate::dependency::resolvers::ResolverType,
+        resolver: Option<crate::dependency::resolvers::ResolverType>,
     ) -> Self {
         Self {
-            parser_registry: ParserRegistry::new_with_resolver(resolver_type),
+            parser_registry: ParserRegistry::new(resolver),
             include_dev,
             include_optional,
             direct_only,
@@ -188,7 +178,7 @@ impl From<DependencySource> for crate::parsers::DependencySource {
 
 impl Default for DependencyScanner {
     fn default() -> Self {
-        Self::new(false, false, false)
+        Self::new(false, false, false, None)
     }
 }
 
@@ -199,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_dependency_scanner_creation() {
-        let scanner = DependencyScanner::new(true, true, false);
+        let scanner = DependencyScanner::new(true, true, false, None);
         assert!(scanner.include_dev);
         assert!(scanner.include_optional);
         assert!(!scanner.direct_only);

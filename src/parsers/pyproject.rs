@@ -1,14 +1,15 @@
 use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
 use crate::{
+    dependency::resolvers::{DependencyResolver, ResolverRegistry, ResolverType},
     types::{PackageName, Version},
     AuditError, Result,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// PyProject.toml structure for parsing dependencies
 #[derive(Debug, Deserialize)]
@@ -28,57 +29,78 @@ struct Project {
 }
 
 /// PyProject.toml parser (for projects without lock files)
-pub struct PyProjectParser;
+pub struct PyProjectParser {
+    resolver: Option<Box<dyn DependencyResolver>>,
+}
 
 impl Default for PyProjectParser {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl PyProjectParser {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait]
-impl ProjectParser for PyProjectParser {
-    fn name(&self) -> &'static str {
-        "pyproject.toml"
+    pub fn new(resolver: Option<ResolverType>) -> Self {
+        Self {
+            resolver: resolver.map(ResolverRegistry::create_resolver),
+        }
     }
 
-    fn can_parse(&self, project_path: &Path) -> bool {
-        project_path.join("pyproject.toml").exists()
+    fn has_resolver(&self) -> bool {
+        self.resolver.is_some()
     }
 
-    fn priority(&self) -> u8 {
-        2 // Lower priority than lock files - only used when lock file is not available
+    async fn is_resolver_available(&self) -> bool {
+        match &self.resolver {
+            Some(resolver) => resolver.is_available().await,
+            None => false,
+        }
     }
 
-    async fn parse_dependencies(
+    async fn parse_with_resolver(
         &self,
-        project_path: &Path,
+        direct_deps_with_info: &[(PackageName, DependencyType, String)],
         include_dev: bool,
         include_optional: bool,
-        _direct_only: bool, // PyProject parser only finds direct dependencies
+        direct_only: bool,
     ) -> Result<Vec<ParsedDependency>> {
-        let pyproject_path = project_path.join("pyproject.toml");
-        debug!("Reading pyproject.toml: {}", pyproject_path.display());
+        let resolver = self
+            .resolver
+            .as_ref()
+            .ok_or_else(|| AuditError::other("Resolver not available"))?;
 
-        let content = tokio::fs::read_to_string(&pyproject_path)
+        if !resolver.is_available().await {
+            return Err(AuditError::other(format!(
+                "{} resolver not available",
+                resolver.name()
+            )));
+        }
+
+        let requirements_content = self.convert_to_requirements_format(
+            direct_deps_with_info,
+            include_dev,
+            include_optional,
+        )?;
+
+        debug!("Generated requirements content:\n{}", requirements_content);
+
+        let resolved_content = resolver.resolve_requirements(&requirements_content).await?;
+
+        debug!("Resolver output:\n{}", resolved_content);
+
+        // Parse resolved content
+        self.parse_resolved_content(&resolved_content, direct_deps_with_info, direct_only)
             .await
-            .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
+    }
 
-        let pyproject: PyProject =
-            toml::from_str(&content).map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
-
+    async fn parse_without_resolver(
+        &self,
+        direct_deps_with_info: Vec<(PackageName, DependencyType, String)>,
+        include_dev: bool,
+        include_optional: bool,
+    ) -> Result<Vec<ParsedDependency>> {
         let mut dependencies = Vec::new();
         let mut warned_about_placeholder = false;
-
-        // Get direct dependencies with types and version specs
-        let direct_deps_with_info =
-            self.get_direct_dependencies_with_info(&pyproject, include_dev, include_optional)?;
 
         for (package_name, dep_type, version_spec) in direct_deps_with_info {
             // Check if this dependency type should be included
@@ -91,7 +113,7 @@ impl ProjectParser for PyProjectParser {
             if !warned_about_placeholder {
                 warn!(
                     "Scanning from pyproject.toml only shows direct dependencies with version constraints. \
-                    Run 'uv lock' to generate a complete dependency tree with exact versions."
+                    Consider using a resolver (uv/pip-tools) for exact versions and transitive dependencies."
                 );
                 warned_about_placeholder = true;
             }
@@ -122,6 +144,233 @@ impl ProjectParser for PyProjectParser {
         Ok(dependencies)
     }
 
+    /// Convert pyproject.toml dependencies to requirements.txt format
+    fn convert_to_requirements_format(
+        &self,
+        direct_deps_with_info: &[(PackageName, DependencyType, String)],
+        include_dev: bool,
+        include_optional: bool,
+    ) -> Result<String> {
+        let mut requirements = Vec::new();
+
+        for (package_name, dep_type, version_spec) in direct_deps_with_info {
+            if !self.should_include_dependency_type(*dep_type, include_dev, include_optional) {
+                continue;
+            }
+
+            let requirement_line =
+                self.convert_dependency_spec_to_requirement(package_name, version_spec)?;
+            requirements.push(requirement_line);
+        }
+
+        Ok(requirements.join("\n"))
+    }
+
+    /// Convert a single dependency specification to requirements.txt format
+    fn convert_dependency_spec_to_requirement(
+        &self,
+        package_name: &PackageName,
+        version_spec: &str,
+    ) -> Result<String> {
+        // For most cases, we can just return the original spec as it's already close to requirements.txt format
+        // However, we need to handle special cases:
+
+        // If the spec is just the package name (no version), return as-is
+        if version_spec.trim() == package_name.as_str() {
+            return Ok(package_name.to_string());
+        }
+
+        // If the spec contains the package name followed by version constraints, return as-is
+        if version_spec.starts_with(package_name.as_str()) {
+            return Ok(version_spec.to_string());
+        }
+
+        // Otherwise, assume the version_spec is just the version part and prepend package name
+        Ok(format!("{package_name}{version_spec}"))
+    }
+
+    /// Parse resolved content from resolver output
+    async fn parse_resolved_content(
+        &self,
+        resolved_content: &str,
+        direct_deps_with_info: &[(PackageName, DependencyType, String)],
+        direct_only: bool,
+    ) -> Result<Vec<ParsedDependency>> {
+        let mut dependencies = Vec::new();
+
+        // Extract direct dependencies for marking
+        let direct_deps: HashSet<PackageName> = direct_deps_with_info
+            .iter()
+            .map(|(name, _, _)| name.clone())
+            .collect();
+
+        // Parse resolved content (pinned requirements format)
+        for (line_num, line) in resolved_content.lines().enumerate() {
+            let line = line.trim();
+
+            // Skip comments and empty lines
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            // Parse pinned dependency: "package==version"
+            if let Some((name_part, version_part)) = line.split_once("==") {
+                let name = name_part.trim();
+
+                // Extract version (handle extras and environment markers)
+                let version = version_part
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .split(';') // Remove environment markers
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+
+                match Version::from_str(version) {
+                    Ok(parsed_version) => {
+                        let package_name = PackageName::new(name);
+                        let is_direct = direct_deps.contains(&package_name);
+
+                        // Skip transitive dependencies if direct_only is requested
+                        if direct_only && !is_direct {
+                            continue;
+                        }
+
+                        // Determine dependency type based on original specifications
+                        let dependency_type = self.get_dependency_type_from_original(
+                            &package_name,
+                            direct_deps_with_info,
+                        );
+
+                        dependencies.push(ParsedDependency {
+                            name: package_name,
+                            version: parsed_version,
+                            is_direct,
+                            source: DependencySource::Registry, // Resolver typically works with PyPI
+                            path: None,
+                            dependency_type,
+                        });
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse version '{}' for package '{}' on line {}: {}",
+                            version,
+                            name,
+                            line_num + 1,
+                            e
+                        );
+                    }
+                }
+            } else if !line.starts_with('#') && !line.trim().is_empty() {
+                debug!("Skipping unrecognized line format: {}", line);
+            }
+        }
+
+        if dependencies.is_empty() {
+            return Err(AuditError::other("No dependencies resolved"));
+        }
+
+        Ok(dependencies)
+    }
+
+    /// Get dependency type from original specifications
+    fn get_dependency_type_from_original(
+        &self,
+        package_name: &PackageName,
+        direct_deps_with_info: &[(PackageName, DependencyType, String)],
+    ) -> DependencyType {
+        // Find the dependency type from original specifications
+        direct_deps_with_info
+            .iter()
+            .find(|(name, _, _)| name == package_name)
+            .map(|(_, dep_type, _)| *dep_type)
+            .unwrap_or(DependencyType::Main) // Default to Main for transitive dependencies
+    }
+}
+
+#[async_trait]
+impl ProjectParser for PyProjectParser {
+    fn name(&self) -> &'static str {
+        "pyproject.toml"
+    }
+
+    fn can_parse(&self, project_path: &Path) -> bool {
+        project_path.join("pyproject.toml").exists()
+    }
+
+    fn priority(&self) -> u8 {
+        2 // Lower priority than lock files - only used when lock file is not available
+    }
+
+    async fn parse_dependencies(
+        &self,
+        project_path: &Path,
+        include_dev: bool,
+        include_optional: bool,
+        direct_only: bool,
+    ) -> Result<Vec<ParsedDependency>> {
+        let pyproject_path = project_path.join("pyproject.toml");
+        debug!("Reading pyproject.toml: {}", pyproject_path.display());
+
+        let content = tokio::fs::read_to_string(&pyproject_path)
+            .await
+            .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
+
+        let pyproject: PyProject =
+            toml::from_str(&content).map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
+
+        // Get direct dependencies with types and version specs
+        let direct_deps_with_info =
+            self.get_direct_dependencies_with_info(&pyproject, include_dev, include_optional)?;
+
+        // Check if we have unspecified versions and should use resolver
+        let has_unspecified_versions = direct_deps_with_info
+            .iter()
+            .any(|(_, _, spec)| Self::extract_version_from_spec(spec).is_none());
+
+        let should_use_resolver =
+            has_unspecified_versions && self.has_resolver() && self.is_resolver_available().await;
+
+        if should_use_resolver {
+            debug!("Using resolver for pyproject.toml dependencies due to unspecified versions");
+            match self
+                .parse_with_resolver(
+                    &direct_deps_with_info,
+                    include_dev,
+                    include_optional,
+                    direct_only,
+                )
+                .await
+            {
+                Ok(dependencies) => {
+                    info!(
+                        "Successfully resolved {} dependencies using {} resolver",
+                        dependencies.len(),
+                        self.resolver.as_ref().unwrap().name()
+                    );
+                    return Ok(dependencies);
+                }
+                Err(e) => {
+                    warn!(
+                        "Resolver failed ({}), falling back to basic parsing: {}",
+                        self.resolver.as_ref().map_or("unknown", |r| r.name()),
+                        e
+                    );
+                }
+            }
+        } else if has_unspecified_versions && self.has_resolver() {
+            warn!(
+                "Resolver {} is configured but not available, falling back to basic parsing",
+                self.resolver.as_ref().map_or("unknown", |r| r.name())
+            );
+        }
+
+        // Fallback to current behavior
+        self.parse_without_resolver(direct_deps_with_info, include_dev, include_optional)
+            .await
+    }
+
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {
         let mut warnings = Vec::new();
 
@@ -130,24 +379,46 @@ impl ProjectParser for PyProjectParser {
             return warnings;
         }
 
-        // Check for placeholder versions
+        // Check if resolver was used
+        let has_resolver = self.has_resolver();
+        let has_transitive_deps = dependencies.iter().any(|dep| !dep.is_direct);
+
+        // Check for placeholder versions (only relevant if resolver wasn't used)
         let placeholder_count = dependencies
             .iter()
             .filter(|dep| dep.version == Version::new([0, 0, 0]))
             .count();
 
-        if placeholder_count > 0 {
+        if placeholder_count > 0 && !has_resolver {
             warnings.push(format!(
-                "{placeholder_count} dependencies have placeholder versions. Run 'uv lock' for accurate version information."
+                "{placeholder_count} dependencies have placeholder versions. \
+                Install uv or pip-tools for exact version resolution."
             ));
         }
 
-        // Warn about missing transitive dependencies
-        warnings.push(
-            "Only direct dependencies are available from pyproject.toml. \
-            Run 'uv lock' to include transitive dependencies in the audit."
-                .to_string(),
-        );
+        // Warn about missing transitive dependencies if resolver wasn't used
+        if !has_transitive_deps && !has_resolver {
+            warnings.push(
+                "Only direct dependencies are available from pyproject.toml. \
+                Install uv or pip-tools to include transitive dependencies in the audit."
+                    .to_string(),
+            );
+        } else if has_transitive_deps && has_resolver {
+            // Success case - provide informational message
+            let direct_count = dependencies.iter().filter(|dep| dep.is_direct).count();
+            let transitive_count = dependencies.len() - direct_count;
+            info!(
+                "Successfully resolved {direct_count} direct and {transitive_count} transitive dependencies from pyproject.toml"
+            );
+        }
+
+        // Check for large dependency trees (when using resolver)
+        if has_transitive_deps && dependencies.len() > 100 {
+            let dep_len = dependencies.len();
+            warnings.push(format!(
+                "Found {dep_len} dependencies from pyproject.toml resolution. This is a large dependency tree."
+            ));
+        }
 
         warnings
     }
@@ -383,5 +654,231 @@ impl PyProjectParser {
         }
 
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Version;
+
+    #[test]
+    fn test_extract_version_from_spec() {
+        // Test exact version
+        let version = PyProjectParser::extract_version_from_spec("package==1.2.3");
+        assert_eq!(version, Some(Version::from_str("1.2.3").unwrap()));
+
+        // Test minimum version
+        let version = PyProjectParser::extract_version_from_spec("package>=2.0.0");
+        assert_eq!(version, Some(Version::from_str("2.0.0").unwrap()));
+
+        // Test no version
+        let version = PyProjectParser::extract_version_from_spec("package");
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn test_convert_dependency_spec_to_requirement() {
+        let parser = PyProjectParser::new(None);
+        let package_name = PackageName::new("requests");
+
+        // Test with version constraint
+        let result = parser
+            .convert_dependency_spec_to_requirement(&package_name, "requests>=2.25.0")
+            .unwrap();
+        assert_eq!(result, "requests>=2.25.0");
+
+        // Test with just package name
+        let result = parser
+            .convert_dependency_spec_to_requirement(&package_name, "requests")
+            .unwrap();
+        assert_eq!(result, "requests");
+
+        // Test with version spec only
+        let result = parser
+            .convert_dependency_spec_to_requirement(&package_name, ">=2.0.0")
+            .unwrap();
+        assert_eq!(result, "requests>=2.0.0");
+    }
+
+    #[test]
+    fn test_convert_to_requirements_format() {
+        let parser = PyProjectParser::new(None);
+        let deps_with_info = vec![
+            (
+                PackageName::new("requests"),
+                DependencyType::Main,
+                "requests>=2.25.0".to_string(),
+            ),
+            (
+                PackageName::new("click"),
+                DependencyType::Main,
+                "click>=8.0".to_string(),
+            ),
+            (
+                PackageName::new("pytest"),
+                DependencyType::Dev,
+                "pytest".to_string(),
+            ),
+        ];
+
+        // Test including only main dependencies
+        let result = parser
+            .convert_to_requirements_format(&deps_with_info, false, false)
+            .unwrap();
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.contains(&"requests>=2.25.0"));
+        assert!(lines.contains(&"click>=8.0"));
+
+        // Test including dev dependencies
+        let result = parser
+            .convert_to_requirements_format(&deps_with_info, true, false)
+            .unwrap();
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines.contains(&"requests>=2.25.0"));
+        assert!(lines.contains(&"click>=8.0"));
+        assert!(lines.contains(&"pytest"));
+    }
+
+    #[test]
+    fn test_has_resolver() {
+        let parser_without_resolver = PyProjectParser::new(None);
+        assert!(!parser_without_resolver.has_resolver());
+
+        // Testing with resolver would require mocking the resolver trait
+    }
+
+    #[tokio::test]
+    async fn test_parse_resolved_content() {
+        let parser = PyProjectParser::new(None);
+        let resolved_content = r#"
+click==8.1.3
+requests==2.28.1
+certifi==2022.9.24
+charset-normalizer==2.1.1
+idna==3.4
+urllib3==1.26.12
+"#;
+        let direct_deps_with_info = vec![
+            (
+                PackageName::new("requests"),
+                DependencyType::Main,
+                "requests>=2.25.0".to_string(),
+            ),
+            (
+                PackageName::new("click"),
+                DependencyType::Main,
+                "click>=8.0".to_string(),
+            ),
+        ];
+
+        let result = parser
+            .parse_resolved_content(resolved_content, &direct_deps_with_info, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 6); // 2 direct + 4 transitive
+
+        // Check direct dependencies
+        let click_dep = result
+            .iter()
+            .find(|dep| dep.name.as_str() == "click")
+            .unwrap();
+        assert!(click_dep.is_direct);
+        assert_eq!(click_dep.version, Version::from_str("8.1.3").unwrap());
+        assert_eq!(click_dep.dependency_type, DependencyType::Main);
+
+        let requests_dep = result
+            .iter()
+            .find(|dep| dep.name.as_str() == "requests")
+            .unwrap();
+        assert!(requests_dep.is_direct);
+        assert_eq!(requests_dep.version, Version::from_str("2.28.1").unwrap());
+        assert_eq!(requests_dep.dependency_type, DependencyType::Main);
+
+        // Check transitive dependencies
+        let certifi_dep = result
+            .iter()
+            .find(|dep| dep.name.as_str() == "certifi")
+            .unwrap();
+        assert!(!certifi_dep.is_direct);
+        assert_eq!(certifi_dep.version, Version::from_str("2022.9.24").unwrap());
+        assert_eq!(certifi_dep.dependency_type, DependencyType::Main);
+    }
+
+    #[tokio::test]
+    async fn test_parse_resolved_content_direct_only() {
+        let parser = PyProjectParser::new(None);
+        let resolved_content = r#"
+click==8.1.3
+requests==2.28.1
+certifi==2022.9.24
+charset-normalizer==2.1.1
+"#;
+        let direct_deps_with_info = vec![
+            (
+                PackageName::new("requests"),
+                DependencyType::Main,
+                "requests>=2.25.0".to_string(),
+            ),
+            (
+                PackageName::new("click"),
+                DependencyType::Main,
+                "click>=8.0".to_string(),
+            ),
+        ];
+
+        let result = parser
+            .parse_resolved_content(resolved_content, &direct_deps_with_info, true)
+            .await
+            .unwrap();
+
+        // Should only include direct dependencies
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|dep| dep.is_direct));
+
+        let package_names: HashSet<String> =
+            result.iter().map(|dep| dep.name.to_string()).collect();
+        assert!(package_names.contains("click"));
+        assert!(package_names.contains("requests"));
+        assert!(!package_names.contains("certifi"));
+        assert!(!package_names.contains("charset-normalizer"));
+    }
+
+    #[test]
+    fn test_get_dependency_type_from_original() {
+        let parser = PyProjectParser::new(None);
+        let direct_deps_with_info = vec![
+            (
+                PackageName::new("requests"),
+                DependencyType::Main,
+                "requests>=2.25.0".to_string(),
+            ),
+            (
+                PackageName::new("pytest"),
+                DependencyType::Dev,
+                "pytest".to_string(),
+            ),
+        ];
+
+        // Test finding existing dependency
+        let dep_type = parser.get_dependency_type_from_original(
+            &PackageName::new("requests"),
+            &direct_deps_with_info,
+        );
+        assert_eq!(dep_type, DependencyType::Main);
+
+        let dep_type = parser
+            .get_dependency_type_from_original(&PackageName::new("pytest"), &direct_deps_with_info);
+        assert_eq!(dep_type, DependencyType::Dev);
+
+        // Test default for non-existing dependency (transitive)
+        let dep_type = parser.get_dependency_type_from_original(
+            &PackageName::new("certifi"),
+            &direct_deps_with_info,
+        );
+        assert_eq!(dep_type, DependencyType::Main);
     }
 }

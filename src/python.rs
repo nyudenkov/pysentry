@@ -143,7 +143,7 @@ fn audit_with_options(
             use crate::parsers::requirements::RequirementsParser;
             let req_paths: Vec<std::path::PathBuf> =
                 req_files.iter().map(std::path::PathBuf::from).collect();
-            let parser = RequirementsParser::new(resolver_type);
+            let parser = RequirementsParser::new(Some(resolver_type));
             let parsed_deps = parser
                 .parse_explicit_files(&req_paths, direct_only)
                 .await
@@ -163,8 +163,7 @@ fn audit_with_options(
                 })
                 .collect()
         } else {
-            let scanner =
-                DependencyScanner::new_with_resolver(dev, optional, direct_only, resolver_type);
+            let scanner = DependencyScanner::new(dev, optional, direct_only, Some(resolver_type));
             let project_path = Path::new(&path);
             scanner
                 .scan_project(project_path)
@@ -214,7 +213,7 @@ fn audit_with_options(
         }
 
         // Generate report
-        let scanner = DependencyScanner::new(dev, optional, direct_only);
+        let scanner = DependencyScanner::new(dev, optional, direct_only, None);
         let dependency_stats = scanner.get_stats(&dependencies);
         let database_stats = matcher.get_database_stats();
         let fix_analysis = matcher.analyze_fixes(&filtered_matches);

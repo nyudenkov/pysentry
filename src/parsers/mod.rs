@@ -105,29 +105,26 @@ pub struct ParserRegistry {
 }
 
 impl ParserRegistry {
-    /// Create a new parser registry with all available parsers
-    pub fn new() -> Self {
-        use crate::dependency::resolvers::ResolverType;
-
-        let parsers: Vec<Box<dyn ProjectParser>> = vec![
-            Box::new(lock::UvLockParser::new()),
-            Box::new(pyproject::PyProjectParser::new()),
-            // Use UV resolver as default for requirements.txt
-            Box::new(requirements::RequirementsParser::new(ResolverType::Uv)),
-        ];
-
-        Self { parsers }
-    }
-
-    /// Create a new parser registry with specified resolver for requirements.txt
-    pub fn new_with_resolver(resolver_type: crate::dependency::resolvers::ResolverType) -> Self {
-        let parsers: Vec<Box<dyn ProjectParser>> = vec![
-            Box::new(lock::UvLockParser::new()),
-            Box::new(pyproject::PyProjectParser::new()),
-            Box::new(requirements::RequirementsParser::new(resolver_type)),
-        ];
-
-        Self { parsers }
+    /// Create a new parser registry
+    pub fn new(resolver: Option<crate::dependency::resolvers::ResolverType>) -> Self {
+        match resolver {
+            Some(resolver_type) => {
+                let parsers: Vec<Box<dyn ProjectParser>> = vec![
+                    Box::new(lock::UvLockParser::new()),
+                    Box::new(pyproject::PyProjectParser::new(Some(resolver_type))),
+                    Box::new(requirements::RequirementsParser::new(Some(resolver_type))),
+                ];
+                Self { parsers }
+            }
+            None => {
+                let parsers: Vec<Box<dyn ProjectParser>> = vec![
+                    Box::new(lock::UvLockParser::new()),
+                    Box::new(pyproject::PyProjectParser::new(None)),
+                    Box::new(requirements::RequirementsParser::new(None)),
+                ];
+                Self { parsers }
+            }
+        }
     }
 
     /// Parse dependencies from a project directory using the best available parser
@@ -191,7 +188,7 @@ impl ParserRegistry {
 
 impl Default for ParserRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 

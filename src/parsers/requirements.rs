@@ -21,17 +21,12 @@ pub struct RequirementsParser {
 }
 
 impl RequirementsParser {
-    /// Create a new requirements parser with the specified resolver
-    pub fn new(resolver_type: ResolverType) -> Self {
+    /// Create a new requirements parser
+    pub fn new(resolver: Option<ResolverType>) -> Self {
+        let resolver_type = resolver.unwrap_or(ResolverType::Uv);
         let resolver = ResolverRegistry::create_resolver(resolver_type);
 
         Self { resolver }
-    }
-
-    /// Create a new requirements parser with auto-detected resolver
-    pub async fn new_with_auto_resolver() -> Result<Self> {
-        let resolver_type = ResolverRegistry::detect_best_resolver().await?;
-        Ok(Self::new(resolver_type))
     }
 
     /// Find requirements files in the project directory
@@ -438,13 +433,13 @@ mod tests {
 
     #[test]
     fn test_requirements_parser_creation() {
-        let parser = RequirementsParser::new(ResolverType::Uv);
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
         assert_eq!(parser.resolver.name(), "uv");
     }
 
     #[tokio::test]
     async fn test_extract_package_name() {
-        let parser = RequirementsParser::new(ResolverType::Uv);
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
 
         // Test basic package name
         let result = parser.extract_package_name("requests>=2.25.0").unwrap();
@@ -469,7 +464,7 @@ mod tests {
     fn test_find_requirements_files() {
         // This test would need a mock filesystem or actual test files
         // For now, we'll just test the method exists and doesn't panic
-        let parser = RequirementsParser::new(ResolverType::Uv);
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
         let files = parser.find_requirements_files(Path::new("."), false);
         // The result depends on the current directory, so we just ensure it doesn't crash
         let _count = files.len();
@@ -477,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_direct_dependencies() {
-        let parser = RequirementsParser::new(ResolverType::Uv);
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
         let requirements = r#"
 # Main dependencies
 requests>=2.25.0

@@ -533,8 +533,7 @@ async fn perform_audit(
     } else {
         // Use normal project scanner with resolver-aware registry
         let resolver_type: ResolverType = resolver.into();
-        let scanner =
-            DependencyScanner::new_with_resolver(dev, optional, direct_only, resolver_type);
+        let scanner = DependencyScanner::new(dev, optional, direct_only, Some(resolver_type));
         scanner.scan_project(project_dir).await?
     };
 
@@ -542,7 +541,7 @@ async fn perform_audit(
         // Calculate stats directly since we don't have a scanner instance
         calculate_dependency_stats(&dependencies)
     } else {
-        let scanner = DependencyScanner::new(dev, optional, direct_only);
+        let scanner = DependencyScanner::new(dev, optional, direct_only, None);
         scanner.get_stats(&dependencies)
     };
 
@@ -559,7 +558,7 @@ async fn perform_audit(
         }
     } else {
         // Use scanner validation for normal project scanning
-        let scanner = DependencyScanner::new(dev, optional, direct_only);
+        let scanner = DependencyScanner::new(dev, optional, direct_only, None);
         scanner.validate_dependencies(&dependencies)
     };
 
@@ -624,9 +623,9 @@ async fn scan_explicit_requirements(
     direct_only: bool,
     resolver: ResolverTypeArg,
 ) -> Result<Vec<pysentry::dependency::scanner::ScannedDependency>> {
-    let resolver_type = resolver.into();
+    let resolver_type: ResolverType = resolver.into();
 
-    let parser = RequirementsParser::new(resolver_type);
+    let parser = RequirementsParser::new(Some(resolver_type));
 
     let parsed_deps = parser
         .parse_explicit_files(requirements_files, direct_only)

@@ -576,7 +576,7 @@ struct OsvBatchRequest {
     queries: Vec<OsvQuery>,
 }
 
-/// OSV query structure  
+/// OSV query structure
 #[derive(Debug, Clone, Serialize)]
 struct OsvQuery {
     #[serde(skip_serializing_if = "Option::is_none")]

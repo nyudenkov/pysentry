@@ -177,7 +177,7 @@ impl PypiSource {
         vec![]
     }
 
-    /// Create a future for fetching package vulnerabilities  
+    /// Create a future for fetching package vulnerabilities
     async fn fetch_package_future(
         &self,
         name: String,
