@@ -1,0 +1,27 @@
+version: 2
+updates:
+  # Rust dependencies (Cargo.toml/Cargo.lock)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+
+  # Python dependencies (pyproject.toml only)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    allow:
+      - dependency-type: "all"
+    ignore:
+      - dependency-name: "*"
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
