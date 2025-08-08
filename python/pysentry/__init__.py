@@ -2,8 +2,14 @@
 
 from ._internal import audit_python, audit_with_options, check_resolvers, check_version
 
-__version__ = "0.1.4"
-__all__ = ["audit_python", "audit_with_options", "check_resolvers", "check_version", "main"]
+__version__ = "0.1.5"
+__all__ = [
+    "audit_python",
+    "audit_with_options",
+    "check_resolvers",
+    "check_version",
+    "main",
+]
 
 
 def main():
