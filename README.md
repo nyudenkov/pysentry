@@ -6,11 +6,11 @@ A fast, reliable security vulnerability scanner for Python projects, written in 
 
 ## Overview
 
-PySentry audits Python projects for known security vulnerabilities by analyzing dependency files (`uv.lock`, `pyproject.toml`, `requirements.txt`) and cross-referencing them against multiple vulnerability databases. It provides comprehensive reporting with support for various output formats and filtering options.
+PySentry audits Python projects for known security vulnerabilities by analyzing dependency files (`uv.lock`, `poetry.lock`, `pyproject.toml`, `requirements.txt`) and cross-referencing them against multiple vulnerability databases. It provides comprehensive reporting with support for various output formats and filtering options.
 
 ## Key Features
 
-- **Multiple Project Formats**: Supports `uv.lock`, `pyproject.toml`, and `requirements.txt` files
+- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `pyproject.toml`, and `requirements.txt` files
 - **External Resolver Integration**: Leverages `uv` and `pip-tools` for accurate requirements.txt constraint solving
 - **Multiple Data Sources**:
   - PyPA Advisory Database (default)
@@ -23,7 +23,7 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
   - Intelligent caching system
 - **Comprehensive Filtering**:
   - Severity levels (low, medium, high, critical)
-  - Dependency types (production, development, optional)
+  - Dependency scopes (main only vs all [optional, dev, prod, etc] dependencies)
   - Direct vs. transitive dependencies
 - **Enterprise Ready**: SARIF output for IDE/CI integration
 
@@ -148,7 +148,7 @@ pip install pip-tools
   ```
 - Alternatively, install resolvers globally for system-wide availability
 
-**Auto-detection:** PySentry automatically detects and prefers: `uv` > `pip-tools`. Without a resolver, only `uv.lock` and `pyproject.toml` files can be scanned.
+**Auto-detection:** PySentry automatically detects and prefers: `uv` > `pip-tools`. Without a resolver, only `uv.lock` and `poetry.lock` files can be scanned.
 
 ## Quick Start
 
@@ -163,15 +163,15 @@ uvx pysentry-rs /path/to/python/project
 pysentry
 pysentry /path/to/python/project
 
-# Scan requirements.txt (auto-detects resolver)
+# Automatically detects project type (uv.lock, poetry.lock, pyproject.toml, requirements.txt)
 pysentry /path/to/project
 
 # Force specific resolver
 pysentry --resolver uv /path/to/project
 pysentry --resolver pip-tools /path/to/project
 
-# Include development dependencies
-pysentry --dev
+# Include all dependencies (main + dev + optional)
+pysentry --all
 
 # Filter by severity (only show high and critical)
 pysentry --severity high
@@ -184,13 +184,13 @@ pysentry --format json --output audit-results.json
 
 ```bash
 # Using uvx for comprehensive audit
-uvx pysentry-rs --dev --optional --format sarif --output security-report.sarif
+uvx pysentry-rs --all --format sarif --output security-report.sarif
 
 # Check only direct dependencies using OSV database
 uvx pysentry-rs --direct-only --source osv
 
 # Or with installed binary
-pysentry --dev --optional --format sarif --output security-report.sarif
+pysentry --all --format sarif --output security-report.sarif
 pysentry --direct-only --source osv
 
 # Ignore specific vulnerabilities
@@ -229,8 +229,7 @@ pysentry --verbose --resolver uv /path/to/project
 | `--format`       | Output format: `human`, `json`, `sarif`               | `human`             |
 | `--severity`     | Minimum severity: `low`, `medium`, `high`, `critical` | `low`               |
 | `--source`       | Vulnerability source: `pypa`, `pypi`, `osv`           | `pypa`              |
-| `--dev`          | Include development dependencies                      | `false`             |
-| `--optional`     | Include optional dependencies                         | `false`             |
+| `--all`          | Include all dependencies (main + dev + optional)      | `false`             |
 | `--direct-only`  | Check only direct dependencies                        | `false`             |
 | `--ignore`       | Vulnerability IDs to ignore (repeatable)              | `[]`                |
 | `--output`       | Output file path                                      | `stdout`            |
@@ -266,6 +265,23 @@ PySentry has support for `uv.lock` files:
 - Complete dependency graph analysis
 - Source tracking
 - Dependency classification (main, dev, optional) including transitive dependencies
+
+### poetry.lock Files
+
+Full support for Poetry lock files:
+
+- **Exact Version Resolution**: Scans exact dependency versions locked by Poetry
+- **Lock-File Only Analysis**: Relies purely on the lock file structure, no pyproject.toml parsing needed
+- **Complete Dependency Tree**: Analyzes all resolved dependencies including transitive ones
+- **Dependency Classification**: Distinguishes between main dependencies and optional groups (dev, test, etc.)
+- **Source Tracking**: Supports PyPI registry, Git repositories, local paths, and direct URLs
+
+**Key Features:**
+
+- No external tools required
+- Fast parsing with exact version information
+- Handles Poetry's dependency groups and optional dependencies
+- Perfect for Poetry-managed projects with established lock files
 
 ### requirements.txt Files (External Resolution)
 
@@ -421,7 +437,7 @@ src/
 
 ```bash
 # Ensure you're in a Python project directory
-ls pyproject.toml uv.lock requirements.txt
+ls pyproject.toml uv.lock poetry.lock requirements.txt
 
 # Or specify the path explicitly
 pysentry /path/to/python/project
@@ -498,7 +514,7 @@ pysentry /path/to/python/project
 pysentry --requirements requirements-dev.txt --requirements requirements-test.txt
 
 # Check if higher-priority files exist (they take precedence)
-ls uv.lock pyproject.toml
+ls uv.lock poetry.lock pyproject.toml
 ```
 
 **Performance Issues**
