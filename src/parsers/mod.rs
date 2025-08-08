@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use std::path::Path;
 
 pub mod lock;
+pub mod poetry_lock;
 pub mod pyproject;
 pub mod requirements;
 
@@ -109,6 +110,7 @@ impl ParserRegistry {
             Some(resolver_type) => {
                 let parsers: Vec<Box<dyn ProjectParser>> = vec![
                     Box::new(lock::UvLockParser::new()),
+                    Box::new(poetry_lock::PoetryLockParser::new()),
                     Box::new(pyproject::PyProjectParser::new(Some(resolver_type))),
                     Box::new(requirements::RequirementsParser::new(Some(resolver_type))),
                 ];
@@ -117,6 +119,7 @@ impl ParserRegistry {
             None => {
                 let parsers: Vec<Box<dyn ProjectParser>> = vec![
                     Box::new(lock::UvLockParser::new()),
+                    Box::new(poetry_lock::PoetryLockParser::new()),
                     Box::new(pyproject::PyProjectParser::new(None)),
                     Box::new(requirements::RequirementsParser::new(None)),
                 ];

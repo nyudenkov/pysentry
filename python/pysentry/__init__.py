@@ -17,73 +17,83 @@ def main():
     import sys
     import argparse
 
-    # Handle the case where first argument is 'resolvers'
-    if len(sys.argv) > 1 and sys.argv[1] == "resolvers":
-        # Parse resolvers subcommand
-        parser = argparse.ArgumentParser(
-            prog="pysentry-rs resolvers",
-            description="Check available dependency resolvers",
-        )
-        parser.add_argument(
-            "--verbose", "-v", action="store_true", help="Enable verbose output"
-        )
+    # Handle subcommands manually to match Rust CLI structure exactly
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "resolvers":
+            # Resolvers subcommand
+            parser = argparse.ArgumentParser(
+                prog="pysentry resolvers",
+                description="Check available dependency resolvers",
+            )
+            parser.add_argument(
+                "-v", "--verbose", action="store_true", help="Enable verbose output"
+            )
 
-        # Remove 'resolvers' from args and parse the rest
-        args = parser.parse_args(sys.argv[2:])
+            args = parser.parse_args(sys.argv[2:])
+            try:
+                result = check_resolvers(args.verbose)
+                print(result)
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            return
 
-        try:
-            result = check_resolvers(args.verbose)
-            print(result)
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        return
+        elif sys.argv[1] == "check-version":
+            # Check-version subcommand
+            parser = argparse.ArgumentParser(
+                prog="pysentry-rs check-version",
+                description="Check if a newer version is available",
+            )
+            parser.add_argument(
+                "-v", "--verbose", action="store_true", help="Enable verbose output"
+            )
 
-    # Handle the case where first argument is 'check-version'
-    if len(sys.argv) > 1 and sys.argv[1] == "check-version":
-        # Parse check-version subcommand
-        parser = argparse.ArgumentParser(
-            prog="pysentry-rs check-version",
-            description="Check if a newer version is available",
-        )
-        parser.add_argument(
-            "--verbose", "-v", action="store_true", help="Enable verbose output"
-        )
+            args = parser.parse_args(sys.argv[2:])
+            try:
+                result = check_version(args.verbose)
+                print(result)
+            except Exception as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            return
+        elif sys.argv[1] in ["-h", "--help"]:
+            # Show main help
+            pass
+        elif sys.argv[1] in ["-V", "--version"]:
+            print(f"pysentry-rs {__version__}")
+            return
 
-        # Remove 'check-version' from args and parse the rest
-        args = parser.parse_args(sys.argv[2:])
-
-        try:
-            result = check_version(args.verbose)
-            print(result)
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
-            sys.exit(1)
-        return
-
-    # Default audit command parser
+    # Main parser for audit command (default) and help
     parser = argparse.ArgumentParser(
         prog="pysentry-rs",
         description="Security vulnerability auditing for Python packages",
+        usage="pysentry-rs [OPTIONS] [PATH] [COMMAND]",
     )
 
+    # Add version argument
+    parser.add_argument(
+        "-V", "--version", action="version", version=f"pysentry-rs {__version__}"
+    )
+
+    # Main audit arguments
     parser.add_argument(
         "path",
         nargs="?",
         default=".",
-        help="Path to the project directory to audit (default: current directory)",
+        metavar="PATH",
+        help="Path to the project directory to audit [default: .]",
     )
     parser.add_argument(
         "--format",
         choices=["human", "json", "sarif"],
         default="human",
-        help="Output format (default: human)",
+        help="Output format [default: human] [possible values: human, json, sarif]",
     )
     parser.add_argument(
         "--severity",
         choices=["low", "medium", "high", "critical"],
         default="low",
-        help="Minimum severity level to report (default: low)",
+        help="Minimum severity level to report [default: low] [possible values: low, medium, high, critical]",
     )
     parser.add_argument(
         "--ignore",
@@ -93,13 +103,12 @@ def main():
         help="Vulnerability IDs to ignore (can be specified multiple times)",
     )
     parser.add_argument(
-        "--output", "-o", metavar="FILE", help="Output file path (defaults to stdout)"
+        "-o", "--output", metavar="FILE", help="Output file path (defaults to stdout)"
     )
     parser.add_argument(
-        "--dev", action="store_true", help="Include development dependencies"
-    )
-    parser.add_argument(
-        "--optional", action="store_true", help="Include optional dependencies"
+        "--all",
+        action="store_true",
+        help="Include ALL dependencies (main + dev, optional, etc)",
     )
     parser.add_argument(
         "--direct-only",
@@ -112,13 +121,13 @@ def main():
         "--source",
         choices=["pypa", "pypi", "osv"],
         default="pypa",
-        help="Vulnerability data source (default: pypa)",
+        help="Vulnerability data source [default: pypa] [possible values: pypa, pypi, osv]",
     )
     parser.add_argument(
         "--resolver",
         choices=["uv", "pip-tools"],
         default="uv",
-        help="Dependency resolver for requirements.txt files (default: uv)",
+        help="Dependency resolver for requirements.txt files [default: uv] [possible values: uv, pip-tools]",
     )
     parser.add_argument(
         "--requirements-files",
@@ -127,16 +136,27 @@ def main():
         help="Specific requirements files to audit (disables auto-discovery)",
     )
     parser.add_argument(
-        "--verbose", "-v", action="store_true", help="Enable verbose output"
+        "-v", "--verbose", action="store_true", help="Enable verbose output"
     )
     parser.add_argument(
-        "--quiet", "-q", action="store_true", help="Suppress non-error output"
+        "-q", "--quiet", action="store_true", help="Suppress non-error output"
     )
+
+    # Add custom help text for commands
+    parser.epilog = """
+Commands:
+  resolvers      Check available dependency resolvers
+  check-version  Check if a newer version is available
+  help           Print this message or the help of the given subcommand(s)
+"""
 
     args = parser.parse_args()
 
     try:
-        # Main audit functionality
+        # Main audit functionality - convert --all to dev/optional
+        dev = args.all
+        optional = args.all
+
         result = audit_with_options(
             path=args.path,
             format=args.format,
@@ -144,8 +164,8 @@ def main():
             min_severity=args.severity,
             ignore_ids=args.ignore_ids,
             output=args.output,
-            dev=args.dev,
-            optional=args.optional,
+            dev=dev,
+            optional=optional,
             direct_only=args.direct_only,
             no_cache=args.no_cache,
             cache_dir=args.cache_dir,
