@@ -1,4 +1,5 @@
 # 🐍 PySentry
+
 [Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12)
 
 A fast, reliable security vulnerability scanner for Python projects, written in Rust.
@@ -299,12 +300,13 @@ pip install uv               # Install preferred resolver
 pysentry /path/to/project    # Run security scan
 ```
 
-### pyproject.toml Files
+### pyproject.toml Files (External Resolution)
 
-Fallback support for projects without lock files:
+Support for projects without lock files:
 
 - Parses version constraints from `pyproject.toml`
-- Limited dependency graph information
+- **Resolver Required**: Like requirements.txt, needs external resolvers (`uv` or `pip-tools`) to convert version constraints to exact versions for accurate vulnerability scanning
+- Limited dependency graph information compared to lock files
 - Works with both Poetry and PEP 621 formats
 
 ## Vulnerability Data Sources
