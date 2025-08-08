@@ -49,7 +49,7 @@ impl ProjectParser for PyProjectParser {
     }
 
     fn can_parse(&self, project_path: &Path) -> bool {
-        project_path.join("pyproject.toml").exists() && !project_path.join("uv.lock").exists()
+        project_path.join("pyproject.toml").exists()
     }
 
     fn priority(&self) -> u8 {

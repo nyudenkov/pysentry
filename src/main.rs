@@ -1,9 +1,11 @@
 use std::path::Path;
 
 use anyhow::Result;
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
+use pysentry::dependency::resolvers::{ResolverRegistry, ResolverType};
+use pysentry::parsers::{requirements::RequirementsParser, DependencyStats};
 use pysentry::{
     AuditCache, AuditReport, DependencyScanner, MatcherConfig, ReportGenerator,
     VulnerabilityMatcher, VulnerabilitySource,
@@ -41,6 +43,14 @@ pub enum VulnerabilitySourceType {
     Osv,
 }
 
+#[derive(Debug, Clone, ValueEnum)]
+pub enum ResolverTypeArg {
+    #[value(name = "uv")]
+    Uv,
+    #[value(name = "pip-tools")]
+    PipTools,
+}
+
 #[derive(Parser)]
 #[command(
     name = "pysentry",
@@ -48,6 +58,22 @@ pub enum VulnerabilitySourceType {
     version
 )]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Commands>,
+
+    /// Audit arguments (used when no subcommand specified)
+    #[command(flatten)]
+    pub audit_args: AuditArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    /// Check available dependency resolvers
+    Resolvers(ResolversArgs),
+}
+
+#[derive(Debug, Parser)]
+pub struct AuditArgs {
     /// Path to the project directory to audit
     #[arg(value_name = "PATH", default_value = ".")]
     pub path: std::path::PathBuf,
@@ -92,6 +118,14 @@ pub struct Cli {
     #[arg(long, value_enum, default_value = "pypa")]
     pub source: VulnerabilitySourceType,
 
+    /// Dependency resolver for requirements.txt files
+    #[arg(long, value_enum, default_value = "uv")]
+    pub resolver: ResolverTypeArg,
+
+    /// Specific requirements files to audit (disables auto-discovery)
+    #[arg(long = "requirements-files", value_name = "FILE", num_args = 1..)]
+    pub requirements_files: Vec<std::path::PathBuf>,
+
     /// Enable verbose output
     #[arg(long, short)]
     pub verbose: bool,
@@ -101,49 +135,142 @@ pub struct Cli {
     pub quiet: bool,
 }
 
+#[derive(Debug, Parser)]
+pub struct ResolversArgs {
+    /// Enable verbose output
+    #[arg(long, short)]
+    pub verbose: bool,
+}
+
+/// Check available dependency resolvers on the system
+async fn check_resolvers(verbose: bool) -> Result<()> {
+    if !verbose {
+        println!("Checking available dependency resolvers...");
+        println!();
+    }
+
+    let all_resolvers = vec![ResolverType::Uv, ResolverType::PipTools];
+
+    let mut available_resolvers = Vec::new();
+    let mut unavailable_resolvers = Vec::new();
+
+    for resolver_type in all_resolvers {
+        if verbose {
+            println!("Checking {resolver_type}...");
+        }
+
+        let resolver = ResolverRegistry::create_resolver(resolver_type);
+        let is_available = resolver.is_available().await;
+
+        if is_available {
+            available_resolvers.push(resolver_type);
+        } else {
+            unavailable_resolvers.push(resolver_type);
+        }
+    }
+
+    if !available_resolvers.is_empty() {
+        println!("✓ Available resolvers ({}):", available_resolvers.len());
+        for resolver in &available_resolvers {
+            println!("  {resolver}");
+        }
+        println!();
+    }
+
+    if !unavailable_resolvers.is_empty() {
+        println!("✗ Unavailable resolvers ({}):", unavailable_resolvers.len());
+        for resolver in &unavailable_resolvers {
+            println!("  {resolver} - not installed or not in PATH");
+        }
+        println!();
+    }
+
+    if available_resolvers.is_empty() {
+        println!("⚠️  No dependency resolvers are available!");
+        println!("Please install at least one resolver:");
+        println!("  • UV (recommended): https://docs.astral.sh/uv/");
+        println!("  • pip-tools: pip install pip-tools");
+        return Ok(());
+    }
+
+    match ResolverRegistry::detect_best_resolver().await {
+        Ok(best) => {
+            println!("🎯 Auto-detected resolver: {best}");
+        }
+        Err(_) => {
+            println!("⚠️  No resolver can be auto-detected");
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
 
-    // Initialize logging
-    let log_level = if args.verbose {
-        "debug"
-    } else if args.quiet {
-        "error"
-    } else {
-        "info"
-    };
+    match args.command {
+        // No subcommand provided - run audit with flattened args
+        None => {
+            let audit_args = args.audit_args;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
-        .init();
+            // Initialize logging
+            let log_level = if audit_args.verbose {
+                "debug"
+            } else if audit_args.quiet {
+                "error"
+            } else {
+                "info"
+            };
 
-    // Create cache directory
-    let cache_dir = args.cache_dir.clone().unwrap_or_else(|| {
-        dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("pysentry")
-    });
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
+                .init();
 
-    let exit_code = audit(
-        &args.path,
-        args.format,
-        args.severity,
-        &args.ignore_ids,
-        args.output.as_deref(),
-        args.dev,
-        args.optional,
-        args.direct_only,
-        args.no_cache,
-        args.cache_dir.as_deref(),
-        args.source,
-        &cache_dir,
-        args.verbose,
-        args.quiet,
-    )
-    .await?;
+            // Create cache directory
+            let cache_dir = audit_args.cache_dir.clone().unwrap_or_else(|| {
+                dirs::cache_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("pysentry")
+            });
 
-    std::process::exit(exit_code);
+            let exit_code = audit(
+                &audit_args.path,
+                audit_args.format,
+                audit_args.severity,
+                &audit_args.ignore_ids,
+                audit_args.output.as_deref(),
+                audit_args.dev,
+                audit_args.optional,
+                audit_args.direct_only,
+                audit_args.no_cache,
+                audit_args.cache_dir.as_deref(),
+                audit_args.source,
+                audit_args.resolver,
+                &audit_args.requirements_files,
+                &cache_dir,
+                audit_args.verbose,
+                audit_args.quiet,
+            )
+            .await?;
+
+            std::process::exit(exit_code);
+        }
+        Some(Commands::Resolvers(resolvers_args)) => {
+            let log_level = if resolvers_args.verbose {
+                "debug"
+            } else {
+                "error"
+            };
+
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
+                .init();
+
+            check_resolvers(resolvers_args.verbose).await?;
+            std::process::exit(0);
+        }
+    }
 }
 
 #[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
@@ -159,6 +286,8 @@ async fn audit(
     no_cache: bool,
     _cache_dir: Option<&Path>,
     source: VulnerabilitySourceType,
+    resolver: ResolverTypeArg,
+    requirements_files: &[std::path::PathBuf],
     cache_dir: &Path,
     verbose: bool,
     quiet: bool,
@@ -188,6 +317,8 @@ async fn audit(
         direct_only,
         no_cache,
         source,
+        resolver,
+        requirements_files,
         cache_dir,
         verbose,
         quiet,
@@ -231,6 +362,8 @@ async fn perform_audit(
     direct_only: bool,
     no_cache: bool,
     source: VulnerabilitySourceType,
+    resolver: ResolverTypeArg,
+    requirements_files: &[std::path::PathBuf],
     cache_dir: &Path,
     verbose: bool,
     quiet: bool,
@@ -251,16 +384,53 @@ async fn perform_audit(
     if !quiet {
         eprintln!("Scanning project dependencies...");
     }
-    let scanner = DependencyScanner::new(dev, optional, direct_only);
-    let dependencies = scanner.scan_project(project_dir).await?;
 
-    let dependency_stats = scanner.get_stats(&dependencies);
+    let dependencies = if !requirements_files.is_empty() {
+        // Use explicit requirements files - bypass normal scanner
+        if !quiet {
+            eprintln!(
+                "Using explicit requirements files: {}",
+                requirements_files
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        scan_explicit_requirements(requirements_files, dev, optional, direct_only, resolver).await?
+    } else {
+        // Use normal project scanner with resolver-aware registry
+        let resolver_type: ResolverType = resolver.into();
+        let scanner =
+            DependencyScanner::new_with_resolver(dev, optional, direct_only, resolver_type);
+        scanner.scan_project(project_dir).await?
+    };
+
+    let dependency_stats = if !requirements_files.is_empty() {
+        // Calculate stats directly since we don't have a scanner instance
+        calculate_dependency_stats(&dependencies)
+    } else {
+        let scanner = DependencyScanner::new(dev, optional, direct_only);
+        scanner.get_stats(&dependencies)
+    };
 
     if verbose {
         eprintln!("{dependency_stats}");
     }
 
-    let warnings = scanner.validate_dependencies(&dependencies);
+    let warnings = if !requirements_files.is_empty() {
+        // For explicit requirements files, provide basic validation
+        if dependencies.is_empty() {
+            vec!["No dependencies found in specified requirements files.".to_string()]
+        } else {
+            vec![]
+        }
+    } else {
+        // Use scanner validation for normal project scanning
+        let scanner = DependencyScanner::new(dev, optional, direct_only);
+        scanner.validate_dependencies(&dependencies)
+    };
+
     for warning in &warnings {
         if !quiet {
             eprintln!("Warning: {warning}");
@@ -314,6 +484,57 @@ async fn perform_audit(
     Ok(report)
 }
 
+/// Scan explicit requirements files using specified resolver
+async fn scan_explicit_requirements(
+    requirements_files: &[std::path::PathBuf],
+    _dev: bool,
+    _optional: bool,
+    direct_only: bool,
+    resolver: ResolverTypeArg,
+) -> Result<Vec<pysentry::dependency::scanner::ScannedDependency>> {
+    let resolver_type = resolver.into();
+
+    let parser = RequirementsParser::new(resolver_type);
+
+    let parsed_deps = parser
+        .parse_explicit_files(requirements_files, direct_only)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to parse requirements files: {}", e))?;
+
+    let scanned_dependencies: Vec<pysentry::dependency::scanner::ScannedDependency> = parsed_deps
+        .into_iter()
+        .map(|dep| pysentry::dependency::scanner::ScannedDependency {
+            name: dep.name,
+            version: dep.version,
+            is_direct: dep.is_direct,
+            source: dep.source.into(),
+            path: dep.path,
+        })
+        .collect();
+
+    Ok(scanned_dependencies)
+}
+
+/// Calculate dependency stats from ScannedDependencies
+fn calculate_dependency_stats(
+    dependencies: &[pysentry::dependency::scanner::ScannedDependency],
+) -> DependencyStats {
+    // Convert ScannedDependency to ParsedDependency for stats calculation
+    let parsed_deps: Vec<pysentry::parsers::ParsedDependency> = dependencies
+        .iter()
+        .map(|dep| pysentry::parsers::ParsedDependency {
+            name: dep.name.clone(),
+            version: dep.version.clone(),
+            is_direct: dep.is_direct,
+            source: dep.source.clone().into(),
+            path: dep.path.clone(),
+            dependency_type: pysentry::parsers::DependencyType::Main,
+        })
+        .collect();
+
+    DependencyStats::from_dependencies(&parsed_deps)
+}
+
 impl From<AuditFormat> for pysentry::AuditFormat {
     fn from(format: AuditFormat) -> Self {
         match format {
@@ -341,6 +562,15 @@ impl From<VulnerabilitySourceType> for pysentry::VulnerabilitySourceType {
             VulnerabilitySourceType::Pypa => pysentry::VulnerabilitySourceType::Pypa,
             VulnerabilitySourceType::Pypi => pysentry::VulnerabilitySourceType::Pypi,
             VulnerabilitySourceType::Osv => pysentry::VulnerabilitySourceType::Osv,
+        }
+    }
+}
+
+impl From<ResolverTypeArg> for ResolverType {
+    fn from(resolver: ResolverTypeArg) -> Self {
+        match resolver {
+            ResolverTypeArg::Uv => ResolverType::Uv,
+            ResolverTypeArg::PipTools => ResolverType::PipTools,
         }
     }
 }
