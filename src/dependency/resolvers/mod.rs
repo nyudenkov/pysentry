@@ -56,7 +56,7 @@ pub enum ResolverFeature {
 pub enum ResolverType {
     /// UV resolver (Rust-based, fastest)
     Uv,
-    /// pip-tools resolver (Python-based, widely used) 
+    /// pip-tools resolver (Python-based, widely used)
     PipTools,
 }
 

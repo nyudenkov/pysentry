@@ -8,7 +8,7 @@ use crate::{AuditError, Result};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// UV-based dependency resolver
 pub struct UvResolver;
@@ -22,7 +22,7 @@ impl UvResolver {
     /// Create isolated temporary directory for UV operations
     fn create_isolated_temp_dir() -> Result<tempfile::TempDir> {
         tempfile::tempdir()
-            .map_err(|e| AuditError::other(format!("Failed to create temporary directory: {}", e)))
+            .map_err(|e| AuditError::other(format!("Failed to create temporary directory: {e}")))
     }
 
     /// Execute UV pip compile command in isolated environment
@@ -35,18 +35,18 @@ impl UvResolver {
         tokio::fs::write(&temp_requirements, requirements_content)
             .await
             .map_err(|e| {
-                AuditError::other(format!("Failed to write temp requirements file: {}", e))
+                AuditError::other(format!("Failed to write temp requirements file: {e}"))
             })?;
 
         // Build UV command with complete isolation
         let mut cmd = Command::new("uv");
         cmd.current_dir(temp_dir.path()); // Critical: never use project directory
-        cmd.args(&["pip", "compile"]);
+        cmd.args(["pip", "compile"]);
         cmd.arg("requirements.txt");
-        cmd.args(&["--output-file", "-"]); // Output to stdout only
+        cmd.args(["--output-file", "-"]); // Output to stdout only
 
         // Isolation and safety options
-        cmd.args(&[
+        cmd.args([
             "--no-header", // Don't include timestamp headers
             "--no-annotate", // Don't include source comments
                            // Note: --quiet suppresses stdout output, so we don't use it
@@ -65,7 +65,7 @@ impl UvResolver {
         )
         .await
         .map_err(|_| AuditError::UvTimeout)?
-        .map_err(|e| AuditError::UvExecutionFailed(format!("Failed to execute uv: {}", e)))?;
+        .map_err(|e| AuditError::UvExecutionFailed(format!("Failed to execute uv: {e}")))?;
 
         // Log stderr for debugging (UV outputs progress info there)
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -75,7 +75,7 @@ impl UvResolver {
 
         if output.status.success() {
             let resolved = String::from_utf8(output.stdout).map_err(|e| {
-                AuditError::UvExecutionFailed(format!("Invalid UTF-8 output from uv: {}", e))
+                AuditError::UvExecutionFailed(format!("Invalid UTF-8 output from uv: {e}"))
             })?;
 
             debug!("UV resolution successful, {} bytes output", resolved.len());
@@ -141,6 +141,7 @@ impl DependencyResolver for UvResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::warn;
 
     #[tokio::test]
     async fn test_uv_resolver_creation() {

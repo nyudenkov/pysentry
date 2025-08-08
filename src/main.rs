@@ -60,7 +60,7 @@ pub enum ResolverTypeArg {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
-    
+
     /// Audit arguments (used when no subcommand specified)
     #[command(flatten)]
     pub audit_args: AuditArgs,
@@ -149,17 +149,14 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
         println!();
     }
 
-    let all_resolvers = vec![
-        ResolverType::Uv,
-        ResolverType::PipTools,
-    ];
+    let all_resolvers = vec![ResolverType::Uv, ResolverType::PipTools];
 
     let mut available_resolvers = Vec::new();
     let mut unavailable_resolvers = Vec::new();
 
     for resolver_type in all_resolvers {
         if verbose {
-            println!("Checking {}...", resolver_type);
+            println!("Checking {resolver_type}...");
         }
 
         let resolver = ResolverRegistry::create_resolver(resolver_type);
@@ -175,7 +172,7 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
     if !available_resolvers.is_empty() {
         println!("✓ Available resolvers ({}):", available_resolvers.len());
         for resolver in &available_resolvers {
-            println!("  {}", resolver);
+            println!("  {resolver}");
         }
         println!();
     }
@@ -183,7 +180,7 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
     if !unavailable_resolvers.is_empty() {
         println!("✗ Unavailable resolvers ({}):", unavailable_resolvers.len());
         for resolver in &unavailable_resolvers {
-            println!("  {} - not installed or not in PATH", resolver);
+            println!("  {resolver} - not installed or not in PATH");
         }
         println!();
     }
@@ -198,7 +195,7 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
 
     match ResolverRegistry::detect_best_resolver().await {
         Ok(best) => {
-            println!("🎯 Auto-detected resolver: {}", best);
+            println!("🎯 Auto-detected resolver: {best}");
         }
         Err(_) => {
             println!("⚠️  No resolver can be auto-detected");
@@ -216,7 +213,7 @@ async fn main() -> Result<()> {
         // No subcommand provided - run audit with flattened args
         None => {
             let audit_args = args.audit_args;
-            
+
             // Initialize logging
             let log_level = if audit_args.verbose {
                 "debug"

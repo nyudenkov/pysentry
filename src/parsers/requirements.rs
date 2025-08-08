@@ -18,19 +18,14 @@ use tracing::{debug, info, warn};
 /// Generic requirements.txt parser that works with any resolver
 pub struct RequirementsParser {
     resolver: Box<dyn DependencyResolver>,
-    resolver_name: String,
 }
 
 impl RequirementsParser {
     /// Create a new requirements parser with the specified resolver
     pub fn new(resolver_type: ResolverType) -> Self {
         let resolver = ResolverRegistry::create_resolver(resolver_type);
-        let resolver_name = format!("requirements.txt ({})", resolver.name());
 
-        Self {
-            resolver,
-            resolver_name,
-        }
+        Self { resolver }
     }
 
     /// Create a new requirements parser with auto-detected resolver
@@ -127,22 +122,6 @@ impl RequirementsParser {
         Ok(Some(PackageName::new(package_name)))
     }
 
-    /// Check if pyproject.toml has dependencies section
-    fn has_pyproject_dependencies(&self, project_path: &Path) -> bool {
-        let pyproject_path = project_path.join("pyproject.toml");
-
-        if !pyproject_path.exists() {
-            return false;
-        }
-
-        // Quick check if pyproject.toml has dependencies
-        if let Ok(content) = std::fs::read_to_string(&pyproject_path) {
-            content.contains("[project]") && content.contains("dependencies")
-        } else {
-            false
-        }
-    }
-
     /// Combine multiple requirements files into single content
     async fn combine_requirements_files(&self, files: &[PathBuf]) -> Result<String> {
         let mut combined = String::new();
@@ -211,11 +190,7 @@ impl RequirementsParser {
                             is_direct,
                             source: DependencySource::Registry, // Most resolvers work with PyPI
                             path: None,
-                            dependency_type: if is_direct {
-                                DependencyType::Main // We'll refine this based on file patterns later
-                            } else {
-                                DependencyType::Main
-                            },
+                            dependency_type: DependencyType::Main, // We'll refine this based on file patterns later
                         });
                     }
                     Err(e) => {
@@ -359,28 +334,7 @@ impl ProjectParser for RequirementsParser {
     }
 
     fn can_parse(&self, project_path: &Path) -> bool {
-        // Check if requirements.txt exists
-        let has_requirements = project_path.join("requirements.txt").exists();
-
-        if !has_requirements {
-            return false;
-        }
-
-        // Don't parse if higher-priority formats exist
-        let has_higher_priority =
-            project_path.join("uv.lock").exists() || project_path.join("Pipfile.lock").exists();
-
-        if has_higher_priority {
-            debug!("Skipping requirements.txt parser - higher priority lock files exist");
-            return false;
-        }
-
-        // Check if pyproject.toml has dependencies (higher priority)
-        if self.has_pyproject_dependencies(project_path) {
-            debug!("Skipping requirements.txt parser - pyproject.toml with dependencies exists");
-            return false;
-        }
-        true
+        project_path.join("requirements.txt").exists()
     }
 
     fn priority(&self) -> u8 {
@@ -457,9 +411,9 @@ impl ProjectParser for RequirementsParser {
 
         // Check for large dependency trees
         if dependencies.len() > 200 {
+            let dep_len = dependencies.len();
             warnings.push(format!(
-                "Found {} dependencies. This is a large dependency tree from requirements.txt resolution.",
-                dependencies.len()
+                "Found {dep_len} dependencies. This is a large dependency tree from requirements.txt resolution."
             ));
         }
 
@@ -469,8 +423,7 @@ impl ProjectParser for RequirementsParser {
 
         if transitive_count > direct_count * 5 {
             warnings.push(format!(
-                "High transitive dependency ratio: {} direct, {} transitive. Consider using a lock file for better control.",
-                direct_count, transitive_count
+                "High transitive dependency ratio: {direct_count} direct, {transitive_count} transitive. Consider using a lock file for better control."
             ));
         }
 
@@ -486,7 +439,7 @@ mod tests {
     #[test]
     fn test_requirements_parser_creation() {
         let parser = RequirementsParser::new(ResolverType::Uv);
-        assert!(parser.resolver_name.contains("uv"));
+        assert_eq!(parser.resolver.name(), "uv");
     }
 
     #[tokio::test]

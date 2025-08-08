@@ -8,7 +8,7 @@ use crate::{AuditError, Result};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// pip-tools-based dependency resolver
 pub struct PipToolsResolver;
@@ -22,7 +22,7 @@ impl PipToolsResolver {
     /// Create isolated temporary directory for pip-tools operations
     fn create_isolated_temp_dir() -> Result<tempfile::TempDir> {
         tempfile::tempdir()
-            .map_err(|e| AuditError::other(format!("Failed to create temporary directory: {}", e)))
+            .map_err(|e| AuditError::other(format!("Failed to create temporary directory: {e}")))
     }
 
     /// Execute pip-compile command in isolated environment
@@ -36,17 +36,17 @@ impl PipToolsResolver {
         tokio::fs::write(&temp_requirements, requirements_content)
             .await
             .map_err(|e| {
-                AuditError::other(format!("Failed to write temp requirements file: {}", e))
+                AuditError::other(format!("Failed to write temp requirements file: {e}"))
             })?;
 
         // Build pip-compile command with complete isolation
         let mut cmd = Command::new("pip-compile");
         cmd.current_dir(temp_dir.path()); // Critical: never use project directory
         cmd.arg(&temp_requirements);
-        cmd.args(&["--output-file", temp_output.to_str().unwrap()]);
+        cmd.args(["--output-file", temp_output.to_str().unwrap()]);
 
         // Isolation and safety options
-        cmd.args(&[
+        cmd.args([
             "--no-header",            // Don't include timestamp headers
             "--no-annotate",          // Don't include source comments
             "--quiet",                // Suppress progress output
@@ -69,7 +69,7 @@ impl PipToolsResolver {
         .await
         .map_err(|_| AuditError::PipToolsTimeout)?
         .map_err(|e| {
-            AuditError::PipToolsExecutionFailed(format!("Failed to execute pip-compile: {}", e))
+            AuditError::PipToolsExecutionFailed(format!("Failed to execute pip-compile: {e}"))
         })?;
 
         // Log stderr for debugging
@@ -82,8 +82,7 @@ impl PipToolsResolver {
             // Read the generated output file
             let resolved = tokio::fs::read_to_string(&temp_output).await.map_err(|e| {
                 AuditError::PipToolsExecutionFailed(format!(
-                    "Failed to read pip-compile output: {}",
-                    e
+                    "Failed to read pip-compile output: {e}"
                 ))
             })?;
 
@@ -159,6 +158,7 @@ impl DependencyResolver for PipToolsResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing::warn;
 
     #[tokio::test]
     async fn test_pip_tools_resolver_creation() {
