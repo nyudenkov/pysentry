@@ -59,13 +59,15 @@ pub enum ResolverTypeArg {
 )]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
+    
+    /// Audit arguments (used when no subcommand specified)
+    #[command(flatten)]
+    pub audit_args: AuditArgs,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Audit project dependencies for vulnerabilities (default)
-    Audit(AuditArgs),
     /// Check available dependency resolvers
     Resolvers(ResolversArgs),
 }
@@ -211,7 +213,10 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
 
     match args.command {
-        Commands::Audit(audit_args) => {
+        // No subcommand provided - run audit with flattened args
+        None => {
+            let audit_args = args.audit_args;
+            
             // Initialize logging
             let log_level = if audit_args.verbose {
                 "debug"
@@ -254,7 +259,7 @@ async fn main() -> Result<()> {
 
             std::process::exit(exit_code);
         }
-        Commands::Resolvers(resolvers_args) => {
+        Some(Commands::Resolvers(resolvers_args)) => {
             let log_level = if resolvers_args.verbose {
                 "debug"
             } else {
