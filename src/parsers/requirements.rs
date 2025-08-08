@@ -1,6 +1,6 @@
 //! Generic requirements.txt parser with pluggable resolvers
 //!
-//! This parser can work with any dependency resolver (UV, pip-tools, poetry)
+//! This parser can work with any dependency resolver (UV, pip-tools)
 //! through the DependencyResolver trait, providing better separation of concerns.
 
 use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
@@ -138,7 +138,6 @@ impl RequirementsParser {
         // Quick check if pyproject.toml has dependencies
         if let Ok(content) = std::fs::read_to_string(&pyproject_path) {
             content.contains("[project]") && content.contains("dependencies")
-                || content.contains("[tool.poetry.dependencies]")
         } else {
             false
         }

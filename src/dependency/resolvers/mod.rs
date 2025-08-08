@@ -1,7 +1,7 @@
 //! External dependency resolvers
 //!
 //! This module provides a pluggable architecture for dependency resolution
-//! using external tools like uv, pip-tools, or poetry.
+//! using external tools like uv and pip-tools.
 
 use crate::{AuditError, Result};
 use async_trait::async_trait;
@@ -13,7 +13,7 @@ pub mod uv;
 /// Trait for external dependency resolvers
 #[async_trait]
 pub trait DependencyResolver: Send + Sync {
-    /// Returns the name of this resolver (e.g., "uv", "pip-tools", "poetry")
+    /// Returns the name of this resolver (e.g., "uv", "pip-tools")
     fn name(&self) -> &'static str;
 
     /// Check if this resolver is available on the system
@@ -56,10 +56,8 @@ pub enum ResolverFeature {
 pub enum ResolverType {
     /// UV resolver (Rust-based, fastest)
     Uv,
-    /// pip-tools resolver (Python-based, widely used)
+    /// pip-tools resolver (Python-based, widely used) 
     PipTools,
-    /// Poetry resolver (Poetry ecosystem)
-    Poetry,
 }
 
 impl Display for ResolverType {
@@ -67,7 +65,6 @@ impl Display for ResolverType {
         match self {
             ResolverType::Uv => write!(f, "uv"),
             ResolverType::PipTools => write!(f, "pip-tools"),
-            ResolverType::Poetry => write!(f, "poetry"),
         }
     }
 }
@@ -81,10 +78,6 @@ impl ResolverRegistry {
         match resolver_type {
             ResolverType::Uv => Box::new(uv::UvResolver::new()),
             ResolverType::PipTools => Box::new(pip_tools::PipToolsResolver::new()),
-            ResolverType::Poetry => {
-                // TODO: Implement poetry resolver
-                todo!("poetry resolver not yet implemented")
-            }
         }
     }
 
@@ -94,7 +87,6 @@ impl ResolverRegistry {
         let candidates = vec![
             ResolverType::Uv,       // Fastest, most reliable
             ResolverType::PipTools, // Widely used
-            ResolverType::Poetry,   // Poetry projects
         ];
 
         for resolver_type in candidates {
@@ -105,14 +97,13 @@ impl ResolverRegistry {
         }
 
         Err(AuditError::other(
-            "No supported dependency resolver found. Please install uv, pip-tools, or poetry.",
+            "No supported dependency resolver found. Please install uv or pip-tools.",
         ))
     }
 
     /// Get all available resolvers on the system
     pub async fn get_available_resolvers() -> Vec<ResolverType> {
         let mut available = Vec::new();
-        // Only include implemented resolvers
         let candidates = vec![ResolverType::Uv, ResolverType::PipTools];
 
         for resolver_type in candidates {
@@ -131,7 +122,6 @@ impl From<&str> for ResolverType {
         match s.to_lowercase().as_str() {
             "uv" => ResolverType::Uv,
             "pip-tools" | "pip_tools" | "piptools" => ResolverType::PipTools,
-            "poetry" => ResolverType::Poetry,
             _ => ResolverType::Uv, // Default fallback
         }
     }
@@ -145,7 +135,6 @@ mod tests {
     fn test_resolver_type_display() {
         assert_eq!(ResolverType::Uv.to_string(), "uv");
         assert_eq!(ResolverType::PipTools.to_string(), "pip-tools");
-        assert_eq!(ResolverType::Poetry.to_string(), "poetry");
     }
 
     #[test]
@@ -153,7 +142,6 @@ mod tests {
         assert_eq!(ResolverType::from("uv"), ResolverType::Uv);
         assert_eq!(ResolverType::from("pip-tools"), ResolverType::PipTools);
         assert_eq!(ResolverType::from("piptools"), ResolverType::PipTools);
-        assert_eq!(ResolverType::from("poetry"), ResolverType::Poetry);
         assert_eq!(ResolverType::from("unknown"), ResolverType::Uv); // Fallback
     }
 

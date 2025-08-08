@@ -49,8 +49,6 @@ pub enum ResolverTypeArg {
     Uv,
     #[value(name = "pip-tools")]
     PipTools,
-    #[value(name = "poetry")]
-    Poetry,
 }
 
 #[derive(Parser)]
@@ -152,7 +150,6 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
     let all_resolvers = vec![
         ResolverType::Uv,
         ResolverType::PipTools,
-        ResolverType::Poetry,
     ];
 
     let mut available_resolvers = Vec::new();
@@ -163,12 +160,8 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
             println!("Checking {}...", resolver_type);
         }
 
-        let is_available = if resolver_type == ResolverType::Poetry {
-            false // Poetry resolver is not yet implemented
-        } else {
-            let resolver = ResolverRegistry::create_resolver(resolver_type);
-            resolver.is_available().await
-        };
+        let resolver = ResolverRegistry::create_resolver(resolver_type);
+        let is_available = resolver.is_available().await;
 
         if is_available {
             available_resolvers.push(resolver_type);
@@ -188,11 +181,7 @@ async fn check_resolvers(verbose: bool) -> Result<()> {
     if !unavailable_resolvers.is_empty() {
         println!("✗ Unavailable resolvers ({}):", unavailable_resolvers.len());
         for resolver in &unavailable_resolvers {
-            if *resolver == ResolverType::Poetry {
-                println!("  {} - not yet implemented", resolver);
-            } else {
-                println!("  {} - not installed or not in PATH", resolver);
-            }
+            println!("  {} - not installed or not in PATH", resolver);
         }
         println!();
     }
@@ -580,7 +569,6 @@ impl From<ResolverTypeArg> for ResolverType {
         match resolver {
             ResolverTypeArg::Uv => ResolverType::Uv,
             ResolverTypeArg::PipTools => ResolverType::PipTools,
-            ResolverTypeArg::Poetry => ResolverType::Poetry,
         }
     }
 }
