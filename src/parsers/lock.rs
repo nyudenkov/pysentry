@@ -165,10 +165,18 @@ impl ProjectParser for UvLockParser {
 
             // Determine if this is a direct dependency and what type
             let dep_info = direct_deps.get(&name);
-            let is_direct = dep_info.is_some();
+            let is_direct = if direct_deps.is_empty() {
+                // No pyproject.toml found - treat all packages as direct
+                true
+            } else {
+                dep_info.is_some()
+            };
 
             // Check if package should be included based on reachability
-            let should_include = if let Some(info) = dep_info {
+            let should_include = if direct_deps.is_empty() {
+                // No pyproject.toml found - include all packages as main dependencies
+                true
+            } else if let Some(info) = dep_info {
                 // It's a direct dependency - check if we should include this type
                 self.should_include_dependency_type(info, include_dev, include_optional)
             } else if direct_only {
@@ -240,8 +248,12 @@ impl UvLockParser {
         let pyproject_path = project_dir.join("pyproject.toml");
 
         if !pyproject_path.exists() {
-            debug!("No pyproject.toml found, assuming no direct dependencies");
-            return Ok(HashMap::new());
+            debug!(
+                "No pyproject.toml found, inferring direct dependencies from lock file structure"
+            );
+            // When pyproject.toml is missing, infer direct dependencies from the lock file
+            // by finding packages that are not dependencies of any other package (roots)
+            return self.infer_direct_dependencies_from_lock(project_dir).await;
         }
 
         let content = tokio::fs::read_to_string(&pyproject_path)
@@ -357,8 +369,22 @@ impl UvLockParser {
                 deps.push(dep_name);
             }
 
-            // Only keep the first entry for each package (deduplication)
-            graph.entry(package_name).or_insert(deps);
+            // Insert all package entries, including same name with different versions/markers
+            // Use entry().or_insert() to avoid overwriting, but this means we keep first occurrence
+            // TODO: Consider if we need to merge dependencies from multiple versions of same package
+            if let std::collections::hash_map::Entry::Vacant(e) = graph.entry(package_name.clone())
+            {
+                e.insert(deps);
+            } else {
+                // Package already exists, merge dependencies
+                if let Some(existing_deps) = graph.get_mut(&package_name) {
+                    for dep in deps {
+                        if !existing_deps.contains(&dep) {
+                            existing_deps.push(dep);
+                        }
+                    }
+                }
+            }
         }
 
         debug!("Built dependency graph with {} packages", graph.len());
@@ -467,5 +493,49 @@ impl UvLockParser {
 
         // Default to registry if we can't determine the source
         DependencySource::Registry
+    }
+
+    /// Infer direct dependencies from lock file structure when pyproject.toml is missing
+    /// by finding packages that are not dependencies of any other package (root nodes)
+    async fn infer_direct_dependencies_from_lock(
+        &self,
+        project_dir: &Path,
+    ) -> Result<HashMap<PackageName, DependencyType>> {
+        let lock_path = project_dir.join("uv.lock");
+        let content = tokio::fs::read_to_string(&lock_path)
+            .await
+            .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
+
+        let lock: Lock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
+
+        // Build a set of all packages that are dependencies of other packages
+        let mut transitive_deps = HashSet::new();
+        for package in &lock.packages {
+            for dep in &package.dependencies {
+                transitive_deps.insert(PackageName::new(&dep.name));
+            }
+        }
+
+        // Find root packages (packages that are not dependencies of others)
+        let mut direct_deps = HashMap::new();
+        for package in &lock.packages {
+            let package_name = PackageName::new(&package.name);
+            if !transitive_deps.contains(&package_name) {
+                // This package is not a dependency of any other package - it's likely a direct dependency
+                direct_deps.insert(package_name, DependencyType::Main);
+            }
+        }
+
+        debug!(
+            "Inferred {} direct dependencies from lock file structure: {}",
+            direct_deps.len(),
+            direct_deps
+                .keys()
+                .map(|k| k.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        Ok(direct_deps)
     }
 }
