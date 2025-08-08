@@ -42,9 +42,7 @@ pub enum DependencySource {
 pub enum DependencyType {
     /// Main production dependency
     Main,
-    /// Development dependency
-    Dev,
-    /// Optional dependency
+    /// Optional dependency (includes dev dependencies, optional groups, etc.)
     Optional,
 }
 

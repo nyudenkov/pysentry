@@ -98,13 +98,9 @@ pub struct AuditArgs {
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
 
-    /// Include development dependencies
+    /// Include ALL dependencies (main + dev, optional, etc)
     #[arg(long)]
-    pub dev: bool,
-
-    /// Include optional dependencies
-    #[arg(long)]
-    pub optional: bool,
+    pub all: bool,
 
     /// Only check direct dependencies (exclude transitive)
     #[arg(long)]
@@ -137,6 +133,40 @@ pub struct AuditArgs {
     /// Suppress non-error output
     #[arg(long, short)]
     pub quiet: bool,
+}
+
+impl AuditArgs {
+    pub fn include_dev(&self) -> bool {
+        self.all
+    }
+
+    pub fn include_optional(&self) -> bool {
+        self.all
+    }
+
+    pub fn scope_description(&self) -> &'static str {
+        if self.all {
+            "all (main + dev,optional,prod,etc)"
+        } else {
+            "main only"
+        }
+    }
+
+    pub fn filter_dependencies(
+        &self,
+        dependencies: Vec<pysentry::parsers::ParsedDependency>,
+    ) -> Vec<pysentry::parsers::ParsedDependency> {
+        if self.all {
+            dependencies
+        } else {
+            dependencies
+                .into_iter()
+                .filter(|dep| {
+                    matches!(dep.dependency_type, pysentry::parsers::DependencyType::Main)
+                })
+                .collect()
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -352,25 +382,7 @@ async fn main() -> Result<()> {
                     .join("pysentry")
             });
 
-            let exit_code = audit(
-                &audit_args.path,
-                audit_args.format,
-                audit_args.severity,
-                &audit_args.ignore_ids,
-                audit_args.output.as_deref(),
-                audit_args.dev,
-                audit_args.optional,
-                audit_args.direct_only,
-                audit_args.no_cache,
-                audit_args.cache_dir.as_deref(),
-                audit_args.source,
-                audit_args.resolver,
-                &audit_args.requirements_files,
-                &cache_dir,
-                audit_args.verbose,
-                audit_args.quiet,
-            )
-            .await?;
+            let exit_code = audit(&audit_args, &cache_dir).await?;
 
             std::process::exit(exit_code);
         }
@@ -405,57 +417,34 @@ async fn main() -> Result<()> {
     }
 }
 
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
-async fn audit(
-    path: &Path,
-    format: AuditFormat,
-    severity: SeverityLevel,
-    ignore_ids: &[String],
-    output: Option<&Path>,
-    dev: bool,
-    optional: bool,
-    direct_only: bool,
-    no_cache: bool,
-    _cache_dir: Option<&Path>,
-    source: VulnerabilitySourceType,
-    resolver: ResolverTypeArg,
-    requirements_files: &[std::path::PathBuf],
-    cache_dir: &Path,
-    verbose: bool,
-    quiet: bool,
-) -> Result<i32> {
-    if !quiet {
+async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
+    if !audit_args.quiet {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
-            path.display()
+            audit_args.path.display()
         );
     }
 
-    if verbose {
-        eprintln!("Configuration: format={format:?}, severity={severity:?}, source={source:?}, dev={dev}, optional={optional}, direct_only={direct_only}");
+    if audit_args.verbose {
+        eprintln!(
+            "Configuration: format={:?}, severity={:?}, source={:?}, scope='{}', direct_only={}",
+            audit_args.format,
+            audit_args.severity,
+            audit_args.source,
+            audit_args.scope_description(),
+            audit_args.direct_only
+        );
         eprintln!("Cache directory: {}", cache_dir.display());
 
-        if !ignore_ids.is_empty() {
-            eprintln!("Ignoring vulnerability IDs: {}", ignore_ids.join(", "));
+        if !audit_args.ignore_ids.is_empty() {
+            eprintln!(
+                "Ignoring vulnerability IDs: {}",
+                audit_args.ignore_ids.join(", ")
+            );
         }
     }
 
-    let audit_result = perform_audit(
-        path,
-        severity,
-        ignore_ids,
-        dev,
-        optional,
-        direct_only,
-        no_cache,
-        source,
-        resolver,
-        requirements_files,
-        cache_dir,
-        verbose,
-        quiet,
-    )
-    .await;
+    let audit_result = perform_audit(audit_args, cache_dir).await;
 
     let report = match audit_result {
         Ok(report) => report,
@@ -465,12 +454,16 @@ async fn audit(
         }
     };
 
-    let report_output = ReportGenerator::generate(&report, format.into(), Some(path))
-        .map_err(|e| anyhow::anyhow!("Failed to generate report: {e}"))?;
+    let report_output = ReportGenerator::generate(
+        &report,
+        audit_args.format.clone().into(),
+        Some(&audit_args.path),
+    )
+    .map_err(|e| anyhow::anyhow!("Failed to generate report: {e}"))?;
 
-    if let Some(output_path) = output {
+    if let Some(output_path) = &audit_args.output {
         fs_err::write(output_path, &report_output)?;
-        if !quiet {
+        if !audit_args.quiet {
             eprintln!("Audit results written to: {}", output_path.display());
         }
     } else {
@@ -484,72 +477,132 @@ async fn audit(
     }
 }
 
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
-async fn perform_audit(
-    project_dir: &Path,
-    severity: SeverityLevel,
-    ignore_ids: &[String],
-    dev: bool,
-    optional: bool,
-    direct_only: bool,
-    no_cache: bool,
-    source: VulnerabilitySourceType,
-    resolver: ResolverTypeArg,
-    requirements_files: &[std::path::PathBuf],
-    cache_dir: &Path,
-    verbose: bool,
-    quiet: bool,
-) -> Result<AuditReport> {
+async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<AuditReport> {
     // Create cache directory if it doesn't exist
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
     // Create the vulnerability source
-    let vuln_source = VulnerabilitySource::new(source.into(), audit_cache, no_cache);
+    let vuln_source = VulnerabilitySource::new(
+        audit_args.source.clone().into(),
+        audit_cache,
+        audit_args.no_cache,
+    );
 
     // Get source name for display
     let source_name = vuln_source.name();
-    if !quiet {
+    if !audit_args.quiet {
         eprintln!("Fetching vulnerability data from {source_name}...");
     }
 
-    if !quiet {
+    if !audit_args.quiet {
         eprintln!("Scanning project dependencies...");
     }
 
-    let dependencies = if !requirements_files.is_empty() {
+    let dependencies = if !audit_args.requirements_files.is_empty() {
         // Use explicit requirements files - bypass normal scanner
-        if !quiet {
+        if !audit_args.quiet {
             eprintln!(
                 "Using explicit requirements files: {}",
-                requirements_files
+                audit_args
+                    .requirements_files
                     .iter()
                     .map(|p| p.display().to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             );
         }
-        scan_explicit_requirements(requirements_files, dev, optional, direct_only, resolver).await?
+        scan_explicit_requirements(
+            &audit_args.requirements_files,
+            audit_args.include_dev(),
+            audit_args.include_optional(),
+            audit_args.direct_only,
+            audit_args.resolver.clone(),
+        )
+        .await?
     } else {
-        // Use normal project scanner with resolver-aware registry
-        let resolver_type: ResolverType = resolver.into();
-        let scanner = DependencyScanner::new(dev, optional, direct_only, Some(resolver_type));
-        scanner.scan_project(project_dir).await?
+        let resolver_type: ResolverType = audit_args.resolver.clone().into();
+
+        let parse_dev = audit_args.include_dev();
+        let parse_optional = audit_args.include_optional();
+
+        // Note: We bypass the scanner and use parser directly for better control over dependency types
+        // let scanner = DependencyScanner::new(parse_dev, parse_optional, audit_args.direct_only, Some(resolver_type));
+
+        // Step 2: Convert to ParsedDependency for filtering (we need access to dependency_type)
+        // Since we don't have access to the raw ParsedDependency from scanner,
+        // we need to use the parser directly
+
+        // Get the raw parsed dependencies with proper types
+        use pysentry::parsers::{DependencyType, ParserRegistry};
+        let parser_registry = ParserRegistry::new(Some(resolver_type));
+        let (raw_parsed_deps, parser_name) = parser_registry
+            .parse_project(
+                &audit_args.path,
+                parse_dev,
+                parse_optional,
+                audit_args.direct_only,
+            )
+            .await?;
+
+        if audit_args.verbose {
+            eprintln!(
+                "Raw parsed dependencies before filtering: {} (from {})",
+                raw_parsed_deps.len(),
+                parser_name
+            );
+            let (main_count, optional_count) =
+                raw_parsed_deps
+                    .iter()
+                    .fold((0, 0), |(m, o), dep| match dep.dependency_type {
+                        DependencyType::Main => (m + 1, o),
+                        DependencyType::Optional => (m, o + 1),
+                    });
+            eprintln!("  Main: {main_count}, Optional: {optional_count}");
+        }
+
+        // Step 3: Apply scope-based filtering
+        let filtered_parsed_deps = audit_args.filter_dependencies(raw_parsed_deps);
+
+        if audit_args.verbose {
+            eprintln!(
+                "Filtered dependencies after scope filtering: {}",
+                filtered_parsed_deps.len()
+            );
+            eprintln!("  Scope: {}", audit_args.scope_description());
+        }
+
+        // Step 4: Convert filtered ParsedDependency back to ScannedDependency
+        filtered_parsed_deps
+            .into_iter()
+            .map(|dep| pysentry::dependency::scanner::ScannedDependency {
+                name: dep.name,
+                version: dep.version,
+                is_direct: dep.is_direct,
+                source: dep.source.into(),
+                path: dep.path,
+            })
+            .collect()
     };
 
-    let dependency_stats = if !requirements_files.is_empty() {
+    let dependency_stats = if !audit_args.requirements_files.is_empty() {
         // Calculate stats directly since we don't have a scanner instance
         calculate_dependency_stats(&dependencies)
     } else {
-        let scanner = DependencyScanner::new(dev, optional, direct_only, None);
+        let scanner = DependencyScanner::new(
+            audit_args.include_dev(),
+            audit_args.include_optional(),
+            audit_args.direct_only,
+            None,
+        );
         scanner.get_stats(&dependencies)
     };
 
-    if verbose {
+    if audit_args.verbose {
         eprintln!("{dependency_stats}");
     }
 
-    let warnings = if !requirements_files.is_empty() {
+    let warnings = if !audit_args.requirements_files.is_empty() {
         // For explicit requirements files, provide basic validation
         if dependencies.is_empty() {
             vec!["No dependencies found in specified requirements files.".to_string()]
@@ -558,12 +611,17 @@ async fn perform_audit(
         }
     } else {
         // Use scanner validation for normal project scanning
-        let scanner = DependencyScanner::new(dev, optional, direct_only, None);
+        let scanner = DependencyScanner::new(
+            audit_args.include_dev(),
+            audit_args.include_optional(),
+            audit_args.direct_only,
+            None,
+        );
         scanner.validate_dependencies(&dependencies)
     };
 
     for warning in &warnings {
-        if !quiet {
+        if !audit_args.quiet {
             eprintln!("Warning: {warning}");
         }
     }
@@ -575,7 +633,7 @@ async fn perform_audit(
         .collect();
 
     // Fetch vulnerabilities from the selected source
-    if !quiet {
+    if !audit_args.quiet {
         eprintln!(
             "Fetching vulnerabilities for {} packages from {}...",
             packages.len(),
@@ -584,10 +642,14 @@ async fn perform_audit(
     }
     let database = vuln_source.fetch_vulnerabilities(&packages).await?;
 
-    if !quiet {
+    if !audit_args.quiet {
         eprintln!("Matching against vulnerability database...");
     }
-    let matcher_config = MatcherConfig::new(severity.into(), ignore_ids.to_vec(), direct_only);
+    let matcher_config = MatcherConfig::new(
+        audit_args.severity.clone().into(),
+        audit_args.ignore_ids.to_vec(),
+        audit_args.direct_only,
+    );
     let matcher = VulnerabilityMatcher::new(database, matcher_config);
 
     let matches = matcher.find_vulnerabilities(&dependencies)?;
@@ -605,7 +667,7 @@ async fn perform_audit(
     );
 
     let summary = report.summary();
-    if !quiet {
+    if !audit_args.quiet {
         eprintln!(
             "Audit complete: {} vulnerabilities found in {} packages",
             summary.total_vulnerabilities, summary.vulnerable_packages

@@ -98,9 +98,16 @@ impl PyProjectParser {
         direct_deps_with_info: Vec<(PackageName, DependencyType, String)>,
         include_dev: bool,
         include_optional: bool,
+        direct_only: bool,
     ) -> Result<Vec<ParsedDependency>> {
         let mut dependencies = Vec::new();
         let mut warned_about_placeholder = false;
+
+        // Check if we have unspecified versions or need transitive dependencies
+        let has_unspecified_versions = direct_deps_with_info
+            .iter()
+            .any(|(_, _, spec)| Self::extract_version_from_spec(spec).is_none());
+        let needs_transitive = !direct_only;
 
         for (package_name, dep_type, version_spec) in direct_deps_with_info {
             // Check if this dependency type should be included
@@ -108,12 +115,24 @@ impl PyProjectParser {
                 continue;
             }
 
-            // For pyproject.toml scanning, we can only get direct dependencies
-            // and we don't know the exact installed versions without a lock file
-            if !warned_about_placeholder {
+            // Warn about resolver benefits when we could benefit from one
+            if !warned_about_placeholder
+                && (has_unspecified_versions || needs_transitive || !self.has_resolver())
+            {
+                let reason = if has_unspecified_versions && needs_transitive {
+                    "exact versions and transitive dependencies"
+                } else if has_unspecified_versions {
+                    "exact versions"
+                } else if needs_transitive {
+                    "transitive dependencies"
+                } else {
+                    "exact versions and transitive dependencies"
+                };
+
                 warn!(
                     "Scanning from pyproject.toml only shows direct dependencies with version constraints. \
-                    Consider using a resolver (uv/pip-tools) for exact versions and transitive dependencies."
+                    Consider using a resolver (uv/pip-tools) for {}.",
+                    reason
                 );
                 warned_about_placeholder = true;
             }
@@ -176,12 +195,19 @@ impl PyProjectParser {
         // However, we need to handle special cases:
 
         // If the spec is just the package name (no version), return as-is
-        if version_spec.trim() == package_name.as_str() {
+        if version_spec
+            .trim()
+            .eq_ignore_ascii_case(package_name.as_str())
+        {
             return Ok(package_name.to_string());
         }
 
         // If the spec contains the package name followed by version constraints, return as-is
-        if version_spec.starts_with(package_name.as_str()) {
+        // Use case-insensitive comparison to handle normalized vs original package names
+        if version_spec
+            .to_ascii_lowercase()
+            .starts_with(&package_name.as_str().to_ascii_lowercase())
+        {
             return Ok(version_spec.to_string());
         }
 
@@ -329,11 +355,19 @@ impl ProjectParser for PyProjectParser {
             .iter()
             .any(|(_, _, spec)| Self::extract_version_from_spec(spec).is_none());
 
-        let should_use_resolver =
-            has_unspecified_versions && self.has_resolver() && self.is_resolver_available().await;
+        let should_use_resolver = self.has_resolver()
+            && self.is_resolver_available().await
+            && (has_unspecified_versions || !direct_only);
 
         if should_use_resolver {
-            debug!("Using resolver for pyproject.toml dependencies due to unspecified versions");
+            debug!(
+                "Using resolver for pyproject.toml dependencies{}",
+                if has_unspecified_versions {
+                    " due to unspecified versions"
+                } else {
+                    " for transitive dependency resolution"
+                }
+            );
             match self
                 .parse_with_resolver(
                     &direct_deps_with_info,
@@ -359,7 +393,7 @@ impl ProjectParser for PyProjectParser {
                     );
                 }
             }
-        } else if has_unspecified_versions && self.has_resolver() {
+        } else if (has_unspecified_versions || !direct_only) && self.has_resolver() {
             warn!(
                 "Resolver {} is configured but not available, falling back to basic parsing",
                 self.resolver.as_ref().map_or("unknown", |r| r.name())
@@ -367,8 +401,13 @@ impl ProjectParser for PyProjectParser {
         }
 
         // Fallback to current behavior
-        self.parse_without_resolver(direct_deps_with_info, include_dev, include_optional)
-            .await
+        self.parse_without_resolver(
+            direct_deps_with_info,
+            include_dev,
+            include_optional,
+            direct_only,
+        )
+        .await
     }
 
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {
@@ -433,14 +472,19 @@ impl PyProjectParser {
         include_optional: bool,
     ) -> Result<Vec<(PackageName, DependencyType, String)>> {
         // Use a map to track dependencies with proper priority
-        let mut deps_map: HashMap<PackageName, (DependencyType, String)> = HashMap::new();
+        // Key is the full dependency string to handle extras properly (e.g., psycopg[binary] vs psycopg[c])
+        let mut deps_map: HashMap<String, (PackageName, DependencyType, String)> = HashMap::new();
 
         // Add main dependencies
         if let Some(project_table) = &pyproject.project {
             if let Some(dependencies) = &project_table.dependencies {
                 for dep_str in dependencies {
                     if let Ok(package_name) = self.extract_package_name_from_dep_string(dep_str) {
-                        deps_map.insert(package_name, (DependencyType::Main, dep_str.clone()));
+                        // Use the full dep_str as key to distinguish between different extras
+                        deps_map.insert(
+                            dep_str.clone(),
+                            (package_name, DependencyType::Main, dep_str.clone()),
+                        );
                     }
                 }
             }
@@ -448,15 +492,24 @@ impl PyProjectParser {
             // Add optional dependencies if requested
             if include_optional {
                 if let Some(optional_deps) = &project_table.optional_dependencies {
-                    for deps in optional_deps.values() {
+                    for (group_name, deps) in optional_deps {
+                        debug!(
+                            "Processing optional dependency group '{}' as Optional",
+                            group_name
+                        );
+
                         for dep_str in deps {
                             if let Ok(package_name) =
                                 self.extract_package_name_from_dep_string(dep_str)
                             {
-                                // Only insert if not already present as Main
-                                deps_map
-                                    .entry(package_name)
-                                    .or_insert((DependencyType::Optional, dep_str.clone()));
+                                // Insert with full dep_str as key - this allows different extras of same package
+                                // Only insert if not already present (main dependencies take priority)
+                                // All non-main dependencies are now classified as Optional
+                                deps_map.entry(dep_str.clone()).or_insert((
+                                    package_name,
+                                    DependencyType::Optional,
+                                    dep_str.clone(),
+                                ));
                             }
                         }
                     }
@@ -464,17 +517,20 @@ impl PyProjectParser {
             }
         }
 
-        // Add development dependencies if requested
+        // Add development dependencies if requested (PEP 735 dependency-groups)
         if include_dev {
             if let Some(dep_groups) = &pyproject.dependency_groups {
                 // Include all dependency groups for graph analysis
                 for (group_name, deps) in dep_groups {
-                    debug!("Processing dependency group: {}", group_name);
+                    debug!("Processing dependency group '{}' as Optional", group_name);
                     for dep_str in deps {
                         if let Ok(package_name) = self.extract_package_name_from_dep_string(dep_str)
                         {
-                            // Dev dependencies override everything else
-                            deps_map.insert(package_name, (DependencyType::Dev, dep_str.clone()));
+                            // All dependency groups are classified as Optional
+                            deps_map.insert(
+                                dep_str.clone(),
+                                (package_name, DependencyType::Optional, dep_str.clone()),
+                            );
                         }
                     }
                 }
@@ -484,19 +540,15 @@ impl PyProjectParser {
         // Convert map to vector
         let direct_deps: Vec<(PackageName, DependencyType, String)> = deps_map
             .into_iter()
-            .map(|(name, (dep_type, spec))| (name, dep_type, spec))
+            .map(|(_key, (name, dep_type, spec))| (name, dep_type, spec))
             .collect();
 
         debug!(
-            "Found {} direct dependencies with info: {} main, {} dev, {} optional",
+            "Found {} direct dependencies with info: {} main, {} optional",
             direct_deps.len(),
             direct_deps
                 .iter()
                 .filter(|(_, t, _)| *t == DependencyType::Main)
-                .count(),
-            direct_deps
-                .iter()
-                .filter(|(_, t, _)| *t == DependencyType::Dev)
                 .count(),
             direct_deps
                 .iter()
@@ -535,12 +587,11 @@ impl PyProjectParser {
     fn should_include_dependency_type(
         &self,
         dep_type: DependencyType,
-        include_dev: bool,
+        _include_dev: bool,
         include_optional: bool,
     ) -> bool {
         match dep_type {
             DependencyType::Main => true,
-            DependencyType::Dev => include_dev,
             DependencyType::Optional => include_optional,
         }
     }
@@ -717,7 +768,7 @@ mod tests {
             ),
             (
                 PackageName::new("pytest"),
-                DependencyType::Dev,
+                DependencyType::Optional,
                 "pytest".to_string(),
             ),
         ];
@@ -731,9 +782,9 @@ mod tests {
         assert!(lines.contains(&"requests>=2.25.0"));
         assert!(lines.contains(&"click>=8.0"));
 
-        // Test including dev dependencies
+        // Test including optional dependencies
         let result = parser
-            .convert_to_requirements_format(&deps_with_info, true, false)
+            .convert_to_requirements_format(&deps_with_info, false, true)
             .unwrap();
         let lines: Vec<&str> = result.lines().collect();
         assert_eq!(lines.len(), 3);
@@ -858,7 +909,7 @@ charset-normalizer==2.1.1
             ),
             (
                 PackageName::new("pytest"),
-                DependencyType::Dev,
+                DependencyType::Optional,
                 "pytest".to_string(),
             ),
         ];
@@ -872,7 +923,7 @@ charset-normalizer==2.1.1
 
         let dep_type = parser
             .get_dependency_type_from_original(&PackageName::new("pytest"), &direct_deps_with_info);
-        assert_eq!(dep_type, DependencyType::Dev);
+        assert_eq!(dep_type, DependencyType::Optional);
 
         // Test default for non-existing dependency (transitive)
         let dep_type = parser.get_dependency_type_from_original(

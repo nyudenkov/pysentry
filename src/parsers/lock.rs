@@ -47,7 +47,7 @@ struct Package {
     resolution_markers: Option<Vec<String>>,
     #[serde(default)]
     dependencies: Vec<Dependency>, // Used for dependency graph analysis
-    #[serde(default)]
+    #[serde(default, rename = "optional-dependencies")]
     #[allow(dead_code)] // Used for deserialization
     optional_dependencies: HashMap<String, Vec<Dependency>>,
     #[serde(default)]
@@ -70,22 +70,7 @@ struct Dependency {
     marker: Option<String>,
 }
 
-/// PyProject.toml structure for parsing direct dependencies
-#[derive(Debug, Deserialize)]
-struct PyProject {
-    project: Option<Project>,
-    #[serde(rename = "dependency-groups")]
-    dependency_groups: Option<HashMap<String, Vec<String>>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Project {
-    #[allow(dead_code)] // Used for deserialization
-    name: Option<String>,
-    dependencies: Option<Vec<String>>,
-    #[serde(rename = "optional-dependencies")]
-    optional_dependencies: Option<HashMap<String, Vec<String>>>,
-}
+// PyProject.toml support removed - lock parser now only works with lock file structure
 
 /// UV lock file parser
 pub struct UvLockParser;
@@ -119,7 +104,7 @@ impl ProjectParser for UvLockParser {
     async fn parse_dependencies(
         &self,
         project_path: &Path,
-        include_dev: bool,
+        _include_dev: bool,
         include_optional: bool,
         direct_only: bool,
     ) -> Result<Vec<ParsedDependency>> {
@@ -139,62 +124,60 @@ impl ProjectParser for UvLockParser {
 
         debug!("Found {} packages in lock file", lock.packages.len());
 
-        // Get direct dependencies from pyproject.toml
+        // Identify packages that come from optional dependency groups
+        let optional_packages = self.identify_optional_packages(&lock);
+        debug!(
+            "Identified {} optional packages (direct and transitive)",
+            optional_packages.len()
+        );
+
+        // Infer direct dependencies from lock file structure only
         let direct_deps = self
-            .get_direct_dependencies(project_path, include_dev, include_optional)
+            .infer_direct_dependencies_from_lock(project_path)
             .await?;
 
         // Build dependency graph from uv.lock
         let dependency_graph = self.build_dependency_graph(&lock);
 
         // Determine which packages are reachable from which direct dependencies
-        let reachability = self.analyze_reachability(&direct_deps, &dependency_graph);
+        let _reachability = self.analyze_reachability(&direct_deps, &dependency_graph);
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
 
+        // Warn about --direct-only being ignored for uv.lock files
+        if direct_only {
+            warn!(
+                "--direct-only flag is ignored for uv.lock files (scanning all main dependencies)"
+            );
+        }
+
+        // Process all packages and extract both main and optional dependencies
         for package in &lock.packages {
-            let name = PackageName::new(&package.name);
+            let package_name = PackageName::new(&package.name);
             let version = Version::from_str(&package.version)?;
 
             // Skip if we've already processed this package (deduplication)
-            if seen_packages.contains(&name) {
+            if seen_packages.contains(&package_name) {
                 continue;
             }
-            seen_packages.insert(name.clone());
+            seen_packages.insert(package_name.clone());
 
-            // Determine if this is a direct dependency and what type
-            let dep_info = direct_deps.get(&name);
-            let is_direct = if direct_deps.is_empty() {
-                // No pyproject.toml found - treat all packages as direct
-                true
-            } else {
-                dep_info.is_some()
-            };
+            // Check if this package should be included based on direct/transitive filtering
+            let dep_info = direct_deps.get(&package_name);
+            // For uv.lock files, we ignore direct_only filtering, so always treat as direct
+            // This ensures the vulnerability matcher doesn't filter them out
+            let is_direct = true;
 
-            // Check if package should be included based on reachability
-            let should_include = if direct_deps.is_empty() {
-                // No pyproject.toml found - include all packages as main dependencies
-                true
-            } else if let Some(info) = dep_info {
-                // It's a direct dependency - check if we should include this type
-                self.should_include_dependency_type(info, include_dev, include_optional)
-            } else if direct_only {
-                // Skip all transitive dependencies if direct_only is enabled
-                false
-            } else {
-                // It's a transitive dependency - check if it's reachable from allowed direct deps
-                self.should_include_transitive(
-                    &name,
-                    &reachability,
-                    &direct_deps,
-                    include_dev,
-                    include_optional,
-                )
-            };
+            // Skip direct_only filtering for uv.lock files since inference is unreliable
+            // uv.lock contains all resolved dependencies, so this filter doesn't make sense
 
-            if !should_include {
-                debug!("Skipping {} due to filtering rules", name);
+            // Skip optional packages when include_optional is false
+            if optional_packages.contains(&package_name) && !include_optional {
+                debug!(
+                    "Skipping {} - optional dependency with include_optional=false",
+                    package_name
+                );
                 continue;
             }
 
@@ -202,12 +185,48 @@ impl ProjectParser for UvLockParser {
             let dependency_type = dep_info.copied().unwrap_or(DependencyType::Main);
 
             let dependency = ParsedDependency {
-                name,
+                name: package_name,
                 version,
                 is_direct,
                 source,
                 path: None, // TODO: Extract path for local dependencies
                 dependency_type,
+            };
+
+            dependencies.push(dependency);
+        }
+
+        // Process dependencies referenced by main dependencies
+        let all_dep_refs = self.collect_all_dependency_references(&lock);
+
+        for (dep_name, dep_type, is_from_optional_group) in all_dep_refs {
+            // Skip if we've already processed this as a package
+            if seen_packages.contains(&dep_name) {
+                continue;
+            }
+
+            // Skip optional dependencies if not requested
+            if is_from_optional_group && !include_optional {
+                debug!(
+                    "Skipping optional dependency {} - include_optional=false",
+                    dep_name
+                );
+                continue;
+            }
+
+            // Skip direct-only filtering for dependency references (consistent with warning)
+            // Since we ignore the --direct-only flag for uv.lock files, don't filter here either
+
+            // Create a placeholder dependency for dependencies that are referenced but not in packages
+            // This happens when lock file has dependency references but the actual package isn't included
+            // Use version 0.0.0 as placeholder - this will trigger warnings in validation
+            let dependency = ParsedDependency {
+                name: dep_name,
+                version: Version::new([0, 0, 0]), // Placeholder version
+                is_direct: true, // Always treat as direct since we're ignoring direct_only filtering
+                source: DependencySource::Registry, // Default assumption
+                path: None,
+                dependency_type: dep_type,
             };
 
             dependencies.push(dependency);
@@ -238,124 +257,82 @@ impl ProjectParser for UvLockParser {
 }
 
 impl UvLockParser {
-    /// Parse pyproject.toml to get direct dependencies with their types
-    async fn get_direct_dependencies(
-        &self,
-        project_dir: &Path,
-        include_dev: bool,
-        include_optional: bool,
-    ) -> Result<HashMap<PackageName, DependencyType>> {
-        let pyproject_path = project_dir.join("pyproject.toml");
+    /// Identify packages that come from optional dependency groups (and their transitive deps)
+    fn identify_optional_packages(&self, lock: &Lock) -> HashSet<PackageName> {
+        let mut optional_packages = HashSet::new();
+        let mut to_process = Vec::new();
 
-        if !pyproject_path.exists() {
-            debug!(
-                "No pyproject.toml found, inferring direct dependencies from lock file structure"
-            );
-            // When pyproject.toml is missing, infer direct dependencies from the lock file
-            // by finding packages that are not dependencies of any other package (roots)
-            return self.infer_direct_dependencies_from_lock(project_dir).await;
-        }
-
-        let content = tokio::fs::read_to_string(&pyproject_path)
-            .await
-            .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
-
-        let pyproject: PyProject =
-            toml::from_str(&content).map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
-
-        let mut direct_deps = HashMap::new();
-
-        // Add main dependencies
-        if let Some(project) = &pyproject.project {
-            if let Some(dependencies) = &project.dependencies {
-                for dep_str in dependencies {
-                    if let Ok(name) = self.extract_package_name(dep_str) {
-                        direct_deps.insert(name, DependencyType::Main);
-                    }
+        // First, collect all direct optional dependencies
+        for package in &lock.packages {
+            for optional_deps in package.optional_dependencies.values() {
+                for dep in optional_deps {
+                    let dep_name = PackageName::new(&dep.name);
+                    optional_packages.insert(dep_name.clone());
+                    to_process.push(dep_name);
                 }
             }
+        }
 
-            // Add optional dependencies if requested
-            if include_optional {
-                if let Some(optional_deps) = &project.optional_dependencies {
-                    for deps in optional_deps.values() {
-                        for dep_str in deps {
-                            if let Ok(name) = self.extract_package_name(dep_str) {
-                                // Don't override main dependencies, but always analyze for graph
-                                direct_deps.entry(name).or_insert(DependencyType::Optional);
-                            }
-                        }
+        // Build a dependency graph for traversal
+        let dep_graph = self.build_dependency_graph(lock);
+
+        // Now find all transitive dependencies of optional packages
+        let mut visited = HashSet::new();
+        while let Some(pkg) = to_process.pop() {
+            if visited.contains(&pkg) {
+                continue;
+            }
+            visited.insert(pkg.clone());
+
+            // Add all dependencies of this optional package
+            if let Some(deps) = dep_graph.get(&pkg) {
+                for dep in deps {
+                    if !optional_packages.contains(dep) {
+                        optional_packages.insert(dep.clone());
+                        to_process.push(dep.clone());
                     }
                 }
             }
         }
 
-        // Add dependency-groups for graph analysis if dev dependencies are requested
-        if include_dev {
-            if let Some(dep_groups) = &pyproject.dependency_groups {
-                // Include all dependency groups for graph analysis
-                for (group_name, deps) in dep_groups {
-                    debug!("Processing dependency group: {}", group_name);
-                    for dep_str in deps {
-                        if let Ok(name) = self.extract_package_name(dep_str) {
-                            // Always add dev dependencies to the graph analysis
-                            direct_deps.insert(name, DependencyType::Dev);
-                        }
-                    }
-                }
-            }
-        }
-
-        debug!("Found {} direct dependencies", direct_deps.len());
-        let main_count = direct_deps
-            .values()
-            .filter(|&t| *t == DependencyType::Main)
-            .count();
-        let dev_count = direct_deps
-            .values()
-            .filter(|&t| *t == DependencyType::Dev)
-            .count();
-        let optional_count = direct_deps
-            .values()
-            .filter(|&t| *t == DependencyType::Optional)
-            .count();
         debug!(
-            "Direct deps breakdown: {} main, {} dev, {} optional",
-            main_count, dev_count, optional_count
+            "Identified {} optional packages (including transitive)",
+            optional_packages.len()
         );
-
-        Ok(direct_deps)
+        optional_packages
     }
 
-    /// Extract package name from dependency specification
-    fn extract_package_name(&self, dep_spec: &str) -> Result<PackageName> {
-        // Handle specs like "package>=1.0", "package[extra]>=1.0", etc.
-        let name_part = dep_spec
-            .split(&['>', '<', '=', '!', '~', '[', '@'][..])
-            .next()
-            .unwrap_or(dep_spec)
-            .trim();
-
-        PackageName::from_str(name_part).map_err(|_| {
-            AuditError::InvalidDependency(format!("Invalid package name: {name_part}"))
-        })
-    }
-
-    /// Check if a dependency type should be included
-    fn should_include_dependency_type(
+    /// Collect all dependency references from both main and optional dependencies
+    fn collect_all_dependency_references(
         &self,
-        dep_type: &DependencyType,
-        include_dev: bool,
-        include_optional: bool,
-    ) -> bool {
-        match dep_type {
-            DependencyType::Main => true,
-            DependencyType::Dev => include_dev,
-            DependencyType::Optional => include_optional,
+        lock: &Lock,
+    ) -> Vec<(PackageName, DependencyType, bool)> {
+        let mut dep_refs = Vec::new();
+
+        for package in &lock.packages {
+            // Process main dependencies
+            for dep in &package.dependencies {
+                let dep_name = PackageName::new(&dep.name);
+                dep_refs.push((dep_name, DependencyType::Main, false));
+            }
+
+            // Process optional dependencies from all groups
+            for optional_deps in package.optional_dependencies.values() {
+                for dep in optional_deps {
+                    let dep_name = PackageName::new(&dep.name);
+                    dep_refs.push((dep_name, DependencyType::Optional, true));
+                }
+            }
         }
+
+        debug!(
+            "Collected {} dependency references from lock file",
+            dep_refs.len()
+        );
+        dep_refs
     }
 
-    /// Build dependency graph from uv.lock file
+    /// Build dependency graph from uv.lock file including both main and optional dependencies
     fn build_dependency_graph(&self, lock: &Lock) -> HashMap<PackageName, Vec<PackageName>> {
         let mut graph = HashMap::new();
 
@@ -363,10 +340,18 @@ impl UvLockParser {
             let package_name = PackageName::new(&package.name);
             let mut deps = Vec::new();
 
-            // Parse dependencies from the package
+            // Parse main dependencies from the package
             for dep in &package.dependencies {
                 let dep_name = PackageName::new(&dep.name);
                 deps.push(dep_name);
+            }
+
+            // Parse optional dependencies from all groups
+            for optional_deps in package.optional_dependencies.values() {
+                for dep in optional_deps {
+                    let dep_name = PackageName::new(&dep.name);
+                    deps.push(dep_name);
+                }
             }
 
             // Insert all package entries, including same name with different versions/markers
@@ -435,28 +420,6 @@ impl UvLockParser {
         reachability
     }
 
-    /// Determine if a transitive dependency should be included based on reachability
-    fn should_include_transitive(
-        &self,
-        package: &PackageName,
-        reachability: &HashMap<PackageName, HashSet<DependencyType>>,
-        _direct_deps: &HashMap<PackageName, DependencyType>,
-        include_dev: bool,
-        include_optional: bool,
-    ) -> bool {
-        if let Some(reachable_from) = reachability.get(package) {
-            // Check if this package is reachable from any allowed dependency types
-            for dep_type in reachable_from {
-                if self.should_include_dependency_type(dep_type, include_dev, include_optional) {
-                    return true;
-                }
-            }
-        }
-
-        // Not reachable from any allowed dependency types
-        false
-    }
-
     /// Determine source type from lock file package data
     fn determine_source_from_lock_package(&self, package: &Package) -> DependencySource {
         // Try to parse the source field from the lock file package
@@ -508,11 +471,19 @@ impl UvLockParser {
 
         let lock: Lock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
 
-        // Build a set of all packages that are dependencies of other packages
+        // Build a set of all packages that are dependencies of other packages (both main and optional)
         let mut transitive_deps = HashSet::new();
         for package in &lock.packages {
+            // Add main dependencies
             for dep in &package.dependencies {
                 transitive_deps.insert(PackageName::new(&dep.name));
+            }
+
+            // Add optional dependencies from all groups
+            for optional_deps in package.optional_dependencies.values() {
+                for dep in optional_deps {
+                    transitive_deps.insert(PackageName::new(&dep.name));
+                }
             }
         }
 
@@ -522,6 +493,8 @@ impl UvLockParser {
             let package_name = PackageName::new(&package.name);
             if !transitive_deps.contains(&package_name) {
                 // This package is not a dependency of any other package - it's likely a direct dependency
+                // For now, assume all root packages are Main type since we can't distinguish from lock file alone
+                // TODO: Consider if we can infer optional vs main based on dependency group context
                 direct_deps.insert(package_name, DependencyType::Main);
             }
         }
