@@ -17,6 +17,32 @@ def main():
     import sys
     import argparse
 
+    # Global flag to track if deprecation warning has been shown
+    _deprecation_warning_shown = False
+
+    def handle_all_flags(args):
+        """Handle the deprecated --all flag and new --all-extras flag with appropriate warnings."""
+        nonlocal _deprecation_warning_shown
+
+        if args.all and getattr(args, "all_extras", False):
+            if not _deprecation_warning_shown:
+                print(
+                    "Warning: Both --all and --all-extras flags are specified. Using --all-extras only. The --all flag is deprecated.",
+                    file=sys.stderr,
+                )
+                _deprecation_warning_shown = True
+            return True
+        elif args.all:
+            if not _deprecation_warning_shown:
+                print(
+                    "Warning: --all flag is deprecated and will be removed in a future version. Use --all-extras instead.",
+                    file=sys.stderr,
+                )
+                _deprecation_warning_shown = True
+            return True
+        else:
+            return getattr(args, "all_extras", False)
+
     # Handle subcommands manually to match Rust CLI structure exactly
     if len(sys.argv) > 1:
         if sys.argv[1] == "resolvers":
@@ -108,7 +134,12 @@ def main():
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Include ALL dependencies (main + dev, optional, etc)",
+        help=argparse.SUPPRESS,  # Hide deprecated flag from help
+    )
+    parser.add_argument(
+        "--all-extras",
+        action="store_true",
+        help="Include ALL extra dependencies (main + dev, optional, etc)",
     )
     parser.add_argument(
         "--direct-only",
@@ -153,9 +184,10 @@ Commands:
     args = parser.parse_args()
 
     try:
-        # Main audit functionality - convert --all to dev/optional
-        dev = args.all
-        optional = args.all
+        # Main audit functionality - handle deprecated --all flag and new --all-extras flag
+        include_all = handle_all_flags(args)
+        dev = include_all
+        optional = include_all
 
         result = audit_with_options(
             path=args.path,

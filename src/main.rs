@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Once;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -98,9 +99,13 @@ pub struct AuditArgs {
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
 
-    /// Include ALL dependencies (main + dev, optional, etc)
-    #[arg(long)]
+    /// Include ALL dependencies (main + dev, optional, etc) [DEPRECATED: use --all-extras instead]
+    #[arg(long, hide = true)]
     pub all: bool,
+
+    /// Include ALL extra dependencies (main + dev, optional, etc)
+    #[arg(long)]
+    pub all_extras: bool,
 
     /// Only check direct dependencies (exclude transitive)
     #[arg(long)]
@@ -136,16 +141,36 @@ pub struct AuditArgs {
 }
 
 impl AuditArgs {
+    fn include_all_dependencies(&self) -> bool {
+        static DEPRECATION_WARNING_SHOWN: Once = Once::new();
+
+        if self.all && self.all_extras {
+            DEPRECATION_WARNING_SHOWN.call_once(|| {
+                eprintln!("Warning: Both --all and --all-extras flags are specified. Using --all-extras only. The --all flag is deprecated.");
+            });
+            return true;
+        }
+
+        if self.all {
+            DEPRECATION_WARNING_SHOWN.call_once(|| {
+                eprintln!("Warning: --all flag is deprecated and will be removed in a future version. Use --all-extras instead.");
+            });
+            return true;
+        }
+
+        self.all_extras
+    }
+
     pub fn include_dev(&self) -> bool {
-        self.all
+        self.include_all_dependencies()
     }
 
     pub fn include_optional(&self) -> bool {
-        self.all
+        self.include_all_dependencies()
     }
 
     pub fn scope_description(&self) -> &'static str {
-        if self.all {
+        if self.include_all_dependencies() {
             "all (main + dev,optional,prod,etc)"
         } else {
             "main only"
@@ -156,7 +181,7 @@ impl AuditArgs {
         &self,
         dependencies: Vec<pysentry::parsers::ParsedDependency>,
     ) -> Vec<pysentry::parsers::ParsedDependency> {
-        if self.all {
+        if self.include_all_dependencies() {
             dependencies
         } else {
             dependencies
