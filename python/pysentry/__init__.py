@@ -122,6 +122,12 @@ def main():
         help="Minimum severity level to report [default: low] [possible values: low, medium, high, critical]",
     )
     parser.add_argument(
+        "--fail-on",
+        choices=["low", "medium", "high", "critical"],
+        default="medium",
+        help="Fail (exit non-zero) if vulnerabilities of this severity or higher are found [default: medium] [possible values: low, medium, high, critical]",
+    )
+    parser.add_argument(
         "--ignore",
         action="append",
         dest="ignore_ids",
@@ -194,6 +200,7 @@ Commands:
             format=args.format,
             source=args.source,
             min_severity=args.severity,
+            fail_on=args.fail_on,
             ignore_ids=args.ignore_ids,
             output=args.output,
             dev=dev,

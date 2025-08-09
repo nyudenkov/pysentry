@@ -91,6 +91,10 @@ pub struct AuditArgs {
     #[arg(long, value_enum, default_value = "low")]
     pub severity: SeverityLevel,
 
+    /// Fail (exit non-zero) if vulnerabilities of this severity or higher are found
+    #[arg(long, value_enum, default_value = "medium")]
+    pub fail_on: SeverityLevel,
+
     /// Vulnerability IDs to ignore (can be specified multiple times)
     #[arg(long = "ignore", value_name = "ID")]
     pub ignore_ids: Vec<String>,
@@ -452,9 +456,10 @@ async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
 
     if audit_args.verbose {
         eprintln!(
-            "Configuration: format={:?}, severity={:?}, source={:?}, scope='{}', direct_only={}",
+            "Configuration: format={:?}, severity={:?}, fail_on={:?}, source={:?}, scope='{}', direct_only={}",
             audit_args.format,
             audit_args.severity,
+            audit_args.fail_on,
             audit_args.source,
             audit_args.scope_description(),
             audit_args.direct_only
@@ -495,7 +500,7 @@ async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
         println!("{report_output}");
     }
 
-    if report.has_vulnerabilities() {
+    if report.should_fail_on_severity(&audit_args.fail_on.clone().into()) {
         Ok(1)
     } else {
         Ok(0)

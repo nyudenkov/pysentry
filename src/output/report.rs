@@ -50,6 +50,20 @@ impl AuditReport {
         !self.matches.is_empty()
     }
 
+    /// Check if the audit should fail based on the given severity threshold
+    pub fn should_fail_on_severity(&self, fail_on_severity: &crate::types::SeverityLevel) -> bool {
+        let min_severity = match fail_on_severity {
+            crate::types::SeverityLevel::Low => Severity::Low,
+            crate::types::SeverityLevel::Medium => Severity::Medium,
+            crate::types::SeverityLevel::High => Severity::High,
+            crate::types::SeverityLevel::Critical => Severity::Critical,
+        };
+
+        self.matches
+            .iter()
+            .any(|m| m.vulnerability.severity >= min_severity)
+    }
+
     /// Get summary statistics
     pub fn summary(&self) -> AuditSummary {
         let mut severity_counts = HashMap::new();
@@ -513,5 +527,71 @@ mod tests {
 
         let output = ReportGenerator::generate_human_report(&report).unwrap();
         assert!(output.contains("No vulnerabilities found"));
+    }
+
+    #[test]
+    fn test_should_fail_on_severity() {
+        use crate::types::SeverityLevel;
+
+        let report = create_test_report();
+
+        assert!(report.should_fail_on_severity(&SeverityLevel::Low));
+        assert!(report.should_fail_on_severity(&SeverityLevel::Medium));
+        assert!(report.should_fail_on_severity(&SeverityLevel::High));
+
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical));
+    }
+
+    #[test]
+    fn test_should_fail_on_severity_with_low_severity() {
+        use crate::types::SeverityLevel;
+
+        let mut report = create_test_report();
+        report.matches[0].vulnerability.severity = Severity::Low;
+
+        assert!(report.should_fail_on_severity(&SeverityLevel::Low));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Medium));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::High));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical));
+    }
+
+    #[test]
+    fn test_should_fail_on_severity_with_no_vulnerabilities() {
+        use crate::types::SeverityLevel;
+
+        let dependency_stats = DependencyStats {
+            total_packages: 5,
+            direct_packages: 5,
+            transitive_packages: 0,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 0,
+            total_packages: 0,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 0,
+            fixable: 0,
+            unfixable: 0,
+            fix_suggestions: vec![],
+        };
+
+        let report = AuditReport::new(
+            dependency_stats,
+            database_stats,
+            vec![],
+            fix_analysis,
+            vec![],
+        );
+
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Low));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Medium));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::High));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical));
     }
 }
