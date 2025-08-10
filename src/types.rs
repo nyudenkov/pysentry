@@ -65,6 +65,7 @@ pub enum AuditFormat {
     Human,
     Json,
     Sarif,
+    Markdown,
 }
 
 /// Severity levels

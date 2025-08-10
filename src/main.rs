@@ -23,6 +23,8 @@ pub enum AuditFormat {
     Json,
     #[value(name = "sarif")]
     Sarif,
+    #[value(name = "markdown")]
+    Markdown,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -875,6 +877,7 @@ impl From<AuditFormat> for pysentry::AuditFormat {
             AuditFormat::Human => pysentry::AuditFormat::Human,
             AuditFormat::Json => pysentry::AuditFormat::Json,
             AuditFormat::Sarif => pysentry::AuditFormat::Sarif,
+            AuditFormat::Markdown => pysentry::AuditFormat::Markdown,
         }
     }
 }

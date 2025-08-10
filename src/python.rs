@@ -23,6 +23,7 @@ fn audit_python(path: String, format: Option<String>) -> PyResult<String> {
         let audit_format = match format.as_deref() {
             Some("json") => AuditFormat::Json,
             Some("sarif") => AuditFormat::Sarif,
+            Some("markdown") => AuditFormat::Markdown,
             _ => AuditFormat::Human,
         };
 
@@ -128,6 +129,7 @@ fn audit_with_options(
         let audit_format = match format.as_deref() {
             Some("json") => AuditFormat::Json,
             Some("sarif") => AuditFormat::Sarif,
+            Some("markdown") => AuditFormat::Markdown,
             _ => AuditFormat::Human,
         };
 

@@ -148,9 +148,9 @@ def main():
     )
     parser.add_argument(
         "--format",
-        choices=["human", "json", "sarif"],
+        choices=["human", "json", "sarif", "markdown"],
         default="human",
-        help="Output format [default: human] [possible values: human, json, sarif]",
+        help="Output format [default: human] [possible values: human, json, sarif, markdown]",
     )
     parser.add_argument(
         "--severity",

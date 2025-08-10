@@ -110,6 +110,7 @@ impl ReportGenerator {
             AuditFormat::Human => Self::generate_human_report(report),
             AuditFormat::Json => Self::generate_json_report(report),
             AuditFormat::Sarif => Self::generate_sarif_report(report, project_root),
+            AuditFormat::Markdown => Self::generate_markdown_report(report),
         }
     }
 
@@ -268,6 +269,170 @@ impl ReportGenerator {
         writeln!(
             output,
             "Scan completed at {}",
+            report.scan_time.format("%Y-%m-%d %H:%M:%S UTC")
+        )?;
+
+        Ok(output)
+    }
+
+    fn generate_markdown_report(
+        report: &AuditReport,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let mut output = String::new();
+        let summary = report.summary();
+
+        writeln!(output, "# 🛡️ pysentry report")?;
+        writeln!(output)?;
+
+        writeln!(output, "## 📊 Scan Summary")?;
+        writeln!(output)?;
+        writeln!(
+            output,
+            "- **Scanned:** {} packages",
+            summary.total_packages_scanned
+        )?;
+        writeln!(
+            output,
+            "- **Vulnerable:** {} packages",
+            summary.vulnerable_packages
+        )?;
+        writeln!(
+            output,
+            "- **Vulnerabilities:** {}",
+            summary.total_vulnerabilities
+        )?;
+        writeln!(output)?;
+
+        if !summary.severity_counts.is_empty() {
+            writeln!(output, "## 🚨 Severity Breakdown")?;
+            writeln!(output)?;
+            for severity in [
+                Severity::Critical,
+                Severity::High,
+                Severity::Medium,
+                Severity::Low,
+            ] {
+                if let Some(count) = summary.severity_counts.get(&severity) {
+                    let icon = match severity {
+                        Severity::Critical => "🔴",
+                        Severity::High => "🟠",
+                        Severity::Medium => "🟡",
+                        Severity::Low => "🟢",
+                    };
+                    writeln!(output, "- {icon} **{severity:?}:** {count}")?;
+                }
+            }
+            writeln!(output)?;
+        }
+
+        if report.fix_analysis.total_matches > 0 {
+            writeln!(output, "## 🔧 Fix Analysis")?;
+            writeln!(output)?;
+            writeln!(output, "- **Fixable:** {}", report.fix_analysis.fixable)?;
+            writeln!(output, "- **Unfixable:** {}", report.fix_analysis.unfixable)?;
+            writeln!(output)?;
+        }
+
+        if !report.warnings.is_empty() {
+            writeln!(output, "## ⚠️ Warnings")?;
+            writeln!(output)?;
+            for warning in &report.warnings {
+                writeln!(output, "- {warning}")?;
+            }
+            writeln!(output)?;
+        }
+
+        if !report.matches.is_empty() {
+            writeln!(output, "## 🐛 Vulnerabilities Found")?;
+            writeln!(output)?;
+
+            for (i, m) in report.matches.iter().enumerate() {
+                let severity_icon = match m.vulnerability.severity {
+                    Severity::Critical => "🔴",
+                    Severity::High => "🟠",
+                    Severity::Medium => "🟡",
+                    Severity::Low => "🟢",
+                };
+
+                let source_tag = if let Some(source) = &m.vulnerability.source {
+                    format!(" *[source: {source}]*")
+                } else {
+                    String::new()
+                };
+
+                writeln!(
+                    output,
+                    "### {}. {} `{}`{}",
+                    i + 1,
+                    severity_icon,
+                    m.vulnerability.id,
+                    source_tag
+                )?;
+                writeln!(output)?;
+
+                writeln!(
+                    output,
+                    "- **Package:** `{}` v`{}`",
+                    m.package_name, m.installed_version
+                )?;
+                writeln!(output, "- **Severity:** {:?}", m.vulnerability.severity)?;
+
+                if let Some(cvss) = m.vulnerability.cvss_score {
+                    writeln!(output, "- **CVSS Score:** {cvss:.1}")?;
+                }
+
+                writeln!(output, "- **Summary:** {}", m.vulnerability.summary)?;
+
+                if let Some(description) = &m.vulnerability.description {
+                    writeln!(output, "- **Description:**")?;
+                    writeln!(output, "~~~")?;
+                    writeln!(output, "{description}")?;
+                    writeln!(output, "~~~")?;
+                }
+
+                if !m.vulnerability.fixed_versions.is_empty() {
+                    let fixed_versions = m
+                        .vulnerability
+                        .fixed_versions
+                        .iter()
+                        .map(|v| format!("`{v}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    writeln!(output, "- **Fixed in:** {fixed_versions}")?;
+                }
+
+                if !m.vulnerability.references.is_empty() {
+                    writeln!(output, "- **References:**")?;
+                    for ref_url in &m.vulnerability.references {
+                        if ref_url.starts_with("http") {
+                            writeln!(output, "  - <{ref_url}>")?;
+                        } else {
+                            writeln!(output, "  - {ref_url}")?;
+                        }
+                    }
+                }
+
+                writeln!(output)?;
+            }
+        } else {
+            writeln!(output, "## ✅ No vulnerabilities found!")?;
+            writeln!(output)?;
+        }
+
+        if !report.fix_analysis.fix_suggestions.is_empty() {
+            writeln!(output, "## 💡 Fix Suggestions")?;
+            writeln!(output)?;
+
+            for suggestion in &report.fix_analysis.fix_suggestions {
+                writeln!(output, "- {suggestion}")?;
+            }
+            writeln!(output)?;
+        }
+
+        writeln!(output, "---")?;
+        writeln!(
+            output,
+            "*Scan completed at {}*",
             report.scan_time.format("%Y-%m-%d %H:%M:%S UTC")
         )?;
 
@@ -467,6 +632,23 @@ mod tests {
     }
 
     #[test]
+    fn test_markdown_report_generation() {
+        let report = create_test_report();
+        let output = ReportGenerator::generate_markdown_report(&report).unwrap();
+
+        assert!(output.contains("# 🛡️ pysentry report"));
+        assert!(output.contains("## 📊 Scan Summary"));
+        assert!(output.contains("- **Scanned:** 10 packages"));
+        assert!(output.contains("### 1. 🟠 `GHSA-test-1234`"));
+        assert!(output.contains("- **Package:** `test-package`"));
+        assert!(output.contains("- **Severity:** High"));
+        assert!(output.contains("- **Description:**"));
+        assert!(output.contains("~~~"));
+        assert!(output.contains("A test vulnerability for unit testing"));
+        assert!(output.contains("*Scan completed at"));
+    }
+
+    #[test]
     fn test_json_report_generation() {
         let report = create_test_report();
         let output = ReportGenerator::generate_json_report(&report).unwrap();
@@ -489,6 +671,36 @@ mod tests {
         assert_eq!(sarif["version"], "2.1.0");
         assert_eq!(sarif["runs"][0]["tool"]["driver"]["name"], "pysentry");
         assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "GHSA-test-1234");
+    }
+
+    #[test]
+    fn test_report_generator_all_formats() {
+        let report = create_test_report();
+        let project_root = Some(std::path::Path::new("."));
+
+        // Test Human format
+        let human_output =
+            ReportGenerator::generate(&report, AuditFormat::Human, project_root).unwrap();
+        assert!(human_output.contains("pysentry report"));
+        assert!(human_output.contains("GHSA-test-1234"));
+
+        // Test JSON format
+        let json_output =
+            ReportGenerator::generate(&report, AuditFormat::Json, project_root).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&json_output).unwrap();
+        assert_eq!(json["total_packages"], 10);
+
+        // Test SARIF format
+        let sarif_output =
+            ReportGenerator::generate(&report, AuditFormat::Sarif, project_root).unwrap();
+        let sarif: serde_json::Value = serde_json::from_str(&sarif_output).unwrap();
+        assert_eq!(sarif["version"], "2.1.0");
+
+        // Test Markdown format
+        let markdown_output =
+            ReportGenerator::generate(&report, AuditFormat::Markdown, project_root).unwrap();
+        assert!(markdown_output.contains("# 🛡️ pysentry report"));
+        assert!(markdown_output.contains("### 1. 🟠 `GHSA-test-1234`"));
     }
 
     #[test]
