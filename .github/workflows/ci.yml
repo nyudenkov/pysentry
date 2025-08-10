@@ -4,19 +4,21 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.editorconfig'
-      - '.github/dependabot.yml'
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+      - ".github/dependabot.yml"
+      - ".github/FUNDING.yml"
   pull_request:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.editorconfig'
-      - '.github/dependabot.yml'
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+      - ".github/dependabot.yml"
+      - ".github/FUNDING.yml"
 
 env:
   CARGO_TERM_COLOR: always
