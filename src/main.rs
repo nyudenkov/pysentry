@@ -5,12 +5,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 
+use futures::future::try_join_all;
 use pysentry::dependency::resolvers::{ResolverRegistry, ResolverType};
 use pysentry::parsers::{requirements::RequirementsParser, DependencyStats};
 use pysentry::types::Version;
 use pysentry::{
     AuditCache, AuditReport, DependencyScanner, MatcherConfig, ReportGenerator,
-    VulnerabilityMatcher, VulnerabilitySource,
+    VulnerabilityDatabase, VulnerabilityMatcher, VulnerabilitySource,
 };
 use std::str::FromStr;
 
@@ -36,7 +37,7 @@ pub enum SeverityLevel {
     Critical,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, ValueEnum, PartialEq)]
 pub enum VulnerabilitySourceType {
     #[value(name = "pypa")]
     Pypa,
@@ -123,9 +124,13 @@ pub struct AuditArgs {
     #[arg(long, value_name = "DIR")]
     pub cache_dir: Option<std::path::PathBuf>,
 
-    /// Vulnerability data source
-    #[arg(long, value_enum, default_value = "pypa")]
+    /// Vulnerability data source [DEPRECATED: use --sources instead]
+    #[arg(long, value_enum, default_value = "pypa", hide = true)]
     pub source: VulnerabilitySourceType,
+
+    /// Vulnerability data sources (can be specified multiple times or comma-separated)
+    #[arg(long = "sources", value_name = "SOURCE")]
+    pub sources: Vec<String>,
 
     /// Dependency resolver for requirements.txt files
     #[arg(long, value_enum, default_value = "uv")]
@@ -195,6 +200,62 @@ impl AuditArgs {
                 })
                 .collect()
         }
+    }
+
+    /// Resolve vulnerability sources from both old and new CLI arguments
+    pub fn resolve_sources(&self) -> Result<Vec<VulnerabilitySourceType>, String> {
+        use std::sync::Once;
+        static DEPRECATION_WARNING_SHOWN: Once = Once::new();
+
+        let mut resolved_sources = Vec::new();
+
+        // Handle new --sources argument
+        if !self.sources.is_empty() {
+            for source_arg in &self.sources {
+                // Handle comma-separated values
+                for source_str in source_arg.split(',') {
+                    let source_str = source_str.trim();
+                    if source_str.is_empty() {
+                        continue;
+                    }
+                    let source_type = match source_str {
+                        "pypa" => VulnerabilitySourceType::Pypa,
+                        "pypi" => VulnerabilitySourceType::Pypi,
+                        "osv" => VulnerabilitySourceType::Osv,
+                        _ => {
+                            return Err(format!(
+                            "Invalid vulnerability source: '{source_str}'. Valid sources: pypa, pypi, osv"
+                        ))
+                        }
+                    };
+                    resolved_sources.push(source_type);
+                }
+            }
+        }
+
+        // Handle default when no --sources specified
+        if resolved_sources.is_empty() {
+            // If --source was explicitly set to something other than default, use it with deprecation warning
+            if self.source != VulnerabilitySourceType::Pypa {
+                DEPRECATION_WARNING_SHOWN.call_once(|| {
+                    eprintln!("Warning: --source flag is deprecated and will be removed in a future version. Use --sources instead.");
+                });
+                resolved_sources.push(self.source.clone());
+            } else {
+                // Default to pypa (future-proof for when --source is removed)
+                resolved_sources.push(VulnerabilitySourceType::Pypa);
+            }
+        }
+
+        // Remove duplicates while preserving order
+        let mut unique_sources = Vec::new();
+        for source in resolved_sources {
+            if !unique_sources.contains(&source) {
+                unique_sources.push(source);
+            }
+        }
+
+        Ok(unique_sources)
     }
 }
 
@@ -512,17 +573,38 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
-    // Create the vulnerability source
-    let vuln_source = VulnerabilitySource::new(
-        audit_args.source.clone().into(),
-        audit_cache,
-        audit_args.no_cache,
-    );
+    // Resolve vulnerability sources from CLI arguments
+    let source_types = match audit_args.resolve_sources() {
+        Ok(sources) => sources,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Invalid vulnerability sources: {}", e));
+        }
+    };
 
-    // Get source name for display
-    let source_name = vuln_source.name();
+    // Create vulnerability sources
+    let vuln_sources: Vec<_> = source_types
+        .iter()
+        .map(|source_type| {
+            VulnerabilitySource::new(
+                source_type.clone().into(),
+                audit_cache.clone(),
+                audit_args.no_cache,
+            )
+        })
+        .collect();
+
+    // Get source names for display
+    let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
     if !audit_args.quiet {
-        eprintln!("Fetching vulnerability data from {source_name}...");
+        if source_names.len() == 1 {
+            eprintln!("Fetching vulnerability data from {}...", source_names[0]);
+        } else {
+            eprintln!(
+                "Fetching vulnerability data from {} sources: {}...",
+                source_names.len(),
+                source_names.join(", ")
+            );
+        }
     }
 
     if !audit_args.quiet {
@@ -662,15 +744,44 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         .map(|dep| (dep.name.to_string(), dep.version.to_string()))
         .collect();
 
-    // Fetch vulnerabilities from the selected source
+    // Fetch vulnerabilities concurrently from all sources
     if !audit_args.quiet {
-        eprintln!(
-            "Fetching vulnerabilities for {} packages from {}...",
-            packages.len(),
-            source_name
-        );
+        if source_names.len() == 1 {
+            eprintln!(
+                "Fetching vulnerabilities for {} packages from {}...",
+                packages.len(),
+                source_names[0]
+            );
+        } else {
+            eprintln!(
+                "Fetching vulnerabilities for {} packages from {} sources concurrently...",
+                packages.len(),
+                source_names.len()
+            );
+        }
     }
-    let database = vuln_source.fetch_vulnerabilities(&packages).await?;
+
+    // Create concurrent fetch tasks for all sources
+    let fetch_tasks = vuln_sources.into_iter().map(|source| {
+        let packages = packages.clone();
+        async move { source.fetch_vulnerabilities(&packages).await }
+    });
+
+    // Execute all fetch tasks concurrently
+    let databases = try_join_all(fetch_tasks).await?;
+
+    // Merge all databases into a single database
+    let database = if databases.len() == 1 {
+        databases.into_iter().next().unwrap()
+    } else {
+        if !audit_args.quiet {
+            eprintln!(
+                "Merging vulnerability data from {} sources...",
+                databases.len()
+            );
+        }
+        VulnerabilityDatabase::merge(databases)
+    };
 
     if !audit_args.quiet {
         eprintln!("Matching against vulnerability database...");
@@ -795,5 +906,209 @@ impl From<ResolverTypeArg> for ResolverType {
             ResolverTypeArg::Uv => ResolverType::Uv,
             ResolverTypeArg::PipTools => ResolverType::PipTools,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_sources_default() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Pypa,
+            sources: vec![], // Empty, should use deprecated source
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let resolved = args.resolve_sources().unwrap();
+        assert_eq!(resolved, vec![VulnerabilitySourceType::Pypa]);
+    }
+
+    #[test]
+    fn test_resolve_sources_multiple() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Pypa,
+            sources: vec!["pypi".to_string(), "osv".to_string()],
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let resolved = args.resolve_sources().unwrap();
+        assert_eq!(
+            resolved,
+            vec![VulnerabilitySourceType::Pypi, VulnerabilitySourceType::Osv]
+        );
+    }
+
+    #[test]
+    fn test_resolve_sources_comma_separated() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Pypa,
+            sources: vec!["pypa,osv,pypi".to_string()],
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let resolved = args.resolve_sources().unwrap();
+        assert_eq!(
+            resolved,
+            vec![
+                VulnerabilitySourceType::Pypa,
+                VulnerabilitySourceType::Osv,
+                VulnerabilitySourceType::Pypi
+            ]
+        );
+    }
+
+    #[test]
+    fn test_resolve_sources_deduplication() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Pypa,
+            sources: vec!["pypa".to_string(), "osv".to_string(), "pypa".to_string()],
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let resolved = args.resolve_sources().unwrap();
+        assert_eq!(
+            resolved,
+            vec![VulnerabilitySourceType::Pypa, VulnerabilitySourceType::Osv]
+        );
+    }
+
+    #[test]
+    fn test_resolve_sources_invalid() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Pypa,
+            sources: vec!["invalid".to_string()],
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let result = args.resolve_sources();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Invalid vulnerability source: 'invalid'"));
+    }
+
+    #[test]
+    fn test_resolve_sources_no_args_defaults_to_pypa() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Pypa, // Default value
+            sources: vec![],                       // Empty - no --sources specified
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let resolved = args.resolve_sources().unwrap();
+        assert_eq!(resolved, vec![VulnerabilitySourceType::Pypa]);
+    }
+
+    #[test]
+    fn test_resolve_sources_explicit_source_shows_warning() {
+        let args = AuditArgs {
+            path: std::path::PathBuf::from("."),
+            format: AuditFormat::Human,
+            severity: SeverityLevel::Low,
+            fail_on: SeverityLevel::Medium,
+            ignore_ids: vec![],
+            output: None,
+            all: false,
+            all_extras: false,
+            direct_only: false,
+            no_cache: false,
+            cache_dir: None,
+            source: VulnerabilitySourceType::Osv, // Explicitly set to non-default
+            sources: vec![],                      // Empty - no --sources specified
+            resolver: ResolverTypeArg::Uv,
+            requirements_files: vec![],
+            verbose: false,
+            quiet: false,
+        };
+
+        let resolved = args.resolve_sources().unwrap();
+        assert_eq!(resolved, vec![VulnerabilitySourceType::Osv]);
+        // Note: Can't easily test the warning message in unit test, but the logic is there
     }
 }

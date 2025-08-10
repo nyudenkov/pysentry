@@ -52,7 +52,7 @@ fn audit_python(path: String, format: Option<String>) -> PyResult<String> {
 #[pyo3(signature = (
     path,
     format=None,
-    source=None,
+    sources=None,
     min_severity=None,
     ignore_ids=None,
     output=None,
@@ -70,7 +70,7 @@ fn audit_python(path: String, format: Option<String>) -> PyResult<String> {
 fn audit_with_options(
     path: String,
     format: Option<String>,
-    source: Option<String>,
+    sources: Option<Vec<String>>,
     min_severity: Option<String>,
     ignore_ids: Option<Vec<String>>,
     output: Option<String>,
@@ -101,13 +101,29 @@ fn audit_with_options(
         })?;
 
         let audit_cache = AuditCache::new(cache_path.clone());
-        let vuln_source_type = match source.as_deref() {
-            Some("pypi") => VulnerabilitySourceType::Pypi,
-            Some("osv") => VulnerabilitySourceType::Osv,
-            _ => VulnerabilitySourceType::Pypa,
+
+        // Convert sources list to vulnerability source types
+        let source_types: Vec<VulnerabilitySourceType> = if let Some(sources_list) = sources {
+            sources_list
+                .iter()
+                .map(|s| match s.as_str() {
+                    "pypi" => VulnerabilitySourceType::Pypi,
+                    "osv" => VulnerabilitySourceType::Osv,
+                    "pypa" => VulnerabilitySourceType::Pypa,
+                    _ => VulnerabilitySourceType::Pypa, // Default fallback
+                })
+                .collect()
+        } else {
+            vec![VulnerabilitySourceType::Pypa] // Default
         };
 
-        let vuln_source = VulnerabilitySource::new(vuln_source_type.clone(), audit_cache, no_cache);
+        // Create vulnerability sources
+        let vuln_sources: Vec<_> = source_types
+            .iter()
+            .map(|source_type| {
+                VulnerabilitySource::new(source_type.clone(), audit_cache.clone(), no_cache)
+            })
+            .collect();
 
         let audit_format = match format.as_deref() {
             Some("json") => AuditFormat::Json,
@@ -133,7 +149,10 @@ fn audit_with_options(
         }
         if verbose {
             eprintln!("Using resolver: {resolver_type}");
-            eprintln!("Vulnerability source: {vuln_source_type:?}");
+            eprintln!("Vulnerability sources: {} sources", source_types.len());
+            for (i, source_type) in source_types.iter().enumerate() {
+                eprintln!("  Source {}: {:?}", i + 1, source_type);
+            }
             eprintln!("Minimum severity level: {severity_level:?}");
         }
 
@@ -172,7 +191,19 @@ fn audit_with_options(
         };
 
         if !quiet {
-            eprintln!("Fetching vulnerability data from {}...", vuln_source.name());
+            if source_types.len() == 1 {
+                eprintln!(
+                    "Fetching vulnerability data from {}...",
+                    vuln_sources[0].name()
+                );
+            } else {
+                let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
+                eprintln!(
+                    "Fetching vulnerability data from {} sources: {}...",
+                    source_names.len(),
+                    source_names.join(", ")
+                );
+            }
         }
         if verbose {
             let dep_count = dependencies.len();
@@ -187,13 +218,24 @@ fn audit_with_options(
             .map(|dep| (dep.name.to_string(), dep.version.to_string()))
             .collect();
 
-        // Fetch vulnerabilities
-        let database = vuln_source
-            .fetch_vulnerabilities(&packages)
+        // Fetch vulnerabilities concurrently from all sources
+        let fetch_tasks = vuln_sources.into_iter().map(|source| {
+            let packages = packages.clone();
+            async move { source.fetch_vulnerabilities(&packages).await }
+        });
+
+        let databases = futures::future::try_join_all(fetch_tasks)
             .await
             .map_err(|e| {
                 PyRuntimeError::new_err(format!("Failed to fetch vulnerabilities: {e}"))
             })?;
+
+        // Merge all databases into a single database
+        let database = if databases.len() == 1 {
+            databases.into_iter().next().unwrap()
+        } else {
+            crate::VulnerabilityDatabase::merge(databases)
+        };
 
         if !quiet {
             eprintln!("Matching against vulnerability database...");

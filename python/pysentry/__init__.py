@@ -12,6 +12,43 @@ __all__ = [
 ]
 
 
+def resolve_sources(source, sources_list):
+    import sys
+
+    resolved_sources = []
+
+    if sources_list:
+        for source_arg in sources_list:
+            for source_str in source_arg.split(","):
+                source_str = source_str.strip()
+                if not source_str:
+                    continue
+                if source_str not in ["pypa", "pypi", "osv"]:
+                    print(
+                        f"Error: Invalid vulnerability source: '{source_str}'. Valid sources: pypa, pypi, osv",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                resolved_sources.append(source_str)
+
+    if not resolved_sources:
+        if source != "pypa":
+            print(
+                "Warning: --source flag is deprecated and will be removed in a future version. Use --sources instead.",
+                file=sys.stderr,
+            )
+            resolved_sources.append(source)
+        else:
+            resolved_sources.append("pypa")
+
+    unique_sources = []
+    for src in resolved_sources:
+        if src not in unique_sources:
+            unique_sources.append(src)
+
+    return unique_sources
+
+
 def main():
     """CLI entry point."""
     import sys
@@ -158,7 +195,12 @@ def main():
         "--source",
         choices=["pypa", "pypi", "osv"],
         default="pypa",
-        help="Vulnerability data source [default: pypa] [possible values: pypa, pypi, osv]",
+        help="Vulnerability data source [DEPRECATED: use --sources instead] [default: pypa] [possible values: pypa, pypi, osv]",
+    )
+    parser.add_argument(
+        "--sources",
+        action="append",
+        help="Vulnerability data sources (can be specified multiple times or comma-separated)",
     )
     parser.add_argument(
         "--resolver",
@@ -195,12 +237,15 @@ Commands:
         dev = include_all
         optional = include_all
 
+        resolved_sources = resolve_sources(
+            args.source, getattr(args, "sources", None) or []
+        )
+
         result = audit_with_options(
             path=args.path,
             format=args.format,
-            source=args.source,
+            sources=resolved_sources,
             min_severity=args.severity,
-            fail_on=args.fail_on,
             ignore_ids=args.ignore_ids,
             output=args.output,
             dev=dev,
@@ -216,6 +261,27 @@ Commands:
 
         if not args.output:
             print(result)
+
+        if args.format == "json":
+            import json
+
+            try:
+                report_data = json.loads(result)
+                vulnerabilities = report_data.get("vulnerabilities", [])
+
+                severity_levels = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+                fail_on_level = severity_levels.get(args.fail_on, 2)  # default medium
+
+                for vuln in vulnerabilities:
+                    vuln_severity = vuln.get("severity", "low").lower()
+                    vuln_level = severity_levels.get(vuln_severity, 1)
+                    if vuln_level >= fail_on_level:
+                        sys.exit(1)
+
+            except (json.JSONDecodeError, KeyError):
+                pass
+        else:
+            pass
 
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

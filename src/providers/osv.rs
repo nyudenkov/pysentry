@@ -22,19 +22,22 @@ pub struct OsvAdvisory {
     /// Unique vulnerability identifier
     pub id: String,
 
-    /// Vulnerability summary
-    pub summary: String,
+    /// Vulnerability summary (optional - not all OSV records have this)
+    pub summary: Option<String>,
 
     /// Detailed description
     pub details: Option<String>,
 
-    /// Affected packages and versions
+    /// Affected packages and versions (defaults to empty if missing)
+    #[serde(default)]
     pub affected: Vec<OsvAffected>,
 
-    /// Reference URLs
+    /// Reference URLs (optional - defaults to empty if missing)
+    #[serde(default)]
     pub references: Vec<OsvReference>,
 
-    /// Severity information
+    /// Severity information (optional - not all OSV records have this)
+    #[serde(default)]
     pub severity: Vec<OsvSeverity>,
 
     /// Publication timestamp
@@ -54,6 +57,7 @@ pub struct OsvAffected {
     pub package: OsvPackage,
 
     /// Version ranges affected
+    #[serde(default)]
     pub ranges: Vec<OsvRange>,
 
     /// Specific versions affected
@@ -90,6 +94,7 @@ pub struct OsvRange {
     pub repo: Option<String>,
 
     /// Events defining the range (introduced, fixed, etc.)
+    #[serde(default)]
     pub events: Vec<OsvEvent>,
 
     /// Database-specific information
@@ -199,13 +204,18 @@ impl OsvSource {
 
         Some(Vulnerability {
             id: advisory.id,
-            summary: if advisory.summary.is_empty() {
-                advisory
-                    .details
-                    .clone()
-                    .unwrap_or_else(|| "OSV advisory".to_string())
-            } else {
-                advisory.summary
+            summary: match (&advisory.summary, &advisory.details) {
+                (Some(summary), _) if !summary.is_empty() => summary.clone(),
+                (_, Some(details)) => {
+                    // Truncate details for summary (first sentence or 100 chars)
+                    let summary = details.split('.').next().unwrap_or(details);
+                    if summary.len() > 100 {
+                        format!("{}...", &summary[..100])
+                    } else {
+                        summary.to_string()
+                    }
+                }
+                _ => "OSV Advisory".to_string(),
             },
             description: advisory.details,
             severity,
@@ -331,6 +341,205 @@ impl OsvSource {
         fixed_versions
     }
 
+    /// Recovery for malformed OSV JSON
+    fn recover_from_malformed_json(
+        value: &serde_json::Value,
+        vuln_id: &str,
+    ) -> Option<OsvAdvisory> {
+        let obj = value.as_object()?;
+
+        // Extract basic fields with fallbacks
+        let id = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or(vuln_id)
+            .to_string();
+
+        let summary = obj
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let details = obj
+            .get("details")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Affected package extraction - just get what we can
+        let mut affected = Vec::new();
+        if let Some(affected_array) = obj.get("affected").and_then(|v| v.as_array()) {
+            for item in affected_array {
+                if let Some(item_obj) = item.as_object() {
+                    // Try to extract package name and ecosystem
+                    if let Some(pkg) = item_obj.get("package").and_then(|p| p.as_object()) {
+                        let package = OsvPackage {
+                            ecosystem: pkg
+                                .get("ecosystem")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("PyPI")
+                                .to_string(),
+                            name: pkg
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            purl: pkg
+                                .get("purl")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                        };
+
+                        // Simple range extraction - just create empty ranges if malformed
+                        let ranges = item_obj
+                            .get("ranges")
+                            .and_then(|r| r.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|range| {
+                                        range.as_object().map(|r| OsvRange {
+                                            range_type: r
+                                                .get("type")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("ECOSYSTEM")
+                                                .to_string(),
+                                            repo: r
+                                                .get("repo")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string()),
+                                            events: r
+                                                .get("events")
+                                                .and_then(|e| e.as_array())
+                                                .map(|events_arr| {
+                                                    events_arr
+                                                        .iter()
+                                                        .filter_map(|e| e.as_object())
+                                                        .map(|e_obj| OsvEvent {
+                                                            introduced: e_obj
+                                                                .get("introduced")
+                                                                .and_then(|v| v.as_str())
+                                                                .map(|s| s.to_string()),
+                                                            fixed: e_obj
+                                                                .get("fixed")
+                                                                .and_then(|v| v.as_str())
+                                                                .map(|s| s.to_string()),
+                                                            last_affected: e_obj
+                                                                .get("last_affected")
+                                                                .and_then(|v| v.as_str())
+                                                                .map(|s| s.to_string()),
+                                                            limit: e_obj
+                                                                .get("limit")
+                                                                .and_then(|v| v.as_str())
+                                                                .map(|s| s.to_string()),
+                                                        })
+                                                        .collect()
+                                                })
+                                                .unwrap_or_default(),
+                                            database_specific: r.get("database_specific").cloned(),
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+
+                        affected.push(OsvAffected {
+                            package,
+                            ranges,
+                            versions: item_obj.get("versions").and_then(|v| v.as_array()).map(
+                                |arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                },
+                            ),
+                            database_specific: item_obj.get("database_specific").cloned(),
+                            ecosystem_specific: item_obj.get("ecosystem_specific").cloned(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Create minimal affected entry if none found
+        if affected.is_empty() {
+            affected.push(OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "unknown".to_string(),
+                    purl: None,
+                },
+                ranges: vec![],
+                versions: None,
+                database_specific: None,
+                ecosystem_specific: None,
+            });
+        }
+
+        // Simple reference extraction
+        let references = obj
+            .get("references")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|ref_item| {
+                        ref_item.as_object().map(|r| OsvReference {
+                            ref_type: r
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("WEB")
+                                .to_string(),
+                            url: r
+                                .get("url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let severity = obj
+            .get("severity")
+            .and_then(|s| s.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|sev_item| {
+                        sev_item.as_object().map(|s| OsvSeverity {
+                            severity_type: s
+                                .get("type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("UNKNOWN")
+                                .to_string(),
+                            score: s
+                                .get("score")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("0.0")
+                                .to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Some(OsvAdvisory {
+            id,
+            summary,
+            details,
+            affected,
+            references,
+            severity,
+            published: obj
+                .get("published")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            modified: obj
+                .get("modified")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            database_specific: obj.get("database_specific").cloned(),
+        })
+    }
+
     /// Fetch full vulnerability details for a specific vulnerability ID
     async fn fetch_vulnerability_details(&self, vuln_id: &str) -> Result<Option<OsvAdvisory>> {
         let response = self
@@ -353,12 +562,44 @@ impl OsvSource {
             return Ok(None);
         }
 
-        let advisory: OsvAdvisory = response
-            .json()
+        // Get the raw response text first to debug parsing issues
+        let response_text = response
+            .text()
             .await
             .map_err(|e| AuditError::DatabaseDownload(Box::new(e)))?;
 
-        Ok(Some(advisory))
+        // Try to parse the JSON response normally first
+        match serde_json::from_str::<OsvAdvisory>(&response_text) {
+            Ok(advisory) => Ok(Some(advisory)),
+            Err(e) => {
+                warn!(
+                    "Failed to parse OSV response for vulnerability {}: {}",
+                    vuln_id, e
+                );
+                debug!(
+                    "Raw response (first 200 chars): {}",
+                    &response_text[..response_text.len().min(200)]
+                );
+
+                // Try to recover data from malformed JSON
+                if let Ok(generic) = serde_json::from_str::<serde_json::Value>(&response_text) {
+                    if let Some(advisory) = Self::recover_from_malformed_json(&generic, vuln_id) {
+                        debug!(
+                            "Successfully recovered data from malformed OSV response for {}",
+                            vuln_id
+                        );
+                        return Ok(Some(advisory));
+                    }
+                }
+
+                // If all recovery attempts fail, skip this vulnerability
+                debug!(
+                    "Unable to recover data from malformed OSV response for {}",
+                    vuln_id
+                );
+                Ok(None)
+            }
+        }
     }
 
     /// Create a future for fetching vulnerability details
@@ -538,14 +779,19 @@ impl VulnerabilityProvider for OsvSource {
                 }
                 Ok(None) => {
                     failed_fetches += 1;
-                    debug!("No details found for vulnerability: {}", vuln_id);
+                    debug!("No details available for vulnerability: {} (may be malformed or removed from OSV database)", vuln_id);
                 }
                 Err(e) => {
                     failed_fetches += 1;
-                    warn!(
-                        "Failed to fetch details for vulnerability {}: {}",
-                        vuln_id, e
-                    );
+                    // Categorize error types to provide better user feedback
+                    let error_str = e.to_string();
+                    if error_str.contains("timeout") || error_str.contains("connect") {
+                        warn!("Network error fetching vulnerability {}: {}", vuln_id, e);
+                    } else if error_str.contains("decode") || error_str.contains("json") {
+                        debug!("Data parsing issue for vulnerability {} (likely upstream data quality issue): {}", vuln_id, e);
+                    } else {
+                        debug!("Failed to fetch vulnerability {}: {}", vuln_id, e);
+                    }
                 }
             }
         }
@@ -556,6 +802,25 @@ impl VulnerabilityProvider for OsvSource {
             failed_fetches,
             all_vulnerabilities.len()
         );
+
+        // Provide user-friendly summary if there were failures
+        if failed_fetches > 0 {
+            let success_rate =
+                (successful_fetches as f64 / (successful_fetches + failed_fetches) as f64) * 100.0;
+            if success_rate < 90.0 {
+                warn!(
+                    "OSV data quality notice: {}/{} vulnerability records successfully processed ({:.1}%). Some OSV records may contain malformed data.",
+                    successful_fetches, successful_fetches + failed_fetches, success_rate
+                );
+            } else {
+                debug!(
+                    "OSV processing: {}/{} records processed successfully ({:.1}%)",
+                    successful_fetches,
+                    successful_fetches + failed_fetches,
+                    success_rate
+                );
+            }
+        }
 
         let db = VulnerabilityDatabase::from_package_map(all_vulnerabilities);
 
@@ -638,7 +903,7 @@ mod tests {
 
         let advisory: OsvAdvisory = serde_json::from_str(json).unwrap();
         assert_eq!(advisory.id, "GHSA-test-1234");
-        assert_eq!(advisory.summary, "Test vulnerability");
+        assert_eq!(advisory.summary, Some("Test vulnerability".to_string()));
         assert_eq!(advisory.affected.len(), 1);
     }
 }
