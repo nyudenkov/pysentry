@@ -1,5 +1,7 @@
 # 🐍 PySentry
 
+[![OSV Integration](https://img.shields.io/badge/OSV-Integrated-blue)](https://google.github.io/osv.dev/)
+
 [Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12)
 
 A fast, reliable security vulnerability scanner for Python projects, written in Rust.
@@ -16,7 +18,7 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
   - PyPA Advisory Database (default)
   - PyPI JSON API
   - OSV.dev (Open Source Vulnerabilities)
-- **Flexible Output**: Human-readable, JSON, and SARIF formats
+- **Flexible Output for different workflows**: Human-readable, JSON, SARIF, and Markdown formats
 - **Performance Focused**:
   - Written in Rust for speed
   - Async/concurrent processing
@@ -171,7 +173,7 @@ pysentry --resolver uv /path/to/project
 pysentry --resolver pip-tools /path/to/project
 
 # Include all dependencies (main + dev + optional)
-pysentry --all
+pysentry --all-extras
 
 # Filter by severity (only show high and critical)
 pysentry --severity high
@@ -184,14 +186,22 @@ pysentry --format json --output audit-results.json
 
 ```bash
 # Using uvx for comprehensive audit
-uvx pysentry-rs --all --format sarif --output security-report.sarif
+uvx pysentry-rs --all-extras --format sarif --output security-report.sarif
 
-# Check only direct dependencies using OSV database
-uvx pysentry-rs --direct-only --source osv
+# Check multiple vulnerability sources concurrently
+uvx pysentry-rs --sources pypa,osv,pypi /path/to/project
+uvx pysentry-rs --sources pypa --sources osv --sources pypi
+
+# Generate markdown report
+uvx pysentry-rs --format markdown --output security-report.md
+
+# Control CI exit codes - only fail on critical vulnerabilities
+uvx pysentry-rs --fail-on critical
 
 # Or with installed binary
-pysentry --all --format sarif --output security-report.sarif
-pysentry --direct-only --source osv
+pysentry --all-extras --format sarif --output security-report.sarif
+pysentry --sources pypa,osv --direct-only
+pysentry --format markdown --output security-report.md
 
 # Ignore specific vulnerabilities
 pysentry --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
@@ -220,25 +230,45 @@ pysentry /path/to/project
 pysentry --verbose --resolver uv /path/to/project
 ```
 
+### CI/CD Integration Examples
+
+```bash
+# Development environment - only fail on critical vulnerabilities
+pysentry --fail-on critical --format json --output security-report.json
+
+# Staging environment - fail on high+ vulnerabilities
+pysentry --fail-on high --sources pypa,osv --format sarif --output security.sarif
+
+# Production deployment - strict security (fail on medium+, default)
+pysentry --sources pypa,pypi,osv --format json --output prod-security.json
+
+# Generate markdown report for GitHub issues/PRs
+pysentry --format markdown --output SECURITY-REPORT.md
+
+# Comprehensive audit with all sources and full reporting
+pysentry --sources pypa,pypi,osv --all-extras --format json --fail-on low
+```
+
 ## Configuration
 
 ### Command Line Options
 
-| Option           | Description                                           | Default             |
-| ---------------- | ----------------------------------------------------- | ------------------- |
-| `--format`       | Output format: `human`, `json`, `sarif`               | `human`             |
-| `--severity`     | Minimum severity: `low`, `medium`, `high`, `critical` | `low`               |
-| `--source`       | Vulnerability source: `pypa`, `pypi`, `osv`           | `pypa`              |
-| `--all`          | Include all dependencies (main + dev + optional)      | `false`             |
-| `--direct-only`  | Check only direct dependencies                        | `false`             |
-| `--ignore`       | Vulnerability IDs to ignore (repeatable)              | `[]`                |
-| `--output`       | Output file path                                      | `stdout`            |
-| `--no-cache`     | Disable caching                                       | `false`             |
-| `--cache-dir`    | Custom cache directory                                | `~/.cache/pysentry` |
-| `--verbose`      | Enable verbose output                                 | `false`             |
-| `--quiet`        | Suppress non-error output                             | `false`             |
-| `--resolver`     | Dependency resolver: `auto`, `uv`, `pip-tools`        | `auto`              |
-| `--requirements` | Additional requirements files (repeatable)            | `[]`                |
+| Option           | Description                                             | Default             |
+| ---------------- | ------------------------------------------------------- | ------------------- |
+| `--format`       | Output format: `human`, `json`, `sarif`, `markdown`     | `human`             |
+| `--severity`     | Minimum severity: `low`, `medium`, `high`, `critical`   | `low`               |
+| `--fail-on`      | Fail (exit non-zero) on vulnerabilities ≥ severity      | `medium`            |
+| `--sources`      | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa`              |
+| `--all-extras`   | Include all dependencies (main + dev + optional)        | `false`             |
+| `--direct-only`  | Check only direct dependencies                          | `false`             |
+| `--ignore`       | Vulnerability IDs to ignore (repeatable)                | `[]`                |
+| `--output`       | Output file path                                        | `stdout`            |
+| `--no-cache`     | Disable caching                                         | `false`             |
+| `--cache-dir`    | Custom cache directory                                  | `~/.cache/pysentry` |
+| `--verbose`      | Enable verbose output                                   | `false`             |
+| `--quiet`        | Suppress non-error output                               | `false`             |
+| `--resolver`     | Dependency resolver: `auto`, `uv`, `pip-tools`          | `auto`              |
+| `--requirements` | Additional requirements files (repeatable)              | `[]`                |
 
 ### Cache Management
 
@@ -349,6 +379,10 @@ Support for projects without lock files:
 ### Human-Readable (Default)
 
 Most comfortable to read.
+
+### Markdown
+
+GitHub-friendly format with structured sections and severity indicators. Perfect for documentation, GitHub issues, and security reports.
 
 ### JSON
 
@@ -484,8 +518,9 @@ pysentry --verbose /path/to/project
 # Check network connectivity
 curl -I https://osv-vulnerabilities.storage.googleapis.com/
 
-# Try with different source
-pysentry --source pypi
+# Try with different or multiple sources
+pysentry --sources pypi
+pysentry --sources pypa,osv
 ```
 
 **Slow requirements.txt resolution**

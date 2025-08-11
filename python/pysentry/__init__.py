@@ -2,7 +2,7 @@
 
 from ._internal import audit_python, audit_with_options, check_resolvers, check_version
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = [
     "audit_python",
     "audit_with_options",
