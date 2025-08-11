@@ -4,11 +4,76 @@ use crate::{
     AuditError, Result,
 };
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use tracing::{debug, warn};
+
+/// Custom deserializer for markers field that can handle both Poetry 1.x (string) and Poetry 2.x (map) formats
+fn deserialize_markers<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{MapAccess, Visitor};
+
+    struct MarkersVisitor;
+
+    impl<'de> Visitor<'de> for MarkersVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or map of markers")
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            // For Poetry 2.x grouped markers, extract the main group marker if it exists
+            // Otherwise, concatenate all group markers with " or " (conservative approach)
+            let mut markers = Vec::new();
+
+            while let Some((key, value)) = map.next_entry::<String, String>()? {
+                // Prefer the "main" group marker if available
+                if key == "main" {
+                    return Ok(Some(value));
+                }
+                markers.push(value);
+            }
+
+            // If no main group found, combine all markers
+            if !markers.is_empty() {
+                Ok(Some(markers.join(" or ")))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(MarkersVisitor)
+}
 
 /// Poetry lock file structure
 #[derive(Debug, Deserialize)]
@@ -43,7 +108,7 @@ struct Package {
     #[serde(default)]
     #[allow(dead_code)]
     extras: HashMap<String, Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_markers")]
     #[allow(dead_code)]
     markers: Option<String>,
     #[serde(default)]
