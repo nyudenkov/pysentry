@@ -22,7 +22,7 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
 - **Performance Focused**:
   - Written in Rust for speed
   - Async/concurrent processing
-  - Intelligent caching system
+  - Multi-tier intelligent caching (vulnerability data + resolved dependencies)
 - **Comprehensive Filtering**:
   - Severity levels (low, medium, high, critical)
   - Dependency scopes (main only vs all [optional, dev, prod, etc] dependencies)
@@ -228,6 +228,12 @@ pysentry /path/to/project
 
 # Debug requirements.txt resolution
 pysentry --verbose --resolver uv /path/to/project
+
+# Use longer resolution cache TTL (48 hours)
+pysentry --resolution-cache-ttl 48 /path/to/project
+
+# Clear resolution cache before scanning
+pysentry --clear-resolution-cache /path/to/project
 ```
 
 ### CI/CD Integration Examples
@@ -247,42 +253,115 @@ pysentry --format markdown --output SECURITY-REPORT.md
 
 # Comprehensive audit with all sources and full reporting
 pysentry --sources pypa,pypi,osv --all-extras --format json --fail-on low
+
+# CI environment with fresh resolution cache
+pysentry --clear-resolution-cache --sources pypa,osv --format sarif
+
+# CI with resolution cache disabled
+pysentry --no-resolution-cache --format json --output security-report.json
 ```
 
 ## Configuration
 
 ### Command Line Options
 
-| Option           | Description                                             | Default             |
-| ---------------- | ------------------------------------------------------- | ------------------- |
-| `--format`       | Output format: `human`, `json`, `sarif`, `markdown`     | `human`             |
-| `--severity`     | Minimum severity: `low`, `medium`, `high`, `critical`   | `low`               |
-| `--fail-on`      | Fail (exit non-zero) on vulnerabilities ≥ severity      | `medium`            |
-| `--sources`      | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa`              |
-| `--all-extras`   | Include all dependencies (main + dev + optional)        | `false`             |
-| `--direct-only`  | Check only direct dependencies                          | `false`             |
-| `--ignore`       | Vulnerability IDs to ignore (repeatable)                | `[]`                |
-| `--output`       | Output file path                                        | `stdout`            |
-| `--no-cache`     | Disable caching                                         | `false`             |
-| `--cache-dir`    | Custom cache directory                                  | `~/.cache/pysentry` |
-| `--verbose`      | Enable verbose output                                   | `false`             |
-| `--quiet`        | Suppress non-error output                               | `false`             |
-| `--resolver`     | Dependency resolver: `auto`, `uv`, `pip-tools`          | `auto`              |
-| `--requirements` | Additional requirements files (repeatable)              | `[]`                |
+| Option                     | Description                                             | Default           |
+| -------------------------- | ------------------------------------------------------- | ----------------- |
+| `--format`                 | Output format: `human`, `json`, `sarif`, `markdown`     | `human`           |
+| `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`   | `low`             |
+| `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity      | `medium`          |
+| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa`            |
+| `--all-extras`             | Include all dependencies (main + dev + optional)        | `false`           |
+| `--direct-only`            | Check only direct dependencies                          | `false`           |
+| `--ignore`                 | Vulnerability IDs to ignore (repeatable)                | `[]`              |
+| `--output`                 | Output file path                                        | `stdout`          |
+| `--no-cache`               | Disable all caching                                     | `false`           |
+| `--cache-dir`              | Custom cache directory                                  | Platform-specific |
+| `--resolution-cache-ttl`   | Resolution cache TTL in hours                           | `24`              |
+| `--no-resolution-cache`    | Disable resolution caching only                         | `false`           |
+| `--clear-resolution-cache` | Clear resolution cache on startup                       | `false`           |
+| `--verbose`                | Enable verbose output                                   | `false`           |
+| `--quiet`                  | Suppress non-error output                               | `false`           |
+| `--resolver`               | Dependency resolver: `auto`, `uv`, `pip-tools`          | `auto`            |
+| `--requirements`           | Additional requirements files (repeatable)              | `[]`              |
 
 ### Cache Management
 
-PySentry uses an intelligent caching system to avoid redundant API calls:
+PySentry uses an intelligent multi-tier caching system for optimal performance:
 
-- **Default Location**: `~/.cache/pysentry/` (or system temp directory)
-- **TTL-based Expiration**: Separate expiration for each vulnerability source
+#### Vulnerability Data Cache
+
+- **Location**: `{CACHE_DIR}/pysentry/vulnerability-db/`
+- **Purpose**: Caches vulnerability databases from PyPA, PyPI, OSV
+- **TTL**: 24 hours (configurable per source)
+- **Benefits**: Avoids redundant API calls and downloads
+
+#### Resolution Cache
+
+- **Location**: `{CACHE_DIR}/pysentry/dependency-resolution/`
+- **Purpose**: Caches resolved dependencies from `uv`/`pip-tools`
+- **TTL**: 24 hours (configurable via `--resolution-cache-ttl`)
+- **Benefits**: Dramatically speeds up repeated scans of requirements.txt files
+- **Cache Key**: Based on requirements content, resolver version, Python version, platform
+
+#### Platform-Specific Cache Locations
+
+- **Linux**: `~/.cache/pysentry/`
+- **macOS**: `~/Library/Caches/pysentry/`
+- **Windows**: `%LOCALAPPDATA%\pysentry\`
+
+**Finding Your Cache Location**: Run with `--verbose` to see the actual cache directory path being used.
+
+#### Cache Features
+
 - **Atomic Updates**: Prevents cache corruption during concurrent access
 - **Custom Location**: Use `--cache-dir` to specify alternative location
+- **Selective Clearing**: Control caching behavior per cache type
+- **Content-based Invalidation**: Automatic cache invalidation on content changes
 
-To clear the cache:
+#### Cache Control Examples
 
 ```bash
+# Disable all caching
+pysentry --no-cache
+
+# Disable only resolution caching (keep vulnerability cache)
+pysentry --no-resolution-cache
+
+# Set resolution cache TTL to 48 hours
+pysentry --resolution-cache-ttl 48
+
+# Clear resolution cache on startup (useful for CI)
+pysentry --clear-resolution-cache
+
+# Custom cache directory
+pysentry --cache-dir /tmp/my-pysentry-cache
+```
+
+To manually clear all caches:
+
+```bash
+# Linux
 rm -rf ~/.cache/pysentry/
+
+# macOS
+rm -rf ~/Library/Caches/pysentry/
+
+# Windows (PowerShell)
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\pysentry"
+```
+
+To clear only resolution cache:
+
+```bash
+# Linux
+rm -rf ~/.cache/pysentry/dependency-resolution/
+
+# macOS
+rm -rf ~/Library/Caches/pysentry/dependency-resolution/
+
+# Windows (PowerShell)
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\pysentry\dependency-resolution"
 ```
 
 ## Supported Project Formats
@@ -411,26 +490,28 @@ Compatible with GitHub Security tab, VS Code, and other security tools.
 
 PySentry is designed for speed and efficiency:
 
-- **Concurrent Processing**: Vulnerability data fetched in parallel
-- **Smart Caching**: Reduces API calls and parsing overhead
+- **Concurrent Processing**: Vulnerability data fetched in parallel from multiple sources
+- **Multi-tier Caching**: Intelligent caching for both vulnerability data and resolved dependencies
 - **Efficient Matching**: In-memory indexing for fast vulnerability lookups
 - **Streaming**: Large databases processed without excessive memory usage
 
+### Resolution Cache Performance
+
+The resolution cache provides dramatic performance improvements for requirements.txt files:
+
+- **First scan**: Standard resolution time using `uv` or `pip-tools`
+- **Subsequent scans**: Near-instantaneous when cache is fresh (>90% time savings)
+- **Cache invalidation**: Automatic when requirements content, resolver, or environment changes
+- **Content-aware**: Different cache entries for different Python versions and platforms
+
 ### Requirements.txt Resolution Performance
 
-PySentry leverages external resolvers for optimal performance:
+PySentry leverages external resolvers with intelligent caching:
 
 - **uv resolver**: 2-10x faster than pip-tools, handles large dependency trees efficiently
 - **pip-tools resolver**: Reliable fallback, slower but widely compatible
 - **Isolated execution**: Prevents project pollution while maintaining security
-
-### Benchmarks
-
-Typical performance on a project with 100+ dependencies:
-
-- **Cold cache**: 15-30 seconds
-- **Warm cache**: 2-5 seconds
-- **Memory usage**: ~50MB peak
+- **Resolution caching**: Eliminates repeated resolver calls for unchanged requirements
 
 ## Development
 
@@ -555,12 +636,43 @@ ls uv.lock poetry.lock pyproject.toml
 **Performance Issues**
 
 ```bash
-# Clear cache and retry
-rm -rf ~/.cache/pysentry
+# Clear all caches and retry
+rm -rf ~/.cache/pysentry      # Linux
+rm -rf ~/Library/Caches/pysentry  # macOS
 pysentry
+
+# Clear only resolution cache (if vulnerability cache is working)
+rm -rf ~/.cache/pysentry/dependency-resolution/      # Linux
+rm -rf ~/Library/Caches/pysentry/dependency-resolution/  # macOS
+pysentry
+
+# Clear resolution cache via CLI
+pysentry --clear-resolution-cache
 
 # Use verbose mode to identify bottlenecks
 pysentry --verbose
+
+# Disable caching to isolate issues
+pysentry --no-cache
+```
+
+**Resolution Cache Issues**
+
+```bash
+# Clear stale resolution cache after environment changes
+pysentry --clear-resolution-cache
+
+# Disable resolution cache if causing issues
+pysentry --no-resolution-cache
+
+# Extend cache TTL for stable environments
+pysentry --resolution-cache-ttl 168  # 1 week
+
+# Check cache usage with verbose output
+pysentry --verbose  # Shows cache hits/misses
+
+# Force fresh resolution (ignores cache)
+pysentry --clear-resolution-cache --no-resolution-cache
 ```
 
 ## Acknowledgments
