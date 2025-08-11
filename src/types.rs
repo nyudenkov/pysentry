@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -87,3 +88,69 @@ pub enum VulnerabilitySource {
 
 /// Vulnerability source types (for CLI compatibility)
 pub type VulnerabilitySourceType = VulnerabilitySource;
+
+/// Resolution cache entry containing resolved dependencies and metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionCacheEntry {
+    /// When this resolution was cached
+    pub resolved_at: DateTime<Utc>,
+    /// Type of resolver used (uv, pip-tools)
+    pub resolver_type: ResolverType,
+    /// Version of the resolver tool
+    pub resolver_version: String,
+    /// Python version used for resolution
+    pub python_version: String,
+    /// Platform information
+    pub platform: String,
+    /// SHA-256 hash of the requirements content
+    pub content_hash: String,
+    /// List of resolved dependencies
+    pub dependencies: Vec<ResolvedDependency>,
+    /// Additional environment markers that affected resolution
+    pub environment_markers: std::collections::HashMap<String, String>,
+}
+
+/// Individual resolved dependency
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedDependency {
+    /// Package name
+    pub name: String,
+    /// Resolved version
+    pub version: String,
+    /// Whether this is a direct dependency (vs transitive)
+    pub is_direct: bool,
+    /// Source file that contained this dependency
+    pub source_file: std::path::PathBuf,
+    /// Any extras specified for this dependency
+    pub extras: Vec<String>,
+    /// Environment markers for this dependency
+    pub markers: Option<String>,
+}
+
+/// Resolver types for caching and registry
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResolverType {
+    /// UV resolver (Rust-based, fastest)
+    Uv,
+    /// pip-tools resolver (Python-based, widely used)
+    PipTools,
+}
+
+impl fmt::Display for ResolverType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResolverType::Uv => write!(f, "uv"),
+            ResolverType::PipTools => write!(f, "pip-tools"),
+        }
+    }
+}
+
+impl From<&str> for ResolverType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "uv" => ResolverType::Uv,
+            "pip-tools" | "pip_tools" | "piptools" => ResolverType::PipTools,
+            _ => ResolverType::Uv, // Default fallback
+        }
+    }
+}

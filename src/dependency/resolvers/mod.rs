@@ -3,12 +3,127 @@
 //! This module provides a pluggable architecture for dependency resolution
 //! using external tools like uv and pip-tools.
 
+use crate::cache::audit::AuditCache;
+use crate::types::{ResolutionCacheEntry, ResolvedDependency, ResolverType};
 use crate::{AuditError, Result};
 use async_trait::async_trait;
-use std::fmt::Display;
+use chrono::Utc;
+use std::collections::HashMap;
+use tracing::info;
 
 pub mod pip_tools;
 pub mod uv;
+
+pub struct CacheMetadata {
+    pub cache_key: String,
+    pub resolver_type: ResolverType,
+    pub resolver_version: String,
+    pub python_version: String,
+    pub platform: String,
+    pub environment_markers: HashMap<String, String>,
+}
+
+pub fn generate_cache_metadata(
+    requirements_content: &str,
+    cache: &AuditCache,
+    resolver_type: ResolverType,
+    resolver_version: String,
+    python_version: String,
+    platform: String,
+    environment_markers: HashMap<String, String>,
+) -> CacheMetadata {
+    let cache_key = cache.generate_resolution_cache_key(
+        requirements_content,
+        &resolver_type,
+        &resolver_version,
+        &python_version,
+        &platform,
+        &environment_markers,
+    );
+
+    CacheMetadata {
+        cache_key,
+        resolver_type,
+        resolver_version,
+        python_version,
+        platform,
+        environment_markers,
+    }
+}
+
+pub async fn check_cache(
+    cache: &AuditCache,
+    metadata: &CacheMetadata,
+    force_refresh: bool,
+    ttl_hours: u64,
+    resolver_name: &str,
+) -> Result<Option<String>> {
+    if !force_refresh {
+        if let Ok(false) = cache.should_refresh_resolution(&metadata.cache_key, ttl_hours) {
+            if let Ok(Some(cache_entry)) = cache.read_resolution_cache(&metadata.cache_key).await {
+                info!(
+                    "Using cached {} resolution for key: {}",
+                    resolver_name, metadata.cache_key
+                );
+
+                let resolved_output = cache_entry
+                    .dependencies
+                    .iter()
+                    .map(|dep| {
+                        if let Some(ref markers) = dep.markers {
+                            format!("{}=={}; {}", dep.name, dep.version, markers)
+                        } else {
+                            format!("{}=={}", dep.name, dep.version)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                return Ok(Some(resolved_output));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub async fn write_to_cache(
+    cache: &AuditCache,
+    metadata: &CacheMetadata,
+    _resolved_output: &str,
+    dependencies: Vec<ResolvedDependency>,
+) -> Result<()> {
+    let cache_entry = ResolutionCacheEntry {
+        resolved_at: Utc::now(),
+        resolver_type: metadata.resolver_type,
+        resolver_version: metadata.resolver_version.clone(),
+        python_version: metadata.python_version.clone(),
+        platform: metadata.platform.clone(),
+        content_hash: metadata.cache_key[metadata.cache_key.rfind('-').unwrap_or(0) + 1..]
+            .to_string(),
+        dependencies,
+        environment_markers: metadata.environment_markers.clone(),
+    };
+
+    if let Err(e) = cache
+        .write_resolution_cache(&metadata.cache_key, &cache_entry)
+        .await
+    {
+        tracing::warn!("Failed to write resolution cache: {}", e);
+    }
+    Ok(())
+}
+
+pub async fn handle_cache_error(cache: &AuditCache, metadata: &CacheMetadata) {
+    if let Err(cache_err) = cache
+        .clear_resolution_cache_entry(&metadata.cache_key)
+        .await
+    {
+        tracing::warn!(
+            "Failed to clear resolution cache entry after error: {}",
+            cache_err
+        );
+    }
+}
 
 /// Trait for external dependency resolvers
 #[async_trait]
@@ -24,6 +139,16 @@ pub trait DependencyResolver: Send + Sync {
     /// Takes raw requirements.txt content and returns resolved dependencies
     /// in the format "package==version" (one per line)
     async fn resolve_requirements(&self, requirements_content: &str) -> Result<String>;
+
+    async fn get_version(&self) -> Result<String>;
+
+    async fn resolve_requirements_cached(
+        &self,
+        requirements_content: &str,
+        cache: &AuditCache,
+        force_refresh: bool,
+        ttl_hours: u64,
+    ) -> Result<String>;
 
     /// Get resolver-specific command line arguments if needed
     fn get_resolver_args(&self) -> Vec<String> {
@@ -49,24 +174,6 @@ pub enum ResolverFeature {
     EditableInstalls,
     /// Support for constraint files
     Constraints,
-}
-
-/// Available resolver types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolverType {
-    /// UV resolver (Rust-based, fastest)
-    Uv,
-    /// pip-tools resolver (Python-based, widely used)
-    PipTools,
-}
-
-impl Display for ResolverType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ResolverType::Uv => write!(f, "uv"),
-            ResolverType::PipTools => write!(f, "pip-tools"),
-        }
-    }
 }
 
 /// Registry for managing dependency resolvers
@@ -114,16 +221,6 @@ impl ResolverRegistry {
         }
 
         available
-    }
-}
-
-impl From<&str> for ResolverType {
-    fn from(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "uv" => ResolverType::Uv,
-            "pip-tools" | "pip_tools" | "piptools" => ResolverType::PipTools,
-            _ => ResolverType::Uv, // Default fallback
-        }
     }
 }
 

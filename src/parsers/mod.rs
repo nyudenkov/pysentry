@@ -105,7 +105,7 @@ pub struct ParserRegistry {
 
 impl ParserRegistry {
     /// Create a new parser registry
-    pub fn new(resolver: Option<crate::dependency::resolvers::ResolverType>) -> Self {
+    pub fn new(resolver: Option<crate::types::ResolverType>) -> Self {
         match resolver {
             Some(resolver_type) => {
                 let parsers: Vec<Box<dyn ProjectParser>> = vec![

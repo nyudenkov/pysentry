@@ -7,13 +7,17 @@ pub use cache::{AuditCache, Cache, CacheBucket, CacheEntry, DatabaseMetadata, Fr
 pub use dependency::scanner::{DependencyScanner, DependencyStats};
 pub use output::report::{AuditReport, AuditSummary, ReportGenerator};
 pub use providers::{VulnerabilityProvider, VulnerabilitySource};
-pub use types::{AuditFormat, PackageName, SeverityLevel, Version, VulnerabilitySourceType};
+pub use types::{
+    AuditFormat, PackageName, ResolutionCacheEntry, ResolvedDependency, ResolverType,
+    SeverityLevel, Version, VulnerabilitySourceType,
+};
 pub use vulnerability::{
     database::{Severity, VersionRange, Vulnerability, VulnerabilityDatabase, VulnerabilityMatch},
     matcher::{DatabaseStats, FixAnalysis, FixSuggestion, MatcherConfig, VulnerabilityMatcher},
 };
 
 pub mod cache;
+pub mod cli;
 pub mod dependency;
 pub mod output;
 pub mod parsers;

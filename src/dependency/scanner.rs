@@ -18,7 +18,7 @@ impl DependencyScanner {
         include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-        resolver: Option<crate::dependency::resolvers::ResolverType>,
+        resolver: Option<crate::types::ResolverType>,
     ) -> Self {
         Self {
             parser_registry: ParserRegistry::new(resolver),

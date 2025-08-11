@@ -3,12 +3,23 @@
 //! pip-tools (pip-compile) is a popular Python-based dependency resolver.
 //! This module provides integration with pip-tools for resolving requirements.txt files.
 
-use super::{DependencyResolver, ResolverFeature};
+use super::{
+    check_cache, generate_cache_metadata, handle_cache_error, write_to_cache, DependencyResolver,
+    ResolverFeature,
+};
+use crate::cache::audit::AuditCache;
+use crate::types::{ResolvedDependency, ResolverType};
 use crate::{AuditError, Result};
 use async_trait::async_trait;
+use regex::Regex;
+use std::collections::HashMap;
+use std::env;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::debug;
+
+static PACKAGE_REGEX: OnceLock<Regex> = OnceLock::new();
 
 /// pip-tools-based dependency resolver
 pub struct PipToolsResolver;
@@ -103,6 +114,99 @@ impl PipToolsResolver {
             )))
         }
     }
+
+    async fn get_python_version(&self) -> Result<String> {
+        let python_commands = ["python3", "python"];
+
+        for cmd in &python_commands {
+            if let Ok(output) = Command::new(cmd)
+                .args([
+                    "-c",
+                    "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+                ])
+                .output()
+                .await
+            {
+                if output.status.success() {
+                    return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+                }
+            }
+        }
+
+        Ok("3.12".to_string()) // Fallback to common version
+    }
+
+    fn get_platform(&self) -> String {
+        format!("{}-{}", env::consts::OS, env::consts::ARCH)
+    }
+
+    async fn get_environment_markers(&self) -> HashMap<String, String> {
+        let mut markers = HashMap::new();
+
+        if let Ok(py_version) = self.get_python_version().await {
+            markers.insert("python_version".to_string(), py_version);
+        }
+
+        markers.insert("sys_platform".to_string(), env::consts::OS.to_string());
+        markers.insert(
+            "platform_machine".to_string(),
+            env::consts::ARCH.to_string(),
+        );
+
+        if let Ok(value) = env::var("PIP_INDEX_URL") {
+            markers.insert("pip_index_url".to_string(), value);
+        }
+        if let Ok(value) = env::var("PIP_EXTRA_INDEX_URL") {
+            markers.insert("pip_extra_index_url".to_string(), value);
+        }
+        if let Ok(value) = env::var("PIP_TRUSTED_HOST") {
+            markers.insert("pip_trusted_host".to_string(), value);
+        }
+        if let Ok(value) = env::var("PIP_PRE") {
+            markers.insert("pip_pre".to_string(), value);
+        }
+
+        markers
+    }
+
+    fn parse_resolved_dependencies(
+        &self,
+        resolved_output: &str,
+        source_file: &std::path::Path,
+    ) -> Vec<ResolvedDependency> {
+        let mut dependencies = Vec::new();
+
+        let package_regex = PACKAGE_REGEX
+            .get_or_init(|| Regex::new(r"^([a-zA-Z0-9_.-]+)==([^;]+)(?:;\s*(.+))?").unwrap());
+
+        for line in resolved_output.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            if let Some(captures) = package_regex.captures(trimmed) {
+                let name = captures.get(1).unwrap().as_str().to_string();
+                let version = captures.get(2).unwrap().as_str().to_string();
+                let markers = captures.get(3).map(|m| m.as_str().to_string());
+
+                dependencies.push(ResolvedDependency {
+                    name,
+                    version,
+                    is_direct: true, // We'll mark all as direct for now, could be enhanced
+                    source_file: source_file.to_path_buf(),
+                    extras: Vec::new(), // Could be parsed from package name if needed
+                    markers,
+                });
+            }
+        }
+
+        debug!(
+            "Parsed {} dependencies from pip-tools output",
+            dependencies.len()
+        );
+        dependencies
+    }
 }
 
 impl Default for PipToolsResolver {
@@ -132,6 +236,88 @@ impl DependencyResolver for PipToolsResolver {
 
         // Execute pip-compile compilation
         self.execute_pip_compile(requirements_content).await
+    }
+
+    async fn get_version(&self) -> Result<String> {
+        let output = Command::new("pip-compile")
+            .arg("--version")
+            .output()
+            .await
+            .map_err(|e| {
+                AuditError::PipToolsExecutionFailed(format!("Failed to get pip-tools version: {e}"))
+            })?;
+
+        if output.status.success() {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let version_str = version.trim();
+            if let Some(version_part) = version_str.split_whitespace().last() {
+                Ok(version_part.to_string())
+            } else {
+                Ok(version_str.to_string())
+            }
+        } else {
+            Err(AuditError::PipToolsExecutionFailed(
+                "Failed to get pip-tools version".to_string(),
+            ))
+        }
+    }
+
+    async fn resolve_requirements_cached(
+        &self,
+        requirements_content: &str,
+        cache: &AuditCache,
+        force_refresh: bool,
+        ttl_hours: u64,
+    ) -> Result<String> {
+        if !self.is_available().await {
+            return Err(AuditError::PipToolsNotAvailable);
+        }
+
+        let resolver_version = self.get_version().await?;
+        let python_version = self.get_python_version().await?;
+        let platform = self.get_platform();
+        let environment_markers = self.get_environment_markers().await;
+
+        let metadata = generate_cache_metadata(
+            requirements_content,
+            cache,
+            ResolverType::PipTools,
+            resolver_version,
+            python_version,
+            platform,
+            environment_markers,
+        );
+
+        debug!(
+            "Generated cache key for pip-tools resolution: {}",
+            metadata.cache_key
+        );
+
+        if let Some(cached_result) =
+            check_cache(cache, &metadata, force_refresh, ttl_hours, "pip-tools").await?
+        {
+            return Ok(cached_result);
+        }
+
+        tracing::info!(
+            "Performing fresh pip-tools resolution for cache key: {}",
+            metadata.cache_key
+        );
+
+        match self.execute_pip_compile(requirements_content).await {
+            Ok(resolved_output) => {
+                let temp_file = std::path::Path::new("requirements.in");
+                let dependencies = self.parse_resolved_dependencies(&resolved_output, temp_file);
+
+                write_to_cache(cache, &metadata, &resolved_output, dependencies).await?;
+
+                Ok(resolved_output)
+            }
+            Err(e) => {
+                handle_cache_error(cache, &metadata).await;
+                Err(e)
+            }
+        }
     }
 
     fn get_resolver_args(&self) -> Vec<String> {

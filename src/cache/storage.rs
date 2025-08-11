@@ -9,12 +9,14 @@ use std::time::{Duration, SystemTime};
 #[derive(Debug, Clone)]
 pub enum CacheBucket {
     VulnerabilityDatabase,
+    DependencyResolution,
 }
 
 impl CacheBucket {
     fn subdir(&self) -> &'static str {
         match self {
             CacheBucket::VulnerabilityDatabase => "vulnerability-db",
+            CacheBucket::DependencyResolution => "dependency-resolution",
         }
     }
 }

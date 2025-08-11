@@ -1,7 +1,7 @@
 use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
 use crate::{
-    dependency::resolvers::{DependencyResolver, ResolverRegistry, ResolverType},
-    types::{PackageName, Version},
+    dependency::resolvers::{DependencyResolver, ResolverRegistry},
+    types::{PackageName, ResolverType, Version},
     AuditError, Result,
 };
 use async_trait::async_trait;

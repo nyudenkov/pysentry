@@ -5,8 +5,8 @@
 
 use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
 use crate::{
-    dependency::resolvers::{DependencyResolver, ResolverRegistry, ResolverType},
-    types::{PackageName, Version},
+    dependency::resolvers::{DependencyResolver, ResolverRegistry},
+    types::{PackageName, ResolverType, Version},
     AuditError, Result,
 };
 use async_trait::async_trait;
@@ -429,7 +429,7 @@ impl ProjectParser for RequirementsParser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dependency::resolvers::ResolverType;
+    use crate::types::ResolverType;
 
     #[test]
     fn test_requirements_parser_creation() {
