@@ -1,0 +1,156 @@
+name: Benchmark Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to benchmark (e.g., v0.2.3)"
+        required: true
+        default: "v0.2.3"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          VERSION_CLEAN=${VERSION#v}
+          echo "version=${VERSION_CLEAN}" >> $GITHUB_OUTPUT
+          echo "version_with_v=${VERSION}" >> $GITHUB_OUTPUT
+          echo "branch_name=benchmark-${VERSION_CLEAN}" >> $GITHUB_OUTPUT
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target
+          key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-benchmark-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Build PySentry
+        run: cargo build --release
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install pip-audit for benchmark comparison
+        run: pip install pip-audit
+
+      - name: Install benchmark dependencies
+        run: |
+          cd benchmarks
+          uv sync
+
+      - name: Run benchmark suite
+        run: |
+          cd benchmarks
+          uv run python main.py --skip-build
+
+          ls -la results/
+
+          LATEST_FILE=$(ls results/*.md 2>/dev/null | sort -r | head -n 1)
+          if [ -f "$LATEST_FILE" ]; then
+            cp "$LATEST_FILE" results/latest.md
+            echo "Created latest.md from: $LATEST_FILE"
+          else
+            echo "Warning: No benchmark files found to create latest.md"
+          fi
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and switch to benchmark branch
+        run: |
+          BRANCH_NAME="${{ steps.version.outputs.branch_name }}"
+          git checkout -b $BRANCH_NAME
+
+      - name: Commit benchmark results
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git add benchmarks/results/
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Add benchmark results for version ${VERSION}"
+
+      - name: Push benchmark branch
+        run: |
+          BRANCH_NAME="${{ steps.version.outputs.branch_name }}"
+          git push origin $BRANCH_NAME
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH_NAME="${{ steps.version.outputs.branch_name }}"
+
+          PR_BODY="This PR contains automated benchmark results comparing PySentry v${VERSION} against pip-audit."
+
+          gh pr create \
+            --title "Benchmark results for v${VERSION}" \
+            --body "$PR_BODY" \
+            --base main \
+            --head $BRANCH_NAME \
+            --label "benchmark,automated"
+
+      - name: Summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH_NAME="${{ steps.version.outputs.branch_name }}"
+
+          echo "Benchmark workflow completed successfully!"
+          echo ""
+          echo "Benchmarked version: v${VERSION}"
+          echo "Created branch: ${BRANCH_NAME}"
+          echo "Results location: benchmarks/results/"
+          echo "Pull request created automatically"
