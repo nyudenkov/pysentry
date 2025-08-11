@@ -22,12 +22,22 @@ use tracing::debug;
 static PACKAGE_REGEX: OnceLock<Regex> = OnceLock::new();
 
 /// UV-based dependency resolver
-pub struct UvResolver;
+pub struct UvResolver {
+    cached_version: OnceLock<String>,
+    cached_python_version: OnceLock<String>,
+    cached_platform: OnceLock<String>,
+    cached_environment_markers: OnceLock<HashMap<String, String>>,
+}
 
 impl UvResolver {
     /// Create a new UV resolver instance
     pub fn new() -> Self {
-        Self
+        Self {
+            cached_version: OnceLock::new(),
+            cached_python_version: OnceLock::new(),
+            cached_platform: OnceLock::new(),
+            cached_environment_markers: OnceLock::new(),
+        }
     }
 
     /// Create isolated temporary directory for UV operations
@@ -105,7 +115,11 @@ impl UvResolver {
     }
 
     async fn get_python_version(&self) -> Result<String> {
-        match env::var("UV_PYTHON") {
+        if let Some(version) = self.cached_python_version.get() {
+            return Ok(version.clone());
+        }
+
+        let version = match env::var("UV_PYTHON") {
             Ok(python_path) => {
                 let output = Command::new(&python_path)
                     .args([
@@ -117,20 +131,29 @@ impl UvResolver {
 
                 match output {
                     Ok(out) if out.status.success() => {
-                        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                        String::from_utf8_lossy(&out.stdout).trim().to_string()
                     }
-                    _ => Ok("3.12".to_string()),
+                    _ => "3.12".to_string(),
                 }
             }
-            Err(_) => Ok("3.12".to_string()),
-        }
+            Err(_) => "3.12".to_string(),
+        };
+
+        let _ = self.cached_python_version.set(version.clone());
+        Ok(version)
     }
 
     fn get_platform(&self) -> String {
-        format!("{}-{}", env::consts::OS, env::consts::ARCH)
+        self.cached_platform
+            .get_or_init(|| format!("{}-{}", env::consts::OS, env::consts::ARCH))
+            .clone()
     }
 
     async fn get_environment_markers(&self) -> HashMap<String, String> {
+        if let Some(markers) = self.cached_environment_markers.get() {
+            return markers.clone();
+        }
+
         let mut markers = HashMap::new();
 
         if let Ok(py_version) = self.get_python_version().await {
@@ -153,6 +176,7 @@ impl UvResolver {
             markers.insert("uv_prerelease".to_string(), value);
         }
 
+        let _ = self.cached_environment_markers.set(markers.clone());
         markers
     }
 
@@ -223,6 +247,10 @@ impl DependencyResolver for UvResolver {
     }
 
     async fn get_version(&self) -> Result<String> {
+        if let Some(version) = self.cached_version.get() {
+            return Ok(version.clone());
+        }
+
         let output = Command::new("uv")
             .arg("--version")
             .output()
@@ -230,8 +258,11 @@ impl DependencyResolver for UvResolver {
             .map_err(|e| AuditError::UvExecutionFailed(format!("Failed to get UV version: {e}")))?;
 
         if output.status.success() {
-            let version = String::from_utf8_lossy(&output.stdout);
-            Ok(version.trim().replace("uv ", ""))
+            let version_str = String::from_utf8_lossy(&output.stdout);
+            let version = version_str.trim().replace("uv ", "");
+
+            let _ = self.cached_version.set(version.clone());
+            Ok(version)
         } else {
             Err(AuditError::UvExecutionFailed(
                 "Failed to get UV version".to_string(),

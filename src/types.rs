@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
@@ -89,25 +88,19 @@ pub enum VulnerabilitySource {
 /// Vulnerability source types (for CLI compatibility)
 pub type VulnerabilitySourceType = VulnerabilitySource;
 
-/// Resolution cache entry containing resolved dependencies and metadata
+/// Resolution cache entry containing resolved output and essential metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolutionCacheEntry {
-    /// When this resolution was cached
-    pub resolved_at: DateTime<Utc>,
+    /// The resolved output string
+    pub output: String,
     /// Type of resolver used (uv, pip-tools)
     pub resolver_type: ResolverType,
     /// Version of the resolver tool
     pub resolver_version: String,
     /// Python version used for resolution
     pub python_version: String,
-    /// Platform information
-    pub platform: String,
-    /// SHA-256 hash of the requirements content
-    pub content_hash: String,
     /// List of resolved dependencies
     pub dependencies: Vec<ResolvedDependency>,
-    /// Additional environment markers that affected resolution
-    pub environment_markers: std::collections::HashMap<String, String>,
 }
 
 /// Individual resolved dependency

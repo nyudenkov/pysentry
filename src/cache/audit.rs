@@ -2,9 +2,10 @@ use super::storage::{Cache, CacheBucket, CacheEntry, Freshness};
 use crate::types::{ResolutionCacheEntry, ResolverType};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::hash::Hasher;
 use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -81,29 +82,26 @@ impl AuditCache {
         platform: &str,
         environment_markers: &HashMap<String, String>,
     ) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(requirements_content.as_bytes());
-        hasher.update(resolver_type.to_string().as_bytes());
-        hasher.update(resolver_version.as_bytes());
-        hasher.update(python_version.as_bytes());
-        hasher.update(platform.as_bytes());
+        let mut hasher = FxHasher::default();
+        hasher.write(requirements_content.as_bytes());
+        hasher.write(resolver_type.to_string().as_bytes());
+        hasher.write(resolver_version.as_bytes());
+        hasher.write(python_version.as_bytes());
+        hasher.write(platform.as_bytes());
 
         let mut marker_items: Vec<_> = environment_markers.iter().collect();
         marker_items.sort_by_key(|(k, _)| *k);
         for (key, value) in marker_items {
-            hasher.update(key.as_bytes());
-            hasher.update(value.as_bytes());
+            hasher.write(key.as_bytes());
+            hasher.write(value.as_bytes());
         }
 
-        let hash = hasher.finalize();
+        let hash = hasher.finish();
         let content_hash = format!("{hash:x}");
 
         format!(
             "{}-py{}-{}-{}",
-            resolver_type,
-            python_version,
-            platform,
-            &content_hash[..32]
+            resolver_type, python_version, platform, &content_hash
         )
     }
 
@@ -317,12 +315,10 @@ mod tests {
 
         let cache_key = "test-cache-key";
         let cache_entry = ResolutionCacheEntry {
-            resolved_at: chrono::Utc::now(),
+            output: "requests==2.31.0".to_string(),
             resolver_type: ResolverType::Uv,
             resolver_version: "0.4.29".to_string(),
             python_version: "3.12".to_string(),
-            platform: "linux-x86_64".to_string(),
-            content_hash: "abc123".to_string(),
             dependencies: vec![ResolvedDependency {
                 name: "requests".to_string(),
                 version: "2.31.0".to_string(),
@@ -331,7 +327,6 @@ mod tests {
                 extras: vec![],
                 markers: None,
             }],
-            environment_markers: HashMap::new(),
         };
 
         cache
@@ -345,13 +340,13 @@ mod tests {
             .unwrap()
             .unwrap();
 
+        assert_eq!(read_entry.output, cache_entry.output);
         assert_eq!(
             read_entry.resolver_type.to_string(),
             cache_entry.resolver_type.to_string()
         );
         assert_eq!(read_entry.resolver_version, cache_entry.resolver_version);
         assert_eq!(read_entry.python_version, cache_entry.python_version);
-        assert_eq!(read_entry.platform, cache_entry.platform);
         assert_eq!(
             read_entry.dependencies.len(),
             cache_entry.dependencies.len()
@@ -369,14 +364,11 @@ mod tests {
         assert!(cache.should_refresh_resolution(cache_key, 24).unwrap());
 
         let cache_entry = ResolutionCacheEntry {
-            resolved_at: chrono::Utc::now(),
+            output: "".to_string(),
             resolver_type: ResolverType::Uv,
             resolver_version: "0.4.29".to_string(),
             python_version: "3.12".to_string(),
-            platform: "linux-x86_64".to_string(),
-            content_hash: "abc123".to_string(),
             dependencies: vec![],
-            environment_markers: HashMap::new(),
         };
 
         cache
@@ -395,25 +387,19 @@ mod tests {
         let cache = AuditCache::new(temp_dir.path().to_path_buf());
 
         let uv_entry = ResolutionCacheEntry {
-            resolved_at: chrono::Utc::now(),
+            output: "uv-test-output".to_string(),
             resolver_type: ResolverType::Uv,
             resolver_version: "0.4.29".to_string(),
             python_version: "3.12".to_string(),
-            platform: "linux-x86_64".to_string(),
-            content_hash: "abc123".to_string(),
             dependencies: vec![],
-            environment_markers: HashMap::new(),
         };
 
         let pip_tools_entry = ResolutionCacheEntry {
-            resolved_at: chrono::Utc::now(),
+            output: "pip-tools-test-output".to_string(),
             resolver_type: ResolverType::PipTools,
             resolver_version: "7.4.1".to_string(),
             python_version: "3.12".to_string(),
-            platform: "linux-x86_64".to_string(),
-            content_hash: "def456".to_string(),
             dependencies: vec![],
-            environment_markers: HashMap::new(),
         };
 
         cache
@@ -478,14 +464,11 @@ mod tests {
         assert_eq!(stats.pip_tools_entries, 0);
 
         let uv_entry = ResolutionCacheEntry {
-            resolved_at: chrono::Utc::now(),
+            output: "test-uv-output".to_string(),
             resolver_type: ResolverType::Uv,
             resolver_version: "0.4.29".to_string(),
             python_version: "3.12".to_string(),
-            platform: "linux-x86_64".to_string(),
-            content_hash: "abc123".to_string(),
             dependencies: vec![],
-            environment_markers: HashMap::new(),
         };
 
         cache

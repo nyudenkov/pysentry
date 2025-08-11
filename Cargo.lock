@@ -1128,6 +1128,7 @@ dependencies = [
  "pyo3",
  "regex",
  "reqwest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serde_yaml",

@@ -1,7 +1,6 @@
 // Cache implementation
 
 use anyhow::Result;
-use fs_err as fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -38,14 +37,14 @@ impl CacheEntry {
     }
 
     pub async fn read(&self) -> Result<Vec<u8>> {
-        Ok(fs::read(&self.path)?)
+        Ok(tokio::fs::read(&self.path).await?)
     }
 
     pub async fn write(&self, data: &[u8]) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
-        Ok(std::fs::write(&self.path, data)?)
+        Ok(tokio::fs::write(&self.path, data).await?)
     }
 
     pub fn freshness(&self, ttl: Duration) -> Result<Freshness> {

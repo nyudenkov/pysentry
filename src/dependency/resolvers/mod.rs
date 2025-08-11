@@ -7,7 +7,6 @@ use crate::cache::audit::AuditCache;
 use crate::types::{ResolutionCacheEntry, ResolvedDependency, ResolverType};
 use crate::{AuditError, Result};
 use async_trait::async_trait;
-use chrono::Utc;
 use std::collections::HashMap;
 use tracing::info;
 
@@ -66,20 +65,7 @@ pub async fn check_cache(
                     resolver_name, metadata.cache_key
                 );
 
-                let resolved_output = cache_entry
-                    .dependencies
-                    .iter()
-                    .map(|dep| {
-                        if let Some(ref markers) = dep.markers {
-                            format!("{}=={}; {}", dep.name, dep.version, markers)
-                        } else {
-                            format!("{}=={}", dep.name, dep.version)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                return Ok(Some(resolved_output));
+                return Ok(Some(cache_entry.output));
             }
         }
     }
@@ -89,19 +75,15 @@ pub async fn check_cache(
 pub async fn write_to_cache(
     cache: &AuditCache,
     metadata: &CacheMetadata,
-    _resolved_output: &str,
+    resolved_output: &str,
     dependencies: Vec<ResolvedDependency>,
 ) -> Result<()> {
     let cache_entry = ResolutionCacheEntry {
-        resolved_at: Utc::now(),
+        output: resolved_output.to_string(),
         resolver_type: metadata.resolver_type,
         resolver_version: metadata.resolver_version.clone(),
         python_version: metadata.python_version.clone(),
-        platform: metadata.platform.clone(),
-        content_hash: metadata.cache_key[metadata.cache_key.rfind('-').unwrap_or(0) + 1..]
-            .to_string(),
         dependencies,
-        environment_markers: metadata.environment_markers.clone(),
     };
 
     if let Err(e) = cache
