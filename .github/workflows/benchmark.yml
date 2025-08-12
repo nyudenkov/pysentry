@@ -91,7 +91,7 @@ jobs:
 
           ls -la results/
 
-          LATEST_FILE=$(ls results/*.md 2>/dev/null | sort -r | head -n 1)
+          LATEST_FILE=$(ls results/*.md 2>/dev/null | grep -v 'latest.md' | sort -r | head -n 1)
           if [ -f "$LATEST_FILE" ]; then
             cp "$LATEST_FILE" results/latest.md
             echo "Created latest.md from: $LATEST_FILE"
