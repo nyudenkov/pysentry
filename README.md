@@ -2,7 +2,7 @@
 
 [![OSV Integration](https://img.shields.io/badge/OSV-Integrated-blue)](https://google.github.io/osv.dev/)
 
-[Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12)
+[Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12) | [Latest PySentry - pip-audit benchmark](benchmarks/results/latest.md)
 
 A fast, reliable security vulnerability scanner for Python projects, written in Rust.
 
