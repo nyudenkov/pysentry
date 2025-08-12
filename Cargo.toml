@@ -28,6 +28,7 @@ clap = { version = "4.5.43", features = ["derive"] }
 dirs = "6.0.0"
 fs-err = "3.1.1"
 futures = "0.3.31"
+owo-colors = "4.2.2"
 pep440_rs = "0.7.3"
 pyo3 = { version = "0.25.1", features = ["extension-module"], optional = true }
 regex = "1.11.1"

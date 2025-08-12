@@ -161,6 +161,10 @@ pub struct AuditArgs {
     /// Suppress non-error output
     #[arg(long, short)]
     pub quiet: bool,
+
+    /// Show detailed vulnerability descriptions (full text instead of truncated)
+    #[arg(long)]
+    pub detailed: bool,
 }
 
 impl AuditArgs {
@@ -479,7 +483,7 @@ pub async fn check_version(verbose: bool) -> Result<()> {
 }
 
 pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
-    if !audit_args.quiet {
+    if audit_args.verbose {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
             audit_args.path.display()
@@ -520,6 +524,7 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
         &report,
         audit_args.format.clone().into(),
         Some(&audit_args.path),
+        audit_args.detailed,
     )
     .map_err(|e| anyhow::anyhow!("Failed to generate report: {e}"))?;
 
@@ -562,7 +567,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         .collect();
 
     let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
-    if !audit_args.quiet {
+    if audit_args.verbose {
         if source_names.len() == 1 {
             eprintln!("Fetching vulnerability data from {}...", source_names[0]);
         } else {
@@ -574,7 +579,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         }
     }
 
-    if !audit_args.quiet {
+    if audit_args.verbose {
         eprintln!("Scanning project dependencies...");
     }
 
@@ -696,7 +701,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         .map(|dep| (dep.name.to_string(), dep.version.to_string()))
         .collect();
 
-    if !audit_args.quiet {
+    if audit_args.verbose {
         if source_names.len() == 1 {
             eprintln!(
                 "Fetching vulnerabilities for {} packages from {}...",
@@ -731,7 +736,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         VulnerabilityDatabase::merge(databases)
     };
 
-    if !audit_args.quiet {
+    if audit_args.verbose {
         eprintln!("Matching against vulnerability database...");
     }
     let matcher_config = MatcherConfig::new(
@@ -756,7 +761,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
     );
 
     let summary = report.summary();
-    if !audit_args.quiet {
+    if audit_args.verbose {
         eprintln!(
             "Audit complete: {} vulnerabilities found in {} packages",
             summary.total_vulnerabilities, summary.vulnerable_packages

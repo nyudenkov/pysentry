@@ -13,13 +13,7 @@ async fn main() -> Result<()> {
         None => {
             let audit_args = args.audit_args;
 
-            let log_level = if audit_args.verbose {
-                "debug"
-            } else if audit_args.quiet {
-                "error"
-            } else {
-                "info"
-            };
+            let log_level = if audit_args.verbose { "info" } else { "error" };
 
             tracing_subscriber::fmt()
                 .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))

@@ -4,6 +4,7 @@ use crate::types::AuditFormat;
 use crate::vulnerability::database::{Severity, VulnerabilityMatch};
 use crate::vulnerability::matcher::{DatabaseStats, FixAnalysis};
 use chrono::{DateTime, Utc};
+use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -96,6 +97,45 @@ pub struct AuditSummary {
     pub unfixable_vulnerabilities: usize,
 }
 
+struct ColoredOutput;
+
+impl ColoredOutput {
+    fn severity(severity: &Severity) -> String {
+        match severity {
+            Severity::Critical => "CRITICAL".on_red().white().bold().to_string(),
+            Severity::High => "HIGH".red().bold().to_string(),
+            Severity::Medium => "MEDIUM".yellow().bold().to_string(),
+            Severity::Low => "LOW".green().bold().to_string(),
+        }
+    }
+
+    fn severity_count(count: usize, severity: &Severity) -> String {
+        let text = format!("{count} {severity:?}").to_uppercase();
+        match severity {
+            Severity::Critical => text.on_red().white().bold().to_string(),
+            Severity::High => text.red().bold().to_string(),
+            Severity::Medium => text.yellow().bold().to_string(),
+            Severity::Low => text.green().bold().to_string(),
+        }
+    }
+
+    fn package_name(name: &str) -> String {
+        name.bold().to_string()
+    }
+
+    fn vulnerability_id(id: &str) -> String {
+        id.cyan().bold().to_string()
+    }
+
+    fn header(text: &str) -> String {
+        text.bold().to_string()
+    }
+
+    fn fix_suggestion(text: &str) -> String {
+        text.blue().to_string()
+    }
+}
+
 /// Report generator for different output formats
 pub struct ReportGenerator;
 
@@ -105,47 +145,44 @@ impl ReportGenerator {
         report: &AuditReport,
         format: AuditFormat,
         project_root: Option<&Path>,
+        detailed: bool,
     ) -> Result<String, Box<dyn std::error::Error>> {
         match format {
-            AuditFormat::Human => Self::generate_human_report(report),
+            AuditFormat::Human => Self::generate_human_report(report, detailed),
             AuditFormat::Json => Self::generate_json_report(report),
             AuditFormat::Sarif => Self::generate_sarif_report(report, project_root),
             AuditFormat::Markdown => Self::generate_markdown_report(report),
         }
     }
 
-    /// Generate a human-readable report
-    fn generate_human_report(report: &AuditReport) -> Result<String, Box<dyn std::error::Error>> {
+    fn generate_human_report(
+        report: &AuditReport,
+        detailed: bool,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let mut output = String::new();
         let summary = report.summary();
 
-        // Header
-        writeln!(output, "🛡️  pysentry report")?;
-        writeln!(output, "━━━━━━━━━━━━━━━━━━━━━━")?;
+        writeln!(
+            output,
+            "{}",
+            ColoredOutput::header("PYSENTRY SECURITY AUDIT")
+        )?;
+        writeln!(output, "=======================")?;
         writeln!(output)?;
 
-        // Summary
-        writeln!(output, "📊 Scan Summary")?;
         writeln!(
             output,
-            "├─ Scanned: {} packages",
-            summary.total_packages_scanned
-        )?;
-        writeln!(
-            output,
-            "├─ Vulnerable: {} packages",
-            summary.vulnerable_packages
-        )?;
-        writeln!(
-            output,
-            "└─ Vulnerabilities: {}",
+            "{}: {} packages scanned • {} vulnerable • {} vulnerabilities found",
+            ColoredOutput::header("SUMMARY"),
+            summary.total_packages_scanned,
+            summary.vulnerable_packages,
             summary.total_vulnerabilities
         )?;
         writeln!(output)?;
 
-        // Severity breakdown
         if !summary.severity_counts.is_empty() {
-            writeln!(output, "🚨 Severity Breakdown")?;
+            write!(output, "{}: ", ColoredOutput::header("SEVERITY"))?;
+            let mut first = true;
             for severity in [
                 Severity::Critical,
                 Severity::High,
@@ -153,49 +190,55 @@ impl ReportGenerator {
                 Severity::Low,
             ] {
                 if let Some(count) = summary.severity_counts.get(&severity) {
-                    let icon = match severity {
-                        Severity::Critical => "🔴",
-                        Severity::High => "🟠",
-                        Severity::Medium => "🟡",
-                        Severity::Low => "🟢",
-                    };
-                    writeln!(output, "├─ {icon} {severity:?}: {count}")?;
+                    if !first {
+                        write!(output, "    ")?;
+                    }
+                    write!(
+                        output,
+                        " {}",
+                        ColoredOutput::severity_count(*count, &severity)
+                    )?;
+                    first = false;
                 }
             }
             writeln!(output)?;
-        }
-
-        // Fix analysis
-        if report.fix_analysis.total_matches > 0 {
-            writeln!(output, "🔧 Fix Analysis")?;
-            writeln!(output, "├─ Fixable: {}", report.fix_analysis.fixable)?;
-            writeln!(output, "└─ Unfixable: {}", report.fix_analysis.unfixable)?;
             writeln!(output)?;
         }
 
-        // Warnings
-        if !report.warnings.is_empty() {
-            writeln!(output, "⚠️  Warnings")?;
-            for warning in &report.warnings {
-                writeln!(output, "├─ {warning}")?;
+        if report.fix_analysis.total_matches > 0 {
+            if report.fix_analysis.fixable > 0 {
+                writeln!(
+                    output,
+                    "{}: {} vulnerabilities can be fixed by upgrading packages",
+                    ColoredOutput::header("FIXABLE"),
+                    ColoredOutput::fix_suggestion(&report.fix_analysis.fixable.to_string())
+                )?;
+            }
+            if report.fix_analysis.unfixable > 0 {
+                writeln!(
+                    output,
+                    "{}: {} vulnerabilities cannot be fixed",
+                    ColoredOutput::header("UNFIXABLE"),
+                    report.fix_analysis.unfixable
+                )?;
             }
             writeln!(output)?;
         }
 
-        // Vulnerability details
+        if !report.warnings.is_empty() {
+            writeln!(output, "{}", ColoredOutput::header("WARNINGS"))?;
+            for warning in &report.warnings {
+                writeln!(output, "  {warning}")?;
+            }
+            writeln!(output)?;
+        }
+
         if !report.matches.is_empty() {
-            writeln!(output, "🐛 Vulnerabilities Found")?;
-            writeln!(output, "━━━━━━━━━━━━━━━━━━━━━━━━━")?;
+            writeln!(output, "{}", ColoredOutput::header("VULNERABILITIES"))?;
+            writeln!(output, "---------------")?;
             writeln!(output)?;
 
             for (i, m) in report.matches.iter().enumerate() {
-                let severity_icon = match m.vulnerability.severity {
-                    Severity::Critical => "🔴",
-                    Severity::High => "🟠",
-                    Severity::Medium => "🟡",
-                    Severity::Low => "🟢",
-                };
-
                 let source_tag = if let Some(source) = &m.vulnerability.source {
                     format!(" [source: {source}]")
                 } else {
@@ -204,72 +247,89 @@ impl ReportGenerator {
 
                 writeln!(
                     output,
-                    "{}. {} {}{}",
+                    " {}. {}  {} v{}  [{}]{}",
                     i + 1,
-                    severity_icon,
-                    m.vulnerability.id,
+                    ColoredOutput::vulnerability_id(&m.vulnerability.id),
+                    ColoredOutput::package_name(&m.package_name.to_string()),
+                    m.installed_version,
+                    ColoredOutput::severity(&m.vulnerability.severity),
                     source_tag
                 )?;
-                writeln!(
-                    output,
-                    "   Package: {} v{}",
-                    m.package_name, m.installed_version
-                )?;
-                writeln!(output, "   Severity: {:?}", m.vulnerability.severity)?;
 
-                if let Some(cvss) = m.vulnerability.cvss_score {
-                    writeln!(output, "   CVSS Score: {cvss:.1}")?;
-                }
-
-                writeln!(output, "   Summary: {}", m.vulnerability.summary)?;
-
-                if let Some(description) = &m.vulnerability.description {
-                    writeln!(output, "   Description: {description}")?;
+                if detailed {
+                    writeln!(output, "    {}", m.vulnerability.summary)?;
+                    if let Some(description) = &m.vulnerability.description {
+                        if description != &m.vulnerability.summary {
+                            writeln!(output, "    {description}")?;
+                        }
+                    }
+                } else if !m.vulnerability.summary.is_empty() {
+                    writeln!(output, "    {}", m.vulnerability.summary)?;
+                } else if let Some(description) = &m.vulnerability.description {
+                    let truncated = description.chars().take(117).collect::<String>();
+                    writeln!(output, "    {truncated}...")?;
                 }
 
                 if !m.vulnerability.fixed_versions.is_empty() {
+                    let fixed_version = m.vulnerability.fixed_versions.first().unwrap();
                     writeln!(
                         output,
-                        "   Fixed in: {}",
-                        m.vulnerability
-                            .fixed_versions
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        "    {} {}",
+                        "→ Fix:".cyan(),
+                        ColoredOutput::fix_suggestion(&format!("Upgrade to {fixed_version}+"))
                     )?;
                 }
-
-                if !m.vulnerability.references.is_empty() {
-                    writeln!(output, "   References:")?;
-                    for ref_url in &m.vulnerability.references {
-                        writeln!(output, "     - {ref_url}")?;
-                    }
-                }
-
                 writeln!(output)?;
             }
         } else {
-            writeln!(output, "✅ No vulnerabilities found!")?;
+            writeln!(output, "{} No vulnerabilities found!", "✓".green().bold())?;
         }
 
-        // Fix suggestions
         if !report.fix_analysis.fix_suggestions.is_empty() {
-            writeln!(output, "💡 Fix Suggestions")?;
-            writeln!(output, "━━━━━━━━━━━━━━━━━━━")?;
-            writeln!(output)?;
+            writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+            writeln!(output, "---------------")?;
 
+            let mut package_fixes: HashMap<String, Vec<String>> = HashMap::new();
             for suggestion in &report.fix_analysis.fix_suggestions {
-                writeln!(output, "• {suggestion}")?;
+                let package = suggestion.package_name.to_string();
+                let version_info = format!(
+                    "{} → {}",
+                    suggestion.current_version, suggestion.suggested_version
+                );
+                package_fixes.entry(package).or_default().push(version_info);
+            }
+
+            for (package, fixes) in package_fixes {
+                if fixes.len() == 1 {
+                    writeln!(
+                        output,
+                        "{}: {}",
+                        ColoredOutput::package_name(&package),
+                        ColoredOutput::fix_suggestion(&fixes[0])
+                    )?;
+                } else {
+                    let best_fix = fixes.first().unwrap();
+                    writeln!(
+                        output,
+                        "{}: {} (fixes {} vulnerabilities)",
+                        ColoredOutput::package_name(&package),
+                        ColoredOutput::fix_suggestion(best_fix),
+                        fixes.len()
+                    )?;
+                }
             }
             writeln!(output)?;
         }
 
-        // Footer
+        // Clean footer
         writeln!(
             output,
-            "Scan completed at {}",
-            report.scan_time.format("%Y-%m-%d %H:%M:%S UTC")
+            "Scan completed {}",
+            report
+                .scan_time
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string()
+                .dimmed()
         )?;
 
         Ok(output)
@@ -622,13 +682,15 @@ mod tests {
     #[test]
     fn test_human_report_generation() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report).unwrap();
+        let output = ReportGenerator::generate_human_report(&report, false).unwrap();
 
-        assert!(output.contains("pysentry report"));
-        assert!(output.contains("Scan Summary"));
-        assert!(output.contains("Scanned: 10 packages"));
+        assert!(output.contains("PYSENTRY SECURITY AUDIT"));
+        assert!(output.contains("SUMMARY") && output.contains("10 packages scanned"));
+        assert!(output.contains("1 vulnerable • 1 vulnerabilities found"));
         assert!(output.contains("GHSA-test-1234"));
         assert!(output.contains("test-package"));
+        assert!(output.contains("VULNERABILITIES"));
+        assert!(output.contains("HIGH"));
     }
 
     #[test]
@@ -680,25 +742,25 @@ mod tests {
 
         // Test Human format
         let human_output =
-            ReportGenerator::generate(&report, AuditFormat::Human, project_root).unwrap();
-        assert!(human_output.contains("pysentry report"));
+            ReportGenerator::generate(&report, AuditFormat::Human, project_root, false).unwrap();
+        assert!(human_output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(human_output.contains("GHSA-test-1234"));
 
         // Test JSON format
         let json_output =
-            ReportGenerator::generate(&report, AuditFormat::Json, project_root).unwrap();
+            ReportGenerator::generate(&report, AuditFormat::Json, project_root, false).unwrap();
         let json: serde_json::Value = serde_json::from_str(&json_output).unwrap();
         assert_eq!(json["total_packages"], 10);
 
         // Test SARIF format
         let sarif_output =
-            ReportGenerator::generate(&report, AuditFormat::Sarif, project_root).unwrap();
+            ReportGenerator::generate(&report, AuditFormat::Sarif, project_root, false).unwrap();
         let sarif: serde_json::Value = serde_json::from_str(&sarif_output).unwrap();
         assert_eq!(sarif["version"], "2.1.0");
 
         // Test Markdown format
         let markdown_output =
-            ReportGenerator::generate(&report, AuditFormat::Markdown, project_root).unwrap();
+            ReportGenerator::generate(&report, AuditFormat::Markdown, project_root, false).unwrap();
         assert!(markdown_output.contains("# 🛡️ pysentry report"));
         assert!(markdown_output.contains("### 1. 🟠 `GHSA-test-1234`"));
     }
@@ -737,7 +799,7 @@ mod tests {
 
         assert!(!report.has_vulnerabilities());
 
-        let output = ReportGenerator::generate_human_report(&report).unwrap();
+        let output = ReportGenerator::generate_human_report(&report, false).unwrap();
         assert!(output.contains("No vulnerabilities found"));
     }
 
