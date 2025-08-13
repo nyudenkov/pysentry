@@ -18,7 +18,7 @@
 
 //! CLI interface definitions shared between binary and Python bindings
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use futures::future::try_join_all;
 use std::path::Path;
@@ -28,12 +28,12 @@ use crate::dependency::resolvers::ResolverRegistry;
 use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
 use crate::{
-    AuditCache, AuditReport, DependencyScanner, MatcherConfig, ReportGenerator,
-    VulnerabilityDatabase, VulnerabilityMatcher, VulnerabilitySource,
+    AuditCache, AuditReport, Config, ConfigLoader, DependencyScanner, MatcherConfig,
+    ReportGenerator, VulnerabilityDatabase, VulnerabilityMatcher, VulnerabilitySource,
 };
 use std::str::FromStr;
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, ValueEnum)]
 pub enum AuditFormat {
     #[value(name = "human")]
     Human,
@@ -45,7 +45,7 @@ pub enum AuditFormat {
     Markdown,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, ValueEnum)]
 pub enum SeverityLevel {
     #[value(name = "low")]
     Low,
@@ -67,7 +67,7 @@ pub enum VulnerabilitySourceType {
     Osv,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, PartialEq, ValueEnum)]
 pub enum ResolverTypeArg {
     #[value(name = "uv")]
     Uv,
@@ -96,9 +96,24 @@ pub enum Commands {
     Resolvers(ResolversArgs),
     /// Check if a newer version is available
     CheckVersion(CheckVersionArgs),
+    /// Configuration management
+    #[command(subcommand)]
+    Config(ConfigCommands),
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommands {
+    /// Initialize a new configuration file
+    Init(ConfigInitArgs),
+    /// Validate configuration file
+    Validate(ConfigValidateArgs),
+    /// Show effective configuration
+    Show(ConfigShowArgs),
+    /// Show configuration file path
+    Path(ConfigPathArgs),
+}
+
+#[derive(Debug, Clone, Parser)]
 pub struct AuditArgs {
     /// Path to the project directory to audit
     #[arg(value_name = "PATH", default_value = ".")]
@@ -183,6 +198,14 @@ pub struct AuditArgs {
     /// Show detailed vulnerability descriptions (full text instead of truncated)
     #[arg(long)]
     pub detailed: bool,
+
+    /// Custom configuration file path
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Disable configuration file loading
+    #[arg(long)]
+    pub no_config: bool,
 }
 
 impl AuditArgs {
@@ -284,6 +307,100 @@ impl AuditArgs {
 
         Ok(unique_sources)
     }
+
+    pub fn load_and_merge_config(&self) -> Result<(Self, Option<Config>)> {
+        let config_loader = if let Some(ref config_path) = self.config {
+            ConfigLoader::load_from_file(config_path)?
+        } else {
+            ConfigLoader::load_with_options(self.no_config)?
+        };
+
+        let config = config_loader.config.clone();
+        let merged_args = self.merge_with_config(&config);
+
+        Ok((merged_args, Some(config)))
+    }
+
+    pub fn merge_with_config(&self, config: &Config) -> Self {
+        let mut merged = self.clone();
+
+        if self.format == AuditFormat::Human && config.defaults.format != "human" {
+            merged.format = match config.defaults.format.as_str() {
+                "json" => AuditFormat::Json,
+                "sarif" => AuditFormat::Sarif,
+                "markdown" => AuditFormat::Markdown,
+                _ => AuditFormat::Human, // fallback
+            };
+        }
+
+        if self.severity == SeverityLevel::Low && config.defaults.severity != "low" {
+            merged.severity = match config.defaults.severity.as_str() {
+                "medium" => SeverityLevel::Medium,
+                "high" => SeverityLevel::High,
+                "critical" => SeverityLevel::Critical,
+                _ => SeverityLevel::Low, // fallback
+            };
+        }
+
+        if self.fail_on == SeverityLevel::Medium && config.defaults.fail_on != "medium" {
+            merged.fail_on = match config.defaults.fail_on.as_str() {
+                "low" => SeverityLevel::Low,
+                "high" => SeverityLevel::High,
+                "critical" => SeverityLevel::Critical,
+                _ => SeverityLevel::Medium, // fallback
+            };
+        }
+
+        if !self.all && !self.all_extras && config.defaults.scope == "all" {
+            merged.all_extras = true;
+        }
+
+        if !self.direct_only {
+            merged.direct_only = config.defaults.direct_only;
+        }
+
+        if !self.detailed {
+            merged.detailed = config.defaults.detailed;
+        }
+
+        if self.resolver == ResolverTypeArg::Uv && config.resolver.resolver_type != "uv" {
+            merged.resolver = match config.resolver.resolver_type.as_str() {
+                "pip-tools" => ResolverTypeArg::PipTools,
+                _ => ResolverTypeArg::Uv, // fallback
+            };
+        }
+
+        if !self.no_cache && !config.cache.enabled {
+            merged.no_cache = true;
+        }
+
+        if self.cache_dir.is_none() {
+            if let Some(ref cache_dir) = config.cache.directory {
+                merged.cache_dir = Some(std::path::PathBuf::from(cache_dir));
+            }
+        }
+
+        if self.resolution_cache_ttl == 24 {
+            merged.resolution_cache_ttl = config.cache.resolution_ttl;
+        }
+
+        if self.sources.is_empty() && !config.sources.enabled.is_empty() {
+            merged.sources = config.sources.enabled.clone();
+        }
+
+        let mut ignore_ids = self.ignore_ids.clone();
+        ignore_ids.extend(config.ignore.ids.clone());
+        merged.ignore_ids = ignore_ids;
+
+        if !self.quiet {
+            merged.quiet = config.output.quiet;
+        }
+        if !self.verbose {
+            merged.verbose = config.output.verbose;
+        }
+
+        merged
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -294,6 +411,42 @@ pub struct ResolversArgs {
 
 #[derive(Debug, Parser)]
 pub struct CheckVersionArgs {
+    #[arg(long, short)]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct ConfigInitArgs {
+    #[arg(long, short, value_name = "FILE")]
+    pub output: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    pub force: bool,
+
+    #[arg(long)]
+    pub minimal: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct ConfigValidateArgs {
+    #[arg(value_name = "FILE")]
+    pub config: Option<std::path::PathBuf>,
+
+    #[arg(long, short)]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct ConfigShowArgs {
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<std::path::PathBuf>,
+
+    #[arg(long)]
+    pub toml: bool,
+}
+
+#[derive(Debug, Parser)]
+pub struct ConfigPathArgs {
     #[arg(long, short)]
     pub verbose: bool,
 }
@@ -835,4 +988,227 @@ fn calculate_dependency_stats(
         .collect();
 
     DependencyStats::from_dependencies(&parsed_deps)
+}
+
+// Config command handlers
+
+pub async fn config_init(args: &ConfigInitArgs) -> Result<()> {
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from(".pysentry.toml"));
+
+    if output_path.exists() && !args.force {
+        anyhow::bail!(
+            "Configuration file already exists: {}. Use --force to overwrite.",
+            output_path.display()
+        );
+    }
+
+    let config_content = if args.minimal {
+        generate_minimal_config()
+    } else {
+        Config::generate_default_toml()
+    };
+
+    fs_err::write(&output_path, config_content)?;
+
+    println!("Created configuration file: {}", output_path.display());
+    println!();
+    println!("You can now customize your settings in this file.");
+    println!("Configuration reference:");
+    println!("- Format: human, json, sarif, markdown");
+    println!("- Severity: low, medium, high, critical");
+    println!("- Sources: pypa, pypi, osv");
+    println!("- Resolver: uv, pip-tools");
+
+    Ok(())
+}
+
+pub async fn config_validate(args: &ConfigValidateArgs) -> Result<()> {
+    let config_loader = if let Some(ref config_path) = args.config {
+        ConfigLoader::load_from_file(config_path)?
+    } else {
+        ConfigLoader::load()?
+    };
+
+    let config_path = config_loader.config_path_display();
+
+    if args.verbose {
+        println!("Validating configuration file: {config_path}");
+    }
+
+    // The configuration is already validated during loading
+    // If we get here, validation passed
+
+    if config_loader.config_path.is_some() {
+        println!("✅ Configuration is valid: {config_path}");
+
+        if args.verbose {
+            println!("Configuration details:");
+            println!("  Version: {}", config_loader.config.version);
+            println!("  Format: {}", config_loader.config.defaults.format);
+            println!("  Severity: {}", config_loader.config.defaults.severity);
+            println!(
+                "  Sources: {}",
+                config_loader.config.sources.enabled.join(", ")
+            );
+            println!(
+                "  Resolver: {}",
+                config_loader.config.resolver.resolver_type
+            );
+            println!("  Cache enabled: {}", config_loader.config.cache.enabled);
+        }
+    } else {
+        println!("No configuration file found. Using built-in defaults.");
+    }
+
+    Ok(())
+}
+
+pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
+    let config_loader = if let Some(ref config_path) = args.config {
+        ConfigLoader::load_from_file(config_path)?
+    } else {
+        ConfigLoader::load()?
+    };
+
+    if args.toml {
+        // Show raw TOML format
+        let toml_content = toml::to_string_pretty(&config_loader.config)
+            .context("Failed to serialize configuration to TOML")?;
+        println!("{toml_content}");
+    } else {
+        // Show human-readable format
+        println!(
+            "Configuration loaded from: {}",
+            config_loader.config_path_display()
+        );
+        println!();
+        println!("Effective configuration:");
+        println!("  Version: {}", config_loader.config.version);
+        println!("  Format: {}", config_loader.config.defaults.format);
+        println!("  Severity: {}", config_loader.config.defaults.severity);
+        println!("  Fail on: {}", config_loader.config.defaults.fail_on);
+        println!("  Scope: {}", config_loader.config.defaults.scope);
+        println!(
+            "  Direct only: {}",
+            config_loader.config.defaults.direct_only
+        );
+        println!("  Detailed: {}", config_loader.config.defaults.detailed);
+        println!();
+        println!(
+            "  Sources: {}",
+            config_loader.config.sources.enabled.join(", ")
+        );
+        println!();
+        println!(
+            "  Resolver: {} (fallback: {})",
+            config_loader.config.resolver.resolver_type, config_loader.config.resolver.fallback
+        );
+        println!();
+        println!("  Cache enabled: {}", config_loader.config.cache.enabled);
+        if let Some(ref cache_dir) = config_loader.config.cache.directory {
+            println!("  Cache directory: {cache_dir}");
+        }
+        println!(
+            "  Resolution cache TTL: {} hours",
+            config_loader.config.cache.resolution_ttl
+        );
+        println!(
+            "  Vulnerability cache TTL: {} hours",
+            config_loader.config.cache.vulnerability_ttl
+        );
+        println!();
+        println!("  Output quiet: {}", config_loader.config.output.quiet);
+        println!("  Output verbose: {}", config_loader.config.output.verbose);
+        println!("  Output color: {}", config_loader.config.output.color);
+        println!();
+        if !config_loader.config.ignore.ids.is_empty() {
+            println!(
+                "  Ignored IDs: {}",
+                config_loader.config.ignore.ids.join(", ")
+            );
+        }
+        if !config_loader.config.ignore.patterns.is_empty() {
+            println!(
+                "  Ignored patterns: {}",
+                config_loader.config.ignore.patterns.join(", ")
+            );
+        }
+        if !config_loader.config.projects.is_empty() {
+            println!(
+                "  Project overrides: {} configured",
+                config_loader.config.projects.len()
+            );
+        }
+        println!();
+        println!("  CI enabled: {}", config_loader.config.ci.enabled);
+        println!("  CI format: {}", config_loader.config.ci.format);
+        println!("  CI fail on: {}", config_loader.config.ci.fail_on);
+        println!("  CI annotations: {}", config_loader.config.ci.annotations);
+    }
+
+    Ok(())
+}
+
+pub async fn config_path(args: &ConfigPathArgs) -> Result<()> {
+    let config_loader = ConfigLoader::load()?;
+
+    if let Some(config_path) = config_loader.config_path {
+        println!("{}", config_path.display());
+
+        if args.verbose {
+            println!();
+            println!("Configuration file found and loaded successfully.");
+
+            // Show file size and modification time
+            if let Ok(metadata) = fs_err::metadata(&config_path) {
+                println!("Size: {} bytes", metadata.len());
+                if let Ok(modified) = metadata.modified() {
+                    println!("Modified: {modified:?}");
+                }
+            }
+        }
+    } else if args.verbose {
+        println!("No configuration file found.");
+        println!("Using built-in defaults.");
+        println!();
+        println!("To create a configuration file, run:");
+        println!("  pysentry config init");
+    } else {
+        // Exit with code 1 to indicate no config file found
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn generate_minimal_config() -> String {
+    r#"# PySentry minimal configuration
+version = 1
+
+[defaults]
+# Set your preferred severity level
+severity = "medium"
+fail_on = "high"
+
+# Uncomment to include dev/optional dependencies
+# scope = "all"
+
+[sources]
+# Choose your vulnerability sources
+enabled = ["pypa"]
+
+# Uncomment to add more sources
+# enabled = ["pypa", "pypi", "osv"]
+
+[ignore]
+# Add vulnerability IDs to ignore
+ids = []
+
+# Example:
+# ids = ["GHSA-1234-5678-90ab", "CVE-2024-12345"]
+"#
+    .to_string()
 }

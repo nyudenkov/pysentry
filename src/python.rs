@@ -16,6 +16,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+use crate::cli::{config_init, config_path, config_show, config_validate, ConfigCommands};
+use anyhow::Result;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use std::sync::Once;
@@ -29,6 +31,15 @@ fn ensure_tracing_initialized() {
             .with_env_filter(EnvFilter::from_default_env())
             .init();
     });
+}
+
+async fn handle_config_command(config_command: ConfigCommands) -> Result<()> {
+    match config_command {
+        ConfigCommands::Init(init_args) => config_init(&init_args).await,
+        ConfigCommands::Validate(validate_args) => config_validate(&validate_args).await,
+        ConfigCommands::Show(show_args) => config_show(&show_args).await,
+        ConfigCommands::Path(path_args) => config_path(&path_args).await,
+    }
 }
 
 #[pyfunction]
@@ -81,6 +92,15 @@ fn run_cli(args: Vec<String>) -> PyResult<i32> {
             }
             Some(Commands::CheckVersion(check_version_args)) => {
                 match check_version(check_version_args.verbose).await {
+                    Ok(()) => Ok(0),
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        Ok(1)
+                    }
+                }
+            }
+            Some(Commands::Config(config_command)) => {
+                match handle_config_command(config_command).await {
                     Ok(()) => Ok(0),
                     Err(e) => {
                         eprintln!("Error: {e}");

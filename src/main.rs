@@ -20,7 +20,10 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use pysentry::cli::{audit, check_resolvers, check_version, Cli, Commands};
+use pysentry::cli::{
+    audit, check_resolvers, check_version, config_init, config_path, config_show, config_validate,
+    Cli, Commands, ConfigCommands,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,21 +32,31 @@ async fn main() -> Result<()> {
     match args.command {
         // No subcommand provided - run audit with flattened args
         None => {
-            let audit_args = args.audit_args;
+            let (merged_audit_args, _config) = match args.audit_args.load_and_merge_config() {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("Configuration error: {e}");
+                    std::process::exit(1);
+                }
+            };
 
-            let log_level = if audit_args.verbose { "info" } else { "error" };
+            let log_level = if merged_audit_args.verbose {
+                "info"
+            } else {
+                "error"
+            };
 
             tracing_subscriber::fmt()
                 .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
                 .init();
 
-            let cache_dir = audit_args.cache_dir.clone().unwrap_or_else(|| {
+            let cache_dir = merged_audit_args.cache_dir.clone().unwrap_or_else(|| {
                 dirs::cache_dir()
                     .unwrap_or_else(std::env::temp_dir)
                     .join("pysentry")
             });
 
-            let exit_code = audit(&audit_args, &cache_dir).await?;
+            let exit_code = audit(&merged_audit_args, &cache_dir).await?;
 
             std::process::exit(exit_code);
         }
@@ -73,6 +86,27 @@ async fn main() -> Result<()> {
                 .init();
 
             check_version(check_version_args.verbose).await?;
+            std::process::exit(0);
+        }
+        Some(Commands::Config(config_command)) => {
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::from_default_env().add_directive("error".parse()?))
+                .init();
+
+            match config_command {
+                ConfigCommands::Init(init_args) => {
+                    config_init(&init_args).await?;
+                }
+                ConfigCommands::Validate(validate_args) => {
+                    config_validate(&validate_args).await?;
+                }
+                ConfigCommands::Show(show_args) => {
+                    config_show(&show_args).await?;
+                }
+                ConfigCommands::Path(path_args) => {
+                    config_path(&path_args).await?;
+                }
+            }
             std::process::exit(0);
         }
     }

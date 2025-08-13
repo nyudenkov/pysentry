@@ -22,6 +22,10 @@
 //! using various vulnerability databases (PyPA, PyPI JSON API, OSV.dev).
 
 pub use cache::{AuditCache, Cache, CacheBucket, CacheEntry, DatabaseMetadata, Freshness};
+pub use config::{
+    CacheConfig, CiConfig, Config, ConfigLoader, DefaultConfig, IgnoreConfig, OutputConfig,
+    PackageIgnoreRule, ProjectConfig, ResolverConfig, SourcesConfig,
+};
 pub use dependency::scanner::{DependencyScanner, DependencyStats};
 pub use output::report::{AuditReport, AuditSummary, ReportGenerator};
 pub use providers::{VulnerabilityProvider, VulnerabilitySource};
@@ -36,6 +40,7 @@ pub use vulnerability::{
 
 pub mod cache;
 pub mod cli;
+pub mod config;
 pub mod dependency;
 pub mod output;
 pub mod parsers;
