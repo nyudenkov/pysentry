@@ -29,12 +29,24 @@ use std::path::Path;
 use std::str::FromStr;
 use tracing::{debug, info, warn};
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+enum DependencyGroupEntry {
+    /// A regular dependency specification string (PEP 508)
+    Dependency(String),
+    /// An include-group reference
+    IncludeGroup {
+        #[serde(rename = "include-group")]
+        include_group: String,
+    },
+}
+
 /// PyProject.toml structure for parsing dependencies
 #[derive(Debug, Deserialize)]
 struct PyProject {
     project: Option<Project>,
     #[serde(rename = "dependency-groups")]
-    dependency_groups: Option<HashMap<String, Vec<String>>>,
+    dependency_groups: Option<HashMap<String, Vec<DependencyGroupEntry>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -482,6 +494,54 @@ impl ProjectParser for PyProjectParser {
 }
 
 impl PyProjectParser {
+    /// Resolve dependency group entries recursively, handling include-group references
+    #[allow(clippy::only_used_in_recursion)]
+    fn resolve_dependency_group_entries(
+        &self,
+        entries: &[DependencyGroupEntry],
+        dep_groups: &HashMap<String, Vec<DependencyGroupEntry>>,
+        _visited: &mut HashSet<String>,
+        current_path: &mut Vec<String>,
+    ) -> Result<Vec<String>> {
+        let mut resolved_deps = Vec::new();
+
+        for entry in entries {
+            match entry {
+                DependencyGroupEntry::Dependency(dep_str) => {
+                    resolved_deps.push(dep_str.clone());
+                }
+                DependencyGroupEntry::IncludeGroup { include_group } => {
+                    if current_path.contains(include_group) {
+                        return Err(AuditError::InvalidDependency(format!(
+                            "Circular dependency detected in include-group: {} -> {}",
+                            current_path.join(" -> "),
+                            include_group
+                        )));
+                    }
+
+                    if let Some(included_entries) = dep_groups.get(include_group) {
+                        current_path.push(include_group.clone());
+
+                        let included_deps = self.resolve_dependency_group_entries(
+                            included_entries,
+                            dep_groups,
+                            _visited,
+                            current_path,
+                        )?;
+
+                        resolved_deps.extend(included_deps);
+
+                        current_path.pop();
+                    } else {
+                        warn!("Referenced dependency group '{}' not found", include_group);
+                    }
+                }
+            }
+        }
+
+        Ok(resolved_deps)
+    }
+
     /// Get direct dependencies with their types and version specs from pyproject.toml
     fn get_direct_dependencies_with_info(
         &self,
@@ -538,17 +598,34 @@ impl PyProjectParser {
         // Add development dependencies if requested (PEP 735 dependency-groups)
         if include_dev {
             if let Some(dep_groups) = &pyproject.dependency_groups {
-                // Include all dependency groups for graph analysis
-                for (group_name, deps) in dep_groups {
+                // Resolve all dependency groups with include-group support
+                for (group_name, entries) in dep_groups {
                     debug!("Processing dependency group '{}' as Optional", group_name);
-                    for dep_str in deps {
-                        if let Ok(package_name) = self.extract_package_name_from_dep_string(dep_str)
-                        {
-                            // All dependency groups are classified as Optional
-                            deps_map.insert(
-                                dep_str.clone(),
-                                (package_name, DependencyType::Optional, dep_str.clone()),
-                            );
+
+                    let mut visited = HashSet::new();
+                    let mut current_path = Vec::new();
+
+                    match self.resolve_dependency_group_entries(
+                        entries,
+                        dep_groups,
+                        &mut visited,
+                        &mut current_path,
+                    ) {
+                        Ok(resolved_deps) => {
+                            for dep_str in resolved_deps {
+                                if let Ok(package_name) =
+                                    self.extract_package_name_from_dep_string(&dep_str)
+                                {
+                                    // All dependency groups are classified as Optional
+                                    deps_map.insert(
+                                        dep_str.clone(),
+                                        (package_name, DependencyType::Optional, dep_str.clone()),
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to resolve dependency group '{}': {}", group_name, e);
                         }
                     }
                 }
@@ -949,5 +1026,284 @@ charset-normalizer==2.1.1
             &direct_deps_with_info,
         );
         assert_eq!(dep_type, DependencyType::Main);
+    }
+
+    #[test]
+    fn test_dependency_group_entry_deserialization() {
+        use serde_json;
+
+        let json = r#""pytest>=6.0""#;
+        let entry: DependencyGroupEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            DependencyGroupEntry::Dependency(dep) => assert_eq!(dep, "pytest>=6.0"),
+            _ => panic!("Expected Dependency variant"),
+        }
+
+        let json = r#"{"include-group": "test"}"#;
+        let entry: DependencyGroupEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            DependencyGroupEntry::IncludeGroup { include_group } => {
+                assert_eq!(include_group, "test")
+            }
+            _ => panic!("Expected IncludeGroup variant"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_dependency_group_entries_simple() {
+        let parser = PyProjectParser::new(None);
+        let mut dep_groups = HashMap::new();
+
+        dep_groups.insert(
+            "test".to_string(),
+            vec![
+                DependencyGroupEntry::Dependency("pytest".to_string()),
+                DependencyGroupEntry::Dependency("coverage".to_string()),
+            ],
+        );
+
+        let mut visited = HashSet::new();
+        let mut current_path = Vec::new();
+
+        let result = parser
+            .resolve_dependency_group_entries(
+                &dep_groups["test"],
+                &dep_groups,
+                &mut visited,
+                &mut current_path,
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"pytest".to_string()));
+        assert!(result.contains(&"coverage".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_dependency_group_entries_with_includes() {
+        let parser = PyProjectParser::new(None);
+        let mut dep_groups = HashMap::new();
+
+        dep_groups.insert(
+            "test".to_string(),
+            vec![
+                DependencyGroupEntry::Dependency("pytest".to_string()),
+                DependencyGroupEntry::Dependency("coverage".to_string()),
+            ],
+        );
+
+        dep_groups.insert(
+            "typing".to_string(),
+            vec![
+                DependencyGroupEntry::Dependency("mypy".to_string()),
+                DependencyGroupEntry::Dependency("types-requests".to_string()),
+            ],
+        );
+
+        dep_groups.insert(
+            "typing-test".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "typing".to_string(),
+                },
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "test".to_string(),
+                },
+                DependencyGroupEntry::Dependency("additional-dep".to_string()),
+            ],
+        );
+
+        let mut visited = HashSet::new();
+        let mut current_path = Vec::new();
+
+        let result = parser
+            .resolve_dependency_group_entries(
+                &dep_groups["typing-test"],
+                &dep_groups,
+                &mut visited,
+                &mut current_path,
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 5);
+        assert!(result.contains(&"mypy".to_string()));
+        assert!(result.contains(&"types-requests".to_string()));
+        assert!(result.contains(&"pytest".to_string()));
+        assert!(result.contains(&"coverage".to_string()));
+        assert!(result.contains(&"additional-dep".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_dependency_group_entries_nested_includes() {
+        let parser = PyProjectParser::new(None);
+        let mut dep_groups = HashMap::new();
+
+        dep_groups.insert(
+            "base".to_string(),
+            vec![DependencyGroupEntry::Dependency("requests".to_string())],
+        );
+
+        dep_groups.insert(
+            "middleware".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "base".to_string(),
+                },
+                DependencyGroupEntry::Dependency("flask".to_string()),
+            ],
+        );
+
+        dep_groups.insert(
+            "full".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "middleware".to_string(),
+                },
+                DependencyGroupEntry::Dependency("pytest".to_string()),
+            ],
+        );
+
+        let mut visited = HashSet::new();
+        let mut current_path = Vec::new();
+
+        let result = parser
+            .resolve_dependency_group_entries(
+                &dep_groups["full"],
+                &dep_groups,
+                &mut visited,
+                &mut current_path,
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&"requests".to_string()));
+        assert!(result.contains(&"flask".to_string()));
+        assert!(result.contains(&"pytest".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_dependency_group_entries_cycle_detection() {
+        let parser = PyProjectParser::new(None);
+        let mut dep_groups = HashMap::new();
+
+        dep_groups.insert(
+            "a".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "b".to_string(),
+                },
+                DependencyGroupEntry::Dependency("dep-a".to_string()),
+            ],
+        );
+
+        dep_groups.insert(
+            "b".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "c".to_string(),
+                },
+                DependencyGroupEntry::Dependency("dep-b".to_string()),
+            ],
+        );
+
+        dep_groups.insert(
+            "c".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "a".to_string(),
+                },
+                DependencyGroupEntry::Dependency("dep-c".to_string()),
+            ],
+        );
+
+        let mut visited = HashSet::new();
+        let mut current_path = Vec::new();
+
+        let result = parser.resolve_dependency_group_entries(
+            &dep_groups["a"],
+            &dep_groups,
+            &mut visited,
+            &mut current_path,
+        );
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        assert!(error_msg.contains("Circular dependency detected"));
+    }
+
+    #[test]
+    fn test_resolve_dependency_group_entries_missing_group() {
+        let parser = PyProjectParser::new(None);
+        let mut dep_groups = HashMap::new();
+
+        dep_groups.insert(
+            "test".to_string(),
+            vec![
+                DependencyGroupEntry::IncludeGroup {
+                    include_group: "missing".to_string(),
+                },
+                DependencyGroupEntry::Dependency("pytest".to_string()),
+            ],
+        );
+
+        let mut visited = HashSet::new();
+        let mut current_path = Vec::new();
+
+        let result = parser
+            .resolve_dependency_group_entries(
+                &dep_groups["test"],
+                &dep_groups,
+                &mut visited,
+                &mut current_path,
+            )
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&"pytest".to_string()));
+    }
+
+    #[test]
+    fn test_pyproject_toml_with_include_groups() {
+        let toml_content = r#"
+[dependency-groups]
+test = ["pytest", "coverage"]
+typing = ["mypy", "types-requests"]
+typing-test = [
+    {include-group = "typing"},
+    {include-group = "test"},
+    "additional-dep"
+]
+"#;
+
+        let pyproject: PyProject = toml::from_str(toml_content).unwrap();
+        let dep_groups = pyproject.dependency_groups.unwrap();
+
+        assert_eq!(dep_groups.len(), 3);
+
+        let test_group = &dep_groups["test"];
+        assert_eq!(test_group.len(), 2);
+        match &test_group[0] {
+            DependencyGroupEntry::Dependency(dep) => assert_eq!(dep, "pytest"),
+            _ => panic!("Expected Dependency variant"),
+        }
+
+        let typing_test_group = &dep_groups["typing-test"];
+        assert_eq!(typing_test_group.len(), 3);
+        match &typing_test_group[0] {
+            DependencyGroupEntry::IncludeGroup { include_group } => {
+                assert_eq!(include_group, "typing")
+            }
+            _ => panic!("Expected IncludeGroup variant"),
+        }
+        match &typing_test_group[1] {
+            DependencyGroupEntry::IncludeGroup { include_group } => {
+                assert_eq!(include_group, "test")
+            }
+            _ => panic!("Expected IncludeGroup variant"),
+        }
+        match &typing_test_group[2] {
+            DependencyGroupEntry::Dependency(dep) => assert_eq!(dep, "additional-dep"),
+            _ => panic!("Expected Dependency variant"),
+        }
     }
 }
