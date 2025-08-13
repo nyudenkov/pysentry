@@ -1,0 +1,9 @@
+- id: pysentry
+  name: pysentry
+  description: "Fast security vulnerability scanner for Python dependencies"
+  entry: pysentry
+  language: python
+  always_run: true
+  additional_dependencies: ["pysentry-rs==0.3.2"]
+  minimum_pre_commit_version: "2.9.2"
+  types: [python]
