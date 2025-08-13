@@ -1,6 +1,6 @@
 [package]
 name = "pysentry"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
@@ -21,10 +21,10 @@ path = "src/main.rs"
 python = ["pyo3"]
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 async-trait = "0.1.88"
 chrono = { version = "0.4.41", features = ["serde"] }
-clap = { version = "4.5.43", features = ["derive"] }
+clap = { version = "4.5.45", features = ["derive"] }
 dirs = "6.0.0"
 fs-err = "3.1.1"
 futures = "0.3.31"

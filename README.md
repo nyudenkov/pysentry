@@ -263,6 +263,52 @@ pysentry --no-resolution-cache --format json --output security-report.json
 
 ## Configuration
 
+PySentry supports TOML-based configuration files for persistent settings management. Configuration files follow a hierarchical discovery pattern:
+
+1. **Project-level**: `.pysentry.toml` in current or parent directories
+2. **User-level**: `~/.config/pysentry/config.toml` (Linux/macOS)
+3. **System-level**: `/etc/pysentry/config.toml` (Unix systems)
+
+### Configuration File Example
+
+```toml
+version = 1
+
+[defaults]
+format = "json"
+severity = "medium"
+fail_on = "high"
+scope = "all"
+direct_only = false
+
+[sources]
+enabled = ["pypa", "osv"]
+
+[resolver]
+type = "uv"
+fallback = "pip-tools"
+
+[cache]
+enabled = true
+resolution_ttl = 48
+vulnerability_ttl = 72
+
+[output]
+quiet = false
+verbose = false
+color = "auto"
+
+[ignore]
+ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
+```
+
+### Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PYSENTRY_CONFIG` | Override config file path | `PYSENTRY_CONFIG=/path/to/config.toml` |
+| `PYSENTRY_NO_CONFIG` | Disable all config file loading | `PYSENTRY_NO_CONFIG=1` |
+
 ### Command Line Options
 
 | Option                     | Description                                             | Default           |
@@ -273,6 +319,7 @@ pysentry --no-resolution-cache --format json --output security-report.json
 | `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa`            |
 | `--all-extras`             | Include all dependencies (main + dev + optional)        | `false`           |
 | `--direct-only`            | Check only direct dependencies                          | `false`           |
+| `--detailed`               | Show full vulnerability descriptions instead of truncated| `false`           |
 | `--ignore`                 | Vulnerability IDs to ignore (repeatable)                | `[]`              |
 | `--output`                 | Output file path                                        | `stdout`          |
 | `--no-cache`               | Disable all caching                                     | `false`           |
