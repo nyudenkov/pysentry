@@ -261,6 +261,35 @@ pysentry --clear-resolution-cache --sources pypa,osv --format sarif
 pysentry --no-resolution-cache --format json --output security-report.json
 ```
 
+## Pre-commit Integration
+
+PySentry integrates seamlessly with [pre-commit](https://pre-commit.com/) to automatically scan for vulnerabilities before commits.
+
+### Setup
+
+Add PySentry to your `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/nyudenkov/pysentry
+    hooks:
+      - id: pysentry # default pysentry settings
+```
+
+### Advanced Configuration
+
+```yaml
+repos:
+  - repo: https://github.com/nyudenkov/pysentry
+    hooks:
+      - id: pysentry
+        args: ["--sources", "pypa,osv", "--fail-on", "high"]
+```
+
+### Installation Requirements
+
+Pre-commit will automatically install PySentry, uv and pip-tools via PyPI.
+
 ## Configuration
 
 PySentry supports TOML-based configuration files for persistent settings management. Configuration files follow a hierarchical discovery pattern:
@@ -304,33 +333,33 @@ ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
 
 ### Environment Variables
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `PYSENTRY_CONFIG` | Override config file path | `PYSENTRY_CONFIG=/path/to/config.toml` |
-| `PYSENTRY_NO_CONFIG` | Disable all config file loading | `PYSENTRY_NO_CONFIG=1` |
+| Variable             | Description                     | Example                                |
+| -------------------- | ------------------------------- | -------------------------------------- |
+| `PYSENTRY_CONFIG`    | Override config file path       | `PYSENTRY_CONFIG=/path/to/config.toml` |
+| `PYSENTRY_NO_CONFIG` | Disable all config file loading | `PYSENTRY_NO_CONFIG=1`                 |
 
 ### Command Line Options
 
-| Option                     | Description                                             | Default           |
-| -------------------------- | ------------------------------------------------------- | ----------------- |
-| `--format`                 | Output format: `human`, `json`, `sarif`, `markdown`     | `human`           |
-| `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`   | `low`             |
-| `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity      | `medium`          |
-| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa`            |
-| `--all-extras`             | Include all dependencies (main + dev + optional)        | `false`           |
-| `--direct-only`            | Check only direct dependencies                          | `false`           |
-| `--detailed`               | Show full vulnerability descriptions instead of truncated| `false`           |
-| `--ignore`                 | Vulnerability IDs to ignore (repeatable)                | `[]`              |
-| `--output`                 | Output file path                                        | `stdout`          |
-| `--no-cache`               | Disable all caching                                     | `false`           |
-| `--cache-dir`              | Custom cache directory                                  | Platform-specific |
-| `--resolution-cache-ttl`   | Resolution cache TTL in hours                           | `24`              |
-| `--no-resolution-cache`    | Disable resolution caching only                         | `false`           |
-| `--clear-resolution-cache` | Clear resolution cache on startup                       | `false`           |
-| `--verbose`                | Enable verbose output                                   | `false`           |
-| `--quiet`                  | Suppress non-error output                               | `false`           |
-| `--resolver`               | Dependency resolver: `auto`, `uv`, `pip-tools`          | `auto`            |
-| `--requirements`           | Additional requirements files (repeatable)              | `[]`              |
+| Option                     | Description                                               | Default           |
+| -------------------------- | --------------------------------------------------------- | ----------------- |
+| `--format`                 | Output format: `human`, `json`, `sarif`, `markdown`       | `human`           |
+| `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`     | `low`             |
+| `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity        | `medium`          |
+| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa`            |
+| `--all-extras`             | Include all dependencies (main + dev + optional)          | `false`           |
+| `--direct-only`            | Check only direct dependencies                            | `false`           |
+| `--detailed`               | Show full vulnerability descriptions instead of truncated | `false`           |
+| `--ignore`                 | Vulnerability IDs to ignore (repeatable)                  | `[]`              |
+| `--output`                 | Output file path                                          | `stdout`          |
+| `--no-cache`               | Disable all caching                                       | `false`           |
+| `--cache-dir`              | Custom cache directory                                    | Platform-specific |
+| `--resolution-cache-ttl`   | Resolution cache TTL in hours                             | `24`              |
+| `--no-resolution-cache`    | Disable resolution caching only                           | `false`           |
+| `--clear-resolution-cache` | Clear resolution cache on startup                         | `false`           |
+| `--verbose`                | Enable verbose output                                     | `false`           |
+| `--quiet`                  | Suppress non-error output                                 | `false`           |
+| `--resolver`               | Dependency resolver: `auto`, `uv`, `pip-tools`            | `auto`            |
+| `--requirements`           | Additional requirements files (repeatable)                | `[]`              |
 
 ### Cache Management
 
