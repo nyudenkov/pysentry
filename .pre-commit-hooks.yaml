@@ -5,6 +5,6 @@
   language: python
   always_run: true
   additional_dependencies:
-    ["pysentry-rs==0.3.3", "uv==0.8.9", "pip-tools==7.5.0"]
+    ["pysentry-rs==0.3.4", "uv==0.8.9", "pip-tools==7.5.0"]
   minimum_pre_commit_version: "2.9.2"
   types: [python]
