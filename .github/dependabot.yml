@@ -15,8 +15,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    include:
-      - "pyproject.toml"
+    ignore:
+      - dependency-name: "*"
+        directory: "/fixtures/*"
+      - dependency-name: "*"
+        directory: "/benchmarks/*"
     groups:
       python-dependencies:
         patterns:
