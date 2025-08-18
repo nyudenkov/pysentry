@@ -273,7 +273,7 @@ Add PySentry to your `.pre-commit-config.yaml`:
 
 ```yaml
 repos:
-  - repo: https://github.com/nyudenkov/pysentry
+  - repo: https://github.com/pysentry/pysentry-pre-commit
     hooks:
       - id: pysentry # default pysentry settings
 ```
@@ -282,7 +282,7 @@ repos:
 
 ```yaml
 repos:
-  - repo: https://github.com/nyudenkov/pysentry
+  - repo: https://github.com/pysentry/pysentry-pre-commit
     hooks:
       - id: pysentry
         args: ["--sources", "pypa,osv", "--fail-on", "high"]
