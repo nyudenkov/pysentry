@@ -27,6 +27,7 @@ use std::time::{Duration, SystemTime};
 pub enum CacheBucket {
     VulnerabilityDatabase,
     DependencyResolution,
+    UserMessages,
 }
 
 impl CacheBucket {
@@ -34,6 +35,7 @@ impl CacheBucket {
         match self {
             CacheBucket::VulnerabilityDatabase => "vulnerability-db",
             CacheBucket::DependencyResolution => "dependency-resolution",
+            CacheBucket::UserMessages => "user-messages",
         }
     }
 }

@@ -708,6 +708,19 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
         println!("{report_output}");
     }
 
+    // Show feedback message (once per day)
+    if !audit_args.quiet {
+        let audit_cache = AuditCache::new(cache_dir.to_path_buf());
+        if audit_cache.should_show_feedback().await {
+            println!("\n💬 Found a bug? Have ideas for improvements? Or maybe PySentry saved you some time?");
+            println!("   I welcome all feedback, suggestions, and collaboration ideas at nikita@pysentry.com");
+
+            if let Err(e) = audit_cache.record_feedback_shown().await {
+                tracing::debug!("Failed to record feedback shown: {}", e);
+            }
+        }
+    }
+
     if report.should_fail_on_severity(&audit_args.fail_on.clone().into()) {
         Ok(1)
     } else {

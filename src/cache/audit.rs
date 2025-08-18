@@ -267,6 +267,31 @@ pub struct ResolutionCacheStats {
     pub pip_tools_entries: usize,
 }
 
+impl AuditCache {
+    pub fn feedback_entry(&self) -> CacheEntry {
+        self.cache
+            .entry(CacheBucket::UserMessages, "last_feedback_shown")
+    }
+
+    pub async fn should_show_feedback(&self) -> bool {
+        let entry = self.feedback_entry();
+        let one_day = Duration::from_secs(24 * 3600);
+
+        match entry.freshness(one_day) {
+            Ok(Freshness::Fresh) => false, // Shown recently, don't show
+            _ => true,                     // Stale or doesn't exist, show feedback
+        }
+    }
+
+    pub async fn record_feedback_shown(&self) -> Result<()> {
+        let entry = self.feedback_entry();
+        let now = Utc::now();
+        let timestamp = serde_json::to_vec(&now)?;
+        entry.write(&timestamp).await?;
+        Ok(())
+    }
+}
+
 impl Clone for AuditCache {
     fn clone(&self) -> Self {
         Self {
