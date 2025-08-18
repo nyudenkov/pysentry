@@ -7,7 +7,7 @@ verify_ssl = true
 pytest = "*"
 
 [packages]
-django = "==3.0.0"
+django = "==4.2.22"
 pillow = "==8.0.0"
 pyjwt = "==1.7.0"
 requests = "==2.20.0"
