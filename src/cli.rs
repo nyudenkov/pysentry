@@ -653,6 +653,68 @@ pub async fn check_version(verbose: bool) -> Result<()> {
     Ok(())
 }
 
+pub async fn check_for_update_silent() -> Result<Option<String>> {
+    const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const GITHUB_REPO: &str = "nyudenkov/pysentry";
+
+    let client = reqwest::Client::new();
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+
+    let response = match client
+        .get(&url)
+        .header("User-Agent", format!("pysentry/{CURRENT_VERSION}"))
+        .header("Accept", "application/vnd.github+json")
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            return Ok(None);
+        }
+    };
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let release_info: serde_json::Value = match response.json().await {
+        Ok(json) => json,
+        Err(_) => {
+            return Ok(None);
+        }
+    };
+
+    let latest_tag = match release_info["tag_name"].as_str() {
+        Some(tag) => tag,
+        None => {
+            return Ok(None);
+        }
+    };
+
+    let latest_version_str = latest_tag.strip_prefix('v').unwrap_or(latest_tag);
+
+    let current_version = match Version::from_str(CURRENT_VERSION) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(None);
+        }
+    };
+
+    let latest_version = match Version::from_str(latest_version_str) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(None);
+        }
+    };
+
+    if latest_version > current_version {
+        Ok(Some(latest_version_str.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
 pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
     if audit_args.verbose {
         eprintln!(
@@ -717,6 +779,18 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
 
             if let Err(e) = audit_cache.record_feedback_shown().await {
                 tracing::debug!("Failed to record feedback shown: {}", e);
+            }
+        }
+
+        // Check for updates (once per day)
+        if audit_cache.should_check_for_updates().await {
+            if let Ok(Some(latest_version)) = check_for_update_silent().await {
+                const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+                println!("\n✨ Update available! PySentry {latest_version} is now available (you're running {CURRENT_VERSION})");
+            }
+
+            if let Err(e) = audit_cache.record_update_check().await {
+                tracing::debug!("Failed to record update check: {}", e);
             }
         }
     }

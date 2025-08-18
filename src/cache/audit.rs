@@ -290,6 +290,29 @@ impl AuditCache {
         entry.write(&timestamp).await?;
         Ok(())
     }
+
+    pub fn update_check_entry(&self) -> CacheEntry {
+        self.cache
+            .entry(CacheBucket::UserMessages, "last_update_check")
+    }
+
+    pub async fn should_check_for_updates(&self) -> bool {
+        let entry = self.update_check_entry();
+        let one_day = Duration::from_secs(24 * 3600);
+
+        match entry.freshness(one_day) {
+            Ok(Freshness::Fresh) => false, // Checked recently, don't check
+            _ => true,                     // Stale or doesn't exist, check for updates
+        }
+    }
+
+    pub async fn record_update_check(&self) -> Result<()> {
+        let entry = self.update_check_entry();
+        let now = Utc::now();
+        let timestamp = serde_json::to_vec(&now)?;
+        entry.write(&timestamp).await?;
+        Ok(())
+    }
 }
 
 impl Clone for AuditCache {
