@@ -1,0 +1,27 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+pytest = "*"
+black = ">=22.0.0"
+flake8 = "~=4.0"
+mypy = "==1.0.1"
+
+[packages]
+django = "==4.2.7"
+requests = ">=2.25.0,<3.0.0"
+pillow = ">=9.0.1"
+psycopg2-binary = "*"
+redis = "~=4.5.0"
+celery = {extras = ["redis"], version = ">=5.2.0"}
+python-dotenv = "*"
+
+[requires]
+python_version = "3.11"
+
+[scripts]
+test = "pytest"
+lint = "flake8 ."
+format = "black ."

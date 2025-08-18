@@ -4,6 +4,8 @@
 
 [Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12) | [Latest PySentry - pip-audit benchmark](benchmarks/results/latest.md)
 
+Please, send feedback to nikita@pysentry.com
+
 A fast, reliable security vulnerability scanner for Python projects, written in Rust.
 
 ## Overview
