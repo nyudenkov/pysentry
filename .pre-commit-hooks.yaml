@@ -1,7 +1,7 @@
 - id: pysentry
   name: pysentry
   description: "Fast security vulnerability scanner for Python dependencies"
-  entry: pysentry
+  entry: pysentry-rs
   language: python
   always_run: true
   additional_dependencies:
