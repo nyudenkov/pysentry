@@ -10,11 +10,11 @@ A fast, reliable security vulnerability scanner for Python projects, written in 
 
 ## Overview
 
-PySentry audits Python projects for known security vulnerabilities by analyzing dependency files (`uv.lock`, `poetry.lock`, `pyproject.toml`, `requirements.txt`) and cross-referencing them against multiple vulnerability databases. It provides comprehensive reporting with support for various output formats and filtering options.
+PySentry audits Python projects for known security vulnerabilities by analyzing dependency files (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `pyproject.toml`, `Pipfile`, `requirements.txt`) and cross-referencing them against multiple vulnerability databases. It provides comprehensive reporting with support for various output formats and filtering options.
 
 ## Key Features
 
-- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `pyproject.toml`, and `requirements.txt` files
+- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pyproject.toml`, `Pipfile`, and `requirements.txt` files
 - **External Resolver Integration**: Leverages `uv` and `pip-tools` for accurate requirements.txt constraint solving
 - **Multiple Data Sources**:
   - PyPA Advisory Database (default)
@@ -167,7 +167,7 @@ uvx pysentry-rs /path/to/python/project
 pysentry
 pysentry /path/to/python/project
 
-# Automatically detects project type (uv.lock, poetry.lock, pyproject.toml, requirements.txt)
+# Automatically detects project type (uv.lock, poetry.lock, Pipfile.lock, pyproject.toml, Pipfile, requirements.txt)
 pysentry /path/to/project
 
 # Force specific resolver
@@ -470,6 +470,46 @@ Full support for Poetry lock files:
 - Handles Poetry's dependency groups and optional dependencies
 - Perfect for Poetry-managed projects with established lock files
 
+### Pipfile.lock Files
+
+Full support for Pipenv lock files with exact version resolution:
+
+- **Exact Version Resolution**: Scans exact dependency versions locked by Pipenv
+- **Lock-File Only Analysis**: Relies purely on the lock file structure, no Pipfile parsing needed
+- **Complete Dependency Tree**: Analyzes all resolved dependencies including transitive ones
+- **Dependency Classification**: Distinguishes between default dependencies and development groups
+
+**Key Features:**
+
+- No external tools required
+- Fast parsing with exact version information
+- Handles Pipenv's dependency groups (default and develop)
+- Perfect for Pipenv-managed projects with established lock files
+
+### Pipfile Files (External Resolution)
+
+Support for Pipfile specification files using external dependency resolvers:
+
+**Key Features:**
+
+- **Dependencies Resolution**: Converts version constraints from Pipfile to exact versions using mature external tools
+- **Multiple Resolver Support**:
+  - **uv**: Rust-based resolver, extremely fast and reliable (recommended)
+  - **pip-tools**: Python-based resolver using `pip-compile`, widely compatible
+- **Auto-detection**: Automatically detects and uses the best available resolver in your environment
+- **Dependency Groups**: Supports both default packages and dev-packages sections
+- **Complex Constraint Handling**: Supports version ranges, Git dependencies, and environment markers
+
+**Resolution Workflow:**
+
+1. Detects `Pipfile` in your project (when `Pipfile.lock` is not present)
+2. Auto-detects available resolver (`uv` or `pip-tools`) in current environment
+3. Resolves version constraints to exact dependency versions
+4. Scans resolved dependencies for vulnerabilities
+5. Reports findings with dependency group classification
+
+**Note**: When both `Pipfile` and `Pipfile.lock` are present, PySentry prioritizes the lock file for better accuracy. Consider using `pipenv lock` to generate a lock file for the most precise vulnerability scanning.
+
 ### requirements.txt Files (External Resolution)
 
 Advanced support for `requirements.txt` files using external dependency resolvers:
@@ -708,7 +748,7 @@ pysentry /path/to/python/project
 pysentry --requirements requirements-dev.txt --requirements requirements-test.txt
 
 # Check if higher-priority files exist (they take precedence)
-ls uv.lock poetry.lock pyproject.toml
+ls uv.lock poetry.lock Pipfile.lock pyproject.toml Pipfile requirements.txt
 ```
 
 **Performance Issues**
