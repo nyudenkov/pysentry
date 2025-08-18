@@ -12,13 +12,11 @@ updates:
           - "*"
 
   - package-ecosystem: "pip"
-    directory: "*"
+    directory: "/"
     schedule:
       interval: "weekly"
-    allow:
-      - dependency-type: "all"
-    ignore:
-      - dependency-name: "*"
+    include:
+      - "pyproject.toml"
     groups:
       python-dependencies:
         patterns:
