@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
+use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
 use crate::{
     types::{PackageName, Version},
     AuditError, Result,
@@ -181,7 +181,7 @@ impl ProjectParser for PoetryLockParser {
         _include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>> {
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         let lock_path = project_path.join("poetry.lock");
         debug!("Reading poetry lock file: {}", lock_path.display());
 
@@ -196,7 +196,7 @@ impl ProjectParser for PoetryLockParser {
                 "Poetry lock file contains no packages: {}",
                 lock_path.display()
             );
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         debug!("Found {} packages in poetry lock file", lock.packages.len());
@@ -265,7 +265,7 @@ impl ProjectParser for PoetryLockParser {
             "Scanned {} dependencies from poetry lock file",
             dependencies.len()
         );
-        Ok(dependencies)
+        Ok((dependencies, Vec::new()))
     }
 
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {

@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
+use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
 use crate::{
     dependency::resolvers::{DependencyResolver, ResolverRegistry},
     types::{PackageName, ResolverType, Version},
@@ -245,7 +245,7 @@ impl ProjectParser for PipfileParser {
         include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>> {
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         let pipfile_path = project_path.join("Pipfile");
         debug!("Reading Pipfile: {}", pipfile_path.display());
 
@@ -282,7 +282,7 @@ impl ProjectParser for PipfileParser {
                 "No dependencies found in Pipfile: {}",
                 pipfile_path.display()
             );
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         debug!(
@@ -290,7 +290,7 @@ impl ProjectParser for PipfileParser {
             direct_deps_with_info.len()
         );
 
-        if self.has_resolver() && self.is_resolver_available().await {
+        let dependencies = if self.has_resolver() && self.is_resolver_available().await {
             info!("Using external resolver for Pipfile dependency resolution");
             self.parse_with_resolver(
                 &direct_deps_with_info,
@@ -298,7 +298,7 @@ impl ProjectParser for PipfileParser {
                 include_optional,
                 direct_only,
             )
-            .await
+            .await?
         } else {
             warn!("No resolver available for Pipfile - using basic parsing (may miss transitive dependencies)");
             self.parse_without_resolver(
@@ -307,8 +307,10 @@ impl ProjectParser for PipfileParser {
                 include_optional,
                 direct_only,
             )
-            .await
-        }
+            .await?
+        };
+
+        Ok((dependencies, Vec::new()))
     }
 
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {

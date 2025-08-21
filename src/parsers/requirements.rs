@@ -21,7 +21,7 @@
 //! This parser can work with any dependency resolver (UV, pip-tools)
 //! through the DependencyResolver trait, providing better separation of concerns.
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
+use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
 use crate::{
     dependency::resolvers::{DependencyResolver, ResolverRegistry},
     types::{PackageName, ResolverType, Version},
@@ -360,7 +360,7 @@ impl ProjectParser for RequirementsParser {
         include_dev: bool,
         _include_optional: bool,
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>> {
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         info!(
             "Parsing requirements.txt files with {} resolver",
             self.resolver.name()
@@ -411,7 +411,7 @@ impl ProjectParser for RequirementsParser {
             "Successfully parsed {} dependencies from requirements.txt",
             filtered_dependencies.len()
         );
-        Ok(filtered_dependencies)
+        Ok((filtered_dependencies, Vec::new()))
     }
 
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {

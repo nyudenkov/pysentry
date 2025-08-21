@@ -17,7 +17,7 @@
  */
 
 pub use crate::parsers::DependencyStats;
-use crate::parsers::{ParsedDependency, ParserRegistry};
+use crate::parsers::{ParsedDependency, ParserRegistry, SkippedPackage};
 use crate::Result;
 use std::path::Path;
 use tracing::{debug, info};
@@ -47,11 +47,15 @@ impl DependencyScanner {
     }
 
     /// Scan dependencies from a project directory using the best available parser
-    pub async fn scan_project(&self, project_dir: &Path) -> Result<Vec<ScannedDependency>> {
+    /// Returns (dependencies, skipped_packages, parser_name)
+    pub async fn scan_project(
+        &self,
+        project_dir: &Path,
+    ) -> Result<(Vec<ScannedDependency>, Vec<SkippedPackage>, String)> {
         debug!("Scanning dependencies in: {}", project_dir.display());
 
         // Use parser registry to automatically select and parse with the best parser
-        let (parsed_dependencies, parser_name) = self
+        let (parsed_dependencies, skipped_packages, parser_name) = self
             .parser_registry
             .parse_project(
                 project_dir,
@@ -63,6 +67,9 @@ impl DependencyScanner {
 
         info!("Used parser: {} for project scanning", parser_name);
         debug!("Parsed {} dependencies", parsed_dependencies.len());
+        if !skipped_packages.is_empty() {
+            debug!("Skipped {} packages", skipped_packages.len());
+        }
 
         // Convert ParsedDependency to ScannedDependency (keeping backward compatibility)
         let scanned_dependencies: Vec<ScannedDependency> = parsed_dependencies
@@ -77,10 +84,15 @@ impl DependencyScanner {
             .collect();
 
         debug!(
-            "Successfully scanned {} dependencies",
-            scanned_dependencies.len()
+            "Successfully scanned {} dependencies using parser: {}",
+            scanned_dependencies.len(),
+            parser_name
         );
-        Ok(scanned_dependencies)
+        Ok((
+            scanned_dependencies,
+            skipped_packages,
+            parser_name.to_string(),
+        ))
     }
 
     /// Get dependency statistics
@@ -102,39 +114,26 @@ impl DependencyScanner {
     }
 
     /// Validate dependencies and return warnings
-    pub fn validate_dependencies(&self, dependencies: &[ScannedDependency]) -> Vec<String> {
-        // For now, provide basic validation
-        let mut warnings = Vec::new();
-
-        if dependencies.is_empty() {
-            warnings.push(
-                "No dependencies found. This might indicate an issue with dependency resolution."
-                    .to_string(),
-            );
-            return warnings;
-        }
-
-        // Check for placeholder versions
-        let placeholder_count = dependencies
+    pub fn validate_dependencies(
+        &self,
+        dependencies: &[ScannedDependency],
+        skipped_packages: &[SkippedPackage],
+        parser_name: &str,
+    ) -> Vec<String> {
+        let parsed_deps: Vec<ParsedDependency> = dependencies
             .iter()
-            .filter(|dep| dep.version == crate::types::Version::new([0, 0, 0]))
-            .count();
+            .map(|dep| ParsedDependency {
+                name: dep.name.clone(),
+                version: dep.version.clone(),
+                is_direct: dep.is_direct,
+                source: dep.source.clone().into(),
+                path: dep.path.clone(),
+                dependency_type: crate::parsers::DependencyType::Main,
+            })
+            .collect();
 
-        if placeholder_count > 0 {
-            warnings.push(format!(
-                "{placeholder_count} dependencies have placeholder versions. Consider using a lock file for accurate version information."
-            ));
-        }
-
-        // Check for very large dependency trees
-        if dependencies.len() > 1000 {
-            warnings.push(format!(
-                "Found {} dependencies. This is a very large dependency tree that may take longer to audit.",
-                dependencies.len()
-            ));
-        }
-
-        warnings
+        self.parser_registry
+            .validate_dependencies(&parsed_deps, skipped_packages, parser_name)
     }
 }
 
@@ -254,7 +253,7 @@ mod tests {
     #[test]
     fn test_validation_empty_dependencies() {
         let scanner = DependencyScanner::default();
-        let warnings = scanner.validate_dependencies(&[]);
+        let warnings = scanner.validate_dependencies(&[], &[], "test_parser");
         assert!(!warnings.is_empty());
         assert!(warnings[0].contains("No dependencies found"));
     }
@@ -270,7 +269,61 @@ mod tests {
         }];
 
         let scanner = DependencyScanner::default();
-        let warnings = scanner.validate_dependencies(&dependencies);
+
+        let warnings = scanner.validate_dependencies(&dependencies, &[], "requirements.txt");
         assert!(warnings.iter().any(|w| w.contains("placeholder versions")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("Consider using a lock file")));
+        let warnings = scanner.validate_dependencies(&dependencies, &[], "uv.lock");
+        assert!(!warnings.iter().any(|w| w.contains("placeholder versions")));
+    }
+
+    #[test]
+    fn test_validation_with_skipped_packages() {
+        use crate::parsers::{SkipReason, SkippedPackage};
+        use crate::types::PackageName;
+        use std::str::FromStr;
+
+        let dependencies = vec![ScannedDependency {
+            name: PackageName::from_str("normal-package").unwrap(),
+            version: crate::types::Version::from_str("1.0.0").unwrap(),
+            is_direct: true,
+            source: DependencySource::Registry,
+            path: None,
+        }];
+
+        let skipped_packages = vec![
+            SkippedPackage {
+                name: PackageName::from_str("virtual-package").unwrap(),
+                reason: SkipReason::Virtual,
+            },
+            SkippedPackage {
+                name: PackageName::from_str("editable-package").unwrap(),
+                reason: SkipReason::Editable,
+            },
+        ];
+
+        let scanner = DependencyScanner::default();
+        let warnings = scanner.validate_dependencies(&dependencies, &skipped_packages, "uv.lock");
+
+        assert!(
+            warnings.iter().any(|w| w.contains("Skipped 2 packages")),
+            "Expected warning about skipped packages, got: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("virtual-package")),
+            "Expected warning mentioning virtual-package, got: {warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("editable-package")),
+            "Expected warning mentioning editable-package, got: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("pip freeze") || w.contains("editable")),
+            "Expected guidance about editable packages, got: {warnings:?}"
+        );
     }
 }

@@ -101,9 +101,12 @@ impl AuditEngine {
         let project_path = project_path.as_ref();
 
         // 1. Scan dependencies
-        let dependencies = self.scanner.scan_project(project_path).await?;
+        let (dependencies, skipped_packages, parser_name) =
+            self.scanner.scan_project(project_path).await?;
         let dependency_stats = self.scanner.get_stats(&dependencies);
-        let warnings = self.scanner.validate_dependencies(&dependencies);
+        let warnings =
+            self.scanner
+                .validate_dependencies(&dependencies, &skipped_packages, &parser_name);
 
         // 2. Create vulnerability source
         let cache = self.cache.as_ref().cloned().unwrap_or_else(|| {

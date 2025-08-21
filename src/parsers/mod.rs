@@ -28,6 +28,31 @@ pub mod poetry_lock;
 pub mod pyproject;
 pub mod requirements;
 
+#[derive(Debug, Clone)]
+pub struct SkippedPackage {
+    pub name: PackageName,
+    pub reason: SkipReason,
+}
+
+#[derive(Debug, Clone)]
+pub enum SkipReason {
+    Virtual,
+    Editable,
+    MissingVersion,
+    Other(String),
+}
+
+impl std::fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkipReason::Virtual => write!(f, "virtual package - dependencies handled separately"),
+            SkipReason::Editable => write!(f, "editable install - no version available"),
+            SkipReason::MissingVersion => write!(f, "missing version information"),
+            SkipReason::Other(desc) => write!(f, "{desc}"),
+        }
+    }
+}
+
 /// A dependency parsed from a project file
 #[derive(Debug, Clone)]
 pub struct ParsedDependency {
@@ -88,7 +113,7 @@ pub trait ProjectParser: Send + Sync {
         include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>>;
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)>;
 
     /// Validate the parsed dependencies and return warnings
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {
@@ -153,13 +178,14 @@ impl ParserRegistry {
     }
 
     /// Parse dependencies from a project directory using the best available parser
+    /// Returns dependencies, skipped packages, and parser name
     pub async fn parse_project(
         &self,
         project_path: &Path,
         include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-    ) -> Result<(Vec<ParsedDependency>, &'static str)> {
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>, &'static str)> {
         // Find all compatible parsers
         let mut compatible_parsers: Vec<&Box<dyn ProjectParser>> = self
             .parsers
@@ -184,30 +210,51 @@ impl ParserRegistry {
             project_path.display()
         );
 
-        let dependencies = parser
+        let (dependencies, skipped_packages) = parser
             .parse_dependencies(project_path, include_dev, include_optional, direct_only)
             .await?;
 
-        Ok((dependencies, parser_name))
+        Ok((dependencies, skipped_packages, parser_name))
     }
 
-    /// Get validation warnings for parsed dependencies
+    /// Get validation warnings for parsed dependencies including skipped packages
     pub fn validate_dependencies(
         &self,
         dependencies: &[ParsedDependency],
+        skipped_packages: &[SkippedPackage],
         parser_name: &str,
     ) -> Vec<String> {
-        // Find the parser that was used
-        if let Some(parser) = self.parsers.iter().find(|p| p.name() == parser_name) {
-            parser.validate_dependencies(dependencies)
-        } else {
-            // Fallback to basic validation
-            let mut warnings = Vec::new();
-            if dependencies.is_empty() {
-                warnings.push("No dependencies found.".to_string());
+        let mut warnings = Vec::new();
+
+        if !skipped_packages.is_empty() {
+            warnings.push(format!(
+                "Skipped {} packages during vulnerability scan:",
+                skipped_packages.len()
+            ));
+
+            for skipped in skipped_packages {
+                warnings.push(format!("  • {} ({})", skipped.name, skipped.reason));
             }
-            warnings
         }
+
+        if let Some(parser) = self.parsers.iter().find(|p| p.name() == parser_name) {
+            warnings.extend(parser.validate_dependencies(dependencies));
+        } else if dependencies.is_empty() {
+            warnings.push("No dependencies found.".to_string());
+        } else {
+            let placeholder_count = dependencies
+                .iter()
+                .filter(|dep| dep.version == Version::new([0, 0, 0]))
+                .count();
+
+            if placeholder_count > 0 {
+                warnings.push(format!(
+                    "{placeholder_count} dependencies have placeholder versions. Consider using a lock file for accurate version information."
+                ));
+            }
+        }
+
+        warnings
     }
 }
 

@@ -16,7 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
+use super::{
+    DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason, SkippedPackage,
+};
 use crate::{
     types::{PackageName, Version},
     AuditError, Result,
@@ -51,7 +53,8 @@ struct Lock {
 #[derive(Debug, Clone, Deserialize)]
 struct Package {
     name: String,
-    version: String,
+    #[serde(default)]
+    version: Option<String>,
     #[serde(default)]
     source: Option<serde_json::Value>, // Used for source detection
     #[serde(default)]
@@ -125,7 +128,7 @@ impl ProjectParser for UvLockParser {
         _include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>> {
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         let lock_path = project_path.join("uv.lock");
         debug!("Reading lock file: {}", lock_path.display());
 
@@ -137,7 +140,7 @@ impl ProjectParser for UvLockParser {
 
         if lock.packages.is_empty() {
             warn!("Lock file contains no packages: {}", lock_path.display());
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         debug!("Found {} packages in lock file", lock.packages.len());
@@ -162,6 +165,7 @@ impl ProjectParser for UvLockParser {
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
+        let mut skipped_packages = Vec::new(); // Track skipped packages for warnings
 
         // Warn about --direct-only being ignored for uv.lock files
         if direct_only {
@@ -173,7 +177,32 @@ impl ProjectParser for UvLockParser {
         // Process all packages and extract both main and optional dependencies
         for package in &lock.packages {
             let package_name = PackageName::new(&package.name);
-            let version = Version::from_str(&package.version)?;
+
+            let version = match &package.version {
+                Some(version_str) => Version::from_str(version_str)?,
+                None => {
+                    if self.is_virtual_package(package) {
+                        debug!(
+                            "Skipping virtual package '{}' - not installed, dependencies handled separately",
+                            package_name
+                        );
+                        skipped_packages.push(SkippedPackage {
+                            name: package_name.clone(),
+                            reason: SkipReason::Virtual,
+                        });
+                    } else {
+                        debug!(
+                            "Skipping editable package '{}' - no version field in lock file",
+                            package_name
+                        );
+                        skipped_packages.push(SkippedPackage {
+                            name: package_name.clone(),
+                            reason: SkipReason::Editable,
+                        });
+                    }
+                    continue;
+                }
+            };
 
             // Skip if we've already processed this package (deduplication)
             if seen_packages.contains(&package_name) {
@@ -251,7 +280,18 @@ impl ProjectParser for UvLockParser {
         }
 
         debug!("Scanned {} dependencies from lock file", dependencies.len());
-        Ok(dependencies)
+        if !skipped_packages.is_empty() {
+            debug!(
+                "Skipped scanning {} packages due to missing version information: {}",
+                skipped_packages.len(),
+                skipped_packages
+                    .iter()
+                    .map(|pkg| format!("• {} ({})", pkg.name, pkg.reason))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        Ok((dependencies, skipped_packages))
     }
 
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {
@@ -528,5 +568,204 @@ impl UvLockParser {
         );
 
         Ok(direct_deps)
+    }
+
+    fn is_virtual_package(&self, package: &Package) -> bool {
+        if let Some(source_value) = &package.source {
+            if let Some(source_obj) = source_value.as_object() {
+                if source_obj.contains_key("virtual") {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    use tokio;
+
+    async fn create_test_lock_file(content: &str) -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let lock_path = temp_dir.path().join("uv.lock");
+        let project_path = temp_dir.path().to_path_buf();
+        tokio::fs::write(&lock_path, content).await.unwrap();
+        (temp_dir, project_path)
+    }
+
+    #[tokio::test]
+    async fn test_parse_virtual_package_without_version() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.13"
+
+[[package]]
+name = "mypackage"
+source = { virtual = "." }
+"#;
+
+        let (_temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        let parser = UvLockParser::new();
+
+        let result = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await;
+        assert!(result.is_ok());
+
+        let (dependencies, skipped_packages) = result.unwrap();
+        assert_eq!(dependencies.len(), 0);
+        assert_eq!(skipped_packages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_parse_editable_package_without_version() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.13"
+
+[[package]]
+name = "mypackage"
+source = { editable = "." }
+"#;
+
+        let (_temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        let parser = UvLockParser::new();
+
+        let result = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await;
+        assert!(result.is_ok());
+
+        let (dependencies, skipped_packages) = result.unwrap();
+        assert_eq!(dependencies.len(), 0);
+        assert_eq!(skipped_packages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_parse_mixed_packages_with_and_without_versions() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.13"
+
+[[package]]
+name = "normal-package"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "virtual-package"
+source = { virtual = "." }
+
+[[package]]
+name = "editable-package"
+source = { editable = "." }
+"#;
+
+        let (_temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        let parser = UvLockParser::new();
+
+        let result = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await;
+        assert!(result.is_ok());
+
+        let (dependencies, skipped_packages) = result.unwrap();
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(skipped_packages.len(), 2);
+
+        let normal_pkg = dependencies
+            .iter()
+            .find(|d| d.name.to_string() == "normal-package")
+            .unwrap();
+        assert_eq!(normal_pkg.version, Version::from_str("1.2.3").unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_skipped_packages_are_not_processed() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.13"
+
+[[package]]
+name = "editable-package-1"
+source = { editable = "." }
+
+[[package]]
+name = "editable-package-2"
+source = { editable = "../other" }
+"#;
+
+        let (_temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        let parser = UvLockParser::new();
+
+        let (dependencies, skipped_packages) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+        let _warnings = parser.validate_dependencies(&dependencies);
+
+        assert_eq!(dependencies.len(), 0);
+        assert_eq!(skipped_packages.len(), 2);
+
+        let warnings = parser.validate_dependencies(&dependencies);
+        assert!(warnings.len() <= 1);
+        if !warnings.is_empty() {
+            assert!(warnings[0].contains("No dependencies found"));
+        }
+    }
+
+    #[test]
+    fn test_is_virtual_package() {
+        let parser = UvLockParser::new();
+
+        let virtual_package = Package {
+            name: "test".to_string(),
+            version: None,
+            source: Some(serde_json::json!({"virtual": "."})),
+            sdist: None,
+            wheels: None,
+            resolution_markers: None,
+            dependencies: vec![],
+            optional_dependencies: HashMap::new(),
+            dev_dependencies: vec![],
+        };
+
+        assert!(parser.is_virtual_package(&virtual_package));
+
+        let editable_package = Package {
+            name: "test".to_string(),
+            version: None,
+            source: Some(serde_json::json!({"editable": "."})),
+            sdist: None,
+            wheels: None,
+            resolution_markers: None,
+            dependencies: vec![],
+            optional_dependencies: HashMap::new(),
+            dev_dependencies: vec![],
+        };
+
+        assert!(!parser.is_virtual_package(&editable_package));
+
+        let registry_package = Package {
+            name: "test".to_string(),
+            version: Some("1.0.0".to_string()),
+            source: Some(serde_json::json!({"registry": "https://pypi.org/simple"})),
+            sdist: None,
+            wheels: None,
+            resolution_markers: None,
+            dependencies: vec![],
+            optional_dependencies: HashMap::new(),
+            dev_dependencies: vec![],
+        };
+
+        assert!(!parser.is_virtual_package(&registry_package));
     }
 }

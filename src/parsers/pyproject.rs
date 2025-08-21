@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser};
+use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
 use crate::{
     dependency::resolvers::{DependencyResolver, ResolverRegistry},
     types::{PackageName, ResolverType, Version},
@@ -365,7 +365,7 @@ impl ProjectParser for PyProjectParser {
         include_dev: bool,
         include_optional: bool,
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>> {
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         let pyproject_path = project_path.join("pyproject.toml");
         debug!("Reading pyproject.toml: {}", pyproject_path.display());
 
@@ -413,7 +413,7 @@ impl ProjectParser for PyProjectParser {
                         dependencies.len(),
                         self.resolver.as_ref().unwrap().name()
                     );
-                    return Ok(dependencies);
+                    return Ok((dependencies, Vec::new()));
                 }
                 Err(e) => {
                     warn!(
@@ -431,13 +431,16 @@ impl ProjectParser for PyProjectParser {
         }
 
         // Fallback to current behavior
-        self.parse_without_resolver(
-            direct_deps_with_info,
-            include_dev,
-            include_optional,
-            direct_only,
-        )
-        .await
+        let dependencies = self
+            .parse_without_resolver(
+                direct_deps_with_info,
+                include_dev,
+                include_optional,
+                direct_only,
+            )
+            .await?;
+
+        Ok((dependencies, Vec::new()))
     }
 
     fn validate_dependencies(&self, dependencies: &[ParsedDependency]) -> Vec<String> {
