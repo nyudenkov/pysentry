@@ -841,80 +841,89 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         eprintln!("Scanning project dependencies...");
     }
 
-    let dependencies = if !audit_args.requirements_files.is_empty() {
-        if !audit_args.quiet {
-            eprintln!(
-                "Using explicit requirements files: {}",
-                audit_args
-                    .requirements_files
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        scan_explicit_requirements(
-            &audit_args.requirements_files,
-            audit_args.include_dev(),
-            audit_args.include_optional(),
-            audit_args.direct_only,
-            audit_args.resolver.clone(),
-        )
-        .await?
-    } else {
-        let resolver_type: ResolverType = audit_args.resolver.clone().into();
-
-        let parse_dev = audit_args.include_dev();
-        let parse_optional = audit_args.include_optional();
-
-        use crate::parsers::{DependencyType, ParserRegistry};
-        let parser_registry = ParserRegistry::new(Some(resolver_type));
-        let (raw_parsed_deps, parser_name) = parser_registry
-            .parse_project(
-                &audit_args.path,
-                parse_dev,
-                parse_optional,
-                audit_args.direct_only,
+    let (dependencies, skipped_packages, detected_parser_name) =
+        if !audit_args.requirements_files.is_empty() {
+            if !audit_args.quiet {
+                eprintln!(
+                    "Using explicit requirements files: {}",
+                    audit_args
+                        .requirements_files
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            (
+                scan_explicit_requirements(
+                    &audit_args.requirements_files,
+                    audit_args.include_dev(),
+                    audit_args.include_optional(),
+                    audit_args.direct_only,
+                    audit_args.resolver.clone(),
+                )
+                .await?,
+                Vec::new(), // No skipped packages for explicit requirements files
+                "requirements.txt".to_string(),
             )
-            .await?;
+        } else {
+            let resolver_type: ResolverType = audit_args.resolver.clone().into();
 
-        if audit_args.verbose {
-            eprintln!(
-                "Raw parsed dependencies before filtering: {} (from {})",
-                raw_parsed_deps.len(),
-                parser_name
-            );
-            let (main_count, optional_count) =
-                raw_parsed_deps
-                    .iter()
-                    .fold((0, 0), |(m, o), dep| match dep.dependency_type {
-                        DependencyType::Main => (m + 1, o),
-                        DependencyType::Optional => (m, o + 1),
-                    });
-            eprintln!("  Main: {main_count}, Optional: {optional_count}");
-        }
+            let parse_dev = audit_args.include_dev();
+            let parse_optional = audit_args.include_optional();
 
-        let filtered_parsed_deps = audit_args.filter_dependencies(raw_parsed_deps);
+            use crate::parsers::{DependencyType, ParserRegistry};
+            let parser_registry = ParserRegistry::new(Some(resolver_type));
+            let (raw_parsed_deps, skipped_packages, parser_name) = parser_registry
+                .parse_project(
+                    &audit_args.path,
+                    parse_dev,
+                    parse_optional,
+                    audit_args.direct_only,
+                )
+                .await?;
 
-        if audit_args.verbose {
-            eprintln!(
-                "Filtered dependencies after scope filtering: {}",
-                filtered_parsed_deps.len()
-            );
-            eprintln!("  Scope: {}", audit_args.scope_description());
-        }
+            if audit_args.verbose {
+                eprintln!(
+                    "Raw parsed dependencies before filtering: {} (from {})",
+                    raw_parsed_deps.len(),
+                    parser_name
+                );
+                let (main_count, optional_count) =
+                    raw_parsed_deps
+                        .iter()
+                        .fold((0, 0), |(m, o), dep| match dep.dependency_type {
+                            DependencyType::Main => (m + 1, o),
+                            DependencyType::Optional => (m, o + 1),
+                        });
+                eprintln!("  Main: {main_count}, Optional: {optional_count}");
+            }
 
-        filtered_parsed_deps
-            .into_iter()
-            .map(|dep| crate::dependency::scanner::ScannedDependency {
-                name: dep.name,
-                version: dep.version,
-                is_direct: dep.is_direct,
-                source: dep.source.into(),
-                path: dep.path,
-            })
-            .collect()
-    };
+            let filtered_parsed_deps = audit_args.filter_dependencies(raw_parsed_deps);
+
+            if audit_args.verbose {
+                eprintln!(
+                    "Filtered dependencies after scope filtering: {}",
+                    filtered_parsed_deps.len()
+                );
+                eprintln!("  Scope: {}", audit_args.scope_description());
+            }
+
+            (
+                filtered_parsed_deps
+                    .into_iter()
+                    .map(|dep| crate::dependency::scanner::ScannedDependency {
+                        name: dep.name,
+                        version: dep.version,
+                        is_direct: dep.is_direct,
+                        source: dep.source.into(),
+                        path: dep.path,
+                    })
+                    .collect(),
+                skipped_packages,
+                parser_name.to_string(),
+            )
+        };
 
     let dependency_stats = if !audit_args.requirements_files.is_empty() {
         calculate_dependency_stats(&dependencies)
@@ -945,7 +954,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
             audit_args.direct_only,
             None,
         );
-        scanner.validate_dependencies(&dependencies)
+        scanner.validate_dependencies(&dependencies, &skipped_packages, &detected_parser_name)
     };
 
     for warning in &warnings {
