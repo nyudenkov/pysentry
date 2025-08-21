@@ -1,6 +1,7 @@
 # 🐍 PySentry
 
 [![OSV Integration](https://img.shields.io/badge/OSV-Integrated-blue)](https://google.github.io/osv.dev/)
+[![PyPI Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
 
 [Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12) | [Latest PySentry - pip-audit benchmark](benchmarks/results/latest.md)
 
