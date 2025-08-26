@@ -378,6 +378,12 @@ impl PypaSource {
                 .map(|dt| dt.with_timezone(&Utc))
         });
 
+        let withdrawn = pypa.withdrawn.as_ref().and_then(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        });
+
         // Get CVSS score from severity info
         let cvss_score = Self::extract_cvss_score(pypa);
 
@@ -401,6 +407,7 @@ impl PypaSource {
             published,
             modified,
             source: Some("pypa-zip".to_string()),
+            withdrawn,
         })
     }
 
@@ -632,6 +639,7 @@ impl VulnerabilityProvider for PypaSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
     use std::str::FromStr;
     use tempfile::TempDir;
     fn create_test_cache() -> AuditCache {
@@ -810,5 +818,44 @@ published: \"2025-01-14T19:15:32Z\"
         );
         assert_eq!(vulnerability.source, Some("pypa-zip".to_string()));
         assert_eq!(vulnerability.references.len(), 1);
+        assert_eq!(vulnerability.withdrawn, None);
+    }
+
+    #[test]
+    fn test_withdrawn_vulnerability_parsing() {
+        let yaml = r#"
+id: PYSEC-2022-43059
+details: Test withdrawn vulnerability
+affected:
+- package:
+    ecosystem: PyPI
+    name: aiohttp
+  ranges:
+  - type: ECOSYSTEM
+    events:
+    - introduced: "0"
+    - fixed: "3.8.3"
+references:
+- type: ADVISORY
+  url: https://github.com/pypa/advisory-database/pull/169/files
+modified: "2023-11-08T01:00:00Z"
+published: "2022-12-07T00:00:00Z"
+withdrawn: "2023-11-08T00:54:24Z"
+"#;
+
+        let _source = PypaSource::new(create_test_cache(), true);
+
+        let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
+        let package_name = PackageName::from_str("aiohttp").unwrap();
+        let vulnerability = PypaSource::to_vulnerability(&pypa_advisory, &package_name).unwrap();
+
+        // Verify withdrawal parsing
+        assert_eq!(vulnerability.id, "PYSEC-2022-43059");
+        assert!(vulnerability.withdrawn.is_some());
+
+        let withdrawn_date = vulnerability.withdrawn.unwrap();
+        assert_eq!(withdrawn_date.year(), 2023);
+        assert_eq!(withdrawn_date.month(), 11);
+        assert_eq!(withdrawn_date.day(), 8);
     }
 }

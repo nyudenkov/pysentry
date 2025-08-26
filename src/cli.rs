@@ -151,6 +151,10 @@ pub struct AuditArgs {
     #[arg(long)]
     pub direct_only: bool,
 
+    /// Include withdrawn vulnerabilities in results
+    #[arg(long)]
+    pub include_withdrawn: bool,
+
     /// Disable caching
     #[arg(long)]
     pub no_cache: bool,
@@ -361,6 +365,10 @@ impl AuditArgs {
 
         if !self.detailed {
             merged.detailed = config.defaults.detailed;
+        }
+
+        if !self.include_withdrawn {
+            merged.include_withdrawn = config.defaults.include_withdrawn;
         }
 
         if self.resolver == ResolverTypeArg::Uv && config.resolver.resolver_type != "uv" {
@@ -1010,6 +1018,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
         audit_args.severity.clone().into(),
         audit_args.ignore_ids.to_vec(),
         audit_args.direct_only,
+        audit_args.include_withdrawn,
     );
     let matcher = VulnerabilityMatcher::new(database, matcher_config);
 
@@ -1117,6 +1126,7 @@ pub async fn config_init(args: &ConfigInitArgs) -> Result<()> {
     println!("- Severity: low, medium, high, critical");
     println!("- Sources: pypa, pypi, osv");
     println!("- Resolver: uv, pip-tools");
+    println!("- Include withdrawn: true/false");
 
     Ok(())
 }
@@ -1192,6 +1202,10 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
             config_loader.config.defaults.direct_only
         );
         println!("  Detailed: {}", config_loader.config.defaults.detailed);
+        println!(
+            "  Include withdrawn: {}",
+            config_loader.config.defaults.include_withdrawn
+        );
         println!();
         println!(
             "  Sources: {}",
@@ -1291,6 +1305,9 @@ fail_on = "high"
 
 # Uncomment to include dev/optional dependencies
 # scope = "all"
+
+# Uncomment to include withdrawn vulnerabilities by default
+# include_withdrawn = true
 
 [sources]
 # Choose your vulnerability sources

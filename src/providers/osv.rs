@@ -252,6 +252,7 @@ impl OsvSource {
                     .map(|dt| dt.with_timezone(&Utc))
             }),
             source: Some("osv".to_string()),
+            withdrawn: None,
         })
     }
 

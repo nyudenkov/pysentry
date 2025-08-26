@@ -148,6 +148,7 @@ impl PypiSource {
             published: None,
             modified: None,
             source: Some("pypi".to_string()),
+            withdrawn: None,
         }
     }
 
