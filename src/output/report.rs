@@ -263,11 +263,18 @@ impl ReportGenerator {
                     String::new()
                 };
 
+                let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
+                    format!(" {}", "(WITHDRAWN)".yellow().bold())
+                } else {
+                    String::new()
+                };
+
                 writeln!(
                     output,
-                    " {}. {}  {} v{}  [{}]{}",
+                    " {}. {}{}  {} v{}  [{}]{}",
                     i + 1,
                     ColoredOutput::vulnerability_id(&m.vulnerability.id),
+                    withdrawn_tag,
                     ColoredOutput::package_name(&m.package_name.to_string()),
                     m.installed_version,
                     ColoredOutput::severity(&m.vulnerability.severity),
@@ -438,12 +445,19 @@ impl ReportGenerator {
                     String::new()
                 };
 
+                let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
+                    " ⚠️ **WITHDRAWN**"
+                } else {
+                    ""
+                };
+
                 writeln!(
                     output,
-                    "### {}. {} `{}`{}",
+                    "### {}. {} `{}`{}{}",
                     i + 1,
                     severity_icon,
                     m.vulnerability.id,
+                    withdrawn_tag,
                     source_tag
                 )?;
                 writeln!(output)?;
@@ -457,6 +471,14 @@ impl ReportGenerator {
 
                 if let Some(cvss) = m.vulnerability.cvss_score {
                     writeln!(output, "- **CVSS Score:** {cvss:.1}")?;
+                }
+
+                if let Some(withdrawn_date) = &m.vulnerability.withdrawn {
+                    writeln!(
+                        output,
+                        "- **⚠️ Withdrawn:** {}",
+                        withdrawn_date.format("%Y-%m-%d")
+                    )?;
                 }
 
                 writeln!(output, "- **Summary:** {}", m.vulnerability.summary)?;
@@ -546,6 +568,7 @@ impl ReportGenerator {
                     references: m.vulnerability.references.clone(),
                     is_direct: m.is_direct,
                     source: m.vulnerability.source.clone(),
+                    withdrawn: m.vulnerability.withdrawn.map(|dt| dt.to_rfc3339()),
                 })
                 .collect(),
             fix_suggestions: report
@@ -610,6 +633,7 @@ struct JsonVulnerability {
     references: Vec<String>,
     is_direct: bool,
     source: Option<String>,
+    withdrawn: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -660,6 +684,7 @@ mod tests {
             published: None,
             modified: None,
             source: Some("test".to_string()),
+            withdrawn: None,
         };
 
         let matches = vec![VulnerabilityMatch {

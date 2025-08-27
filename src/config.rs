@@ -75,6 +75,9 @@ pub struct DefaultConfig {
 
     #[serde(default)]
     pub detailed: bool,
+
+    #[serde(default)]
+    pub include_withdrawn: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -481,6 +484,7 @@ impl Default for DefaultConfig {
             scope: default_scope(),
             direct_only: false,
             detailed: false,
+            include_withdrawn: false,
         }
     }
 }

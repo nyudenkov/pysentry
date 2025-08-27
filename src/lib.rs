@@ -97,6 +97,8 @@ impl AuditEngine {
         source_type: VulnerabilitySourceType,
         min_severity: SeverityLevel,
         ignore_ids: &[String],
+        direct_only: bool,
+        include_withdrawn: bool,
     ) -> Result<AuditReport> {
         let project_path = project_path.as_ref();
 
@@ -125,7 +127,12 @@ impl AuditEngine {
         let database = vuln_source.fetch_vulnerabilities(&packages).await?;
 
         // 4. Match vulnerabilities
-        let matcher_config = MatcherConfig::new(min_severity, ignore_ids.to_vec(), false);
+        let matcher_config = MatcherConfig::new(
+            min_severity,
+            ignore_ids.to_vec(),
+            direct_only,
+            include_withdrawn,
+        );
         let matcher = VulnerabilityMatcher::new(database, matcher_config);
 
         let matches = matcher.find_vulnerabilities(&dependencies)?;

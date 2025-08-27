@@ -326,6 +326,17 @@ impl SarifGenerator {
                 rule["properties"]["cvss_score"] = json!(cvss);
             }
 
+            // Add withdrawal information if available
+            if let Some(withdrawn_date) = &m.vulnerability.withdrawn {
+                rule["properties"]["withdrawn"] = json!(withdrawn_date.to_rfc3339());
+                rule["properties"]["tags"] = json!([
+                    "security",
+                    "vulnerability",
+                    format!("{:?}", m.vulnerability.severity).to_lowercase(),
+                    "withdrawn"
+                ]);
+            }
+
             // Add timestamps if available
             if let Some(published) = &m.vulnerability.published {
                 rule["properties"]["published_date"] = json!(published.to_string());
@@ -643,6 +654,7 @@ mod tests {
             published: None,
             modified: None,
             source: Some("test".to_string()),
+            withdrawn: None,
         }
     }
 

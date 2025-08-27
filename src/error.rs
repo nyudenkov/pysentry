@@ -24,7 +24,7 @@ pub type Result<T> = std::result::Result<T, AuditError>;
 /// Audit error types
 #[derive(Debug, Error)]
 pub enum AuditError {
-    #[error("No dependency information found. Run 'uv lock' to generate a lock file")]
+    #[error("No dependency information found. Generate a lock file (uv.lock, poetry.lock, Pipfile.lock, pylock.toml) or add pyproject.toml/requirements.txt")]
     NoDependencyInfo,
 
     #[error("Failed to download vulnerability database: {0}")]

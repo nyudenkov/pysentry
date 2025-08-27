@@ -25,6 +25,7 @@ pub mod lock;
 pub mod pipfile;
 pub mod pipfile_lock;
 pub mod poetry_lock;
+pub mod pylock;
 pub mod pyproject;
 pub mod requirements;
 
@@ -157,6 +158,7 @@ impl ParserRegistry {
                     Box::new(lock::UvLockParser::new()),
                     Box::new(poetry_lock::PoetryLockParser::new()),
                     Box::new(pipfile_lock::PipfileLockParser::new()),
+                    Box::new(pylock::PyLockParser::new()),
                     Box::new(pyproject::PyProjectParser::new(Some(resolver_type))),
                     Box::new(pipfile::PipfileParser::new(Some(resolver_type))),
                     Box::new(requirements::RequirementsParser::new(Some(resolver_type))),
@@ -168,6 +170,7 @@ impl ParserRegistry {
                     Box::new(lock::UvLockParser::new()),
                     Box::new(poetry_lock::PoetryLockParser::new()),
                     Box::new(pipfile_lock::PipfileLockParser::new()),
+                    Box::new(pylock::PyLockParser::new()),
                     Box::new(pyproject::PyProjectParser::new(None)),
                     Box::new(pipfile::PipfileParser::new(None)),
                     Box::new(requirements::RequirementsParser::new(None)),

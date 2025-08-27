@@ -11,11 +11,11 @@ A fast, reliable security vulnerability scanner for Python projects, written in 
 
 ## Overview
 
-PySentry audits Python projects for known security vulnerabilities by analyzing dependency files (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `pyproject.toml`, `Pipfile`, `requirements.txt`) and cross-referencing them against multiple vulnerability databases. It provides comprehensive reporting with support for various output formats and filtering options.
+PySentry audits Python projects for known security vulnerabilities by analyzing dependency files (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, `requirements.txt`) and cross-referencing them against multiple vulnerability databases. It provides comprehensive reporting with support for various output formats and filtering options.
 
 ## Key Features
 
-- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pyproject.toml`, `Pipfile`, and `requirements.txt` files
+- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, and `requirements.txt` files
 - **External Resolver Integration**: Leverages `uv` and `pip-tools` for accurate requirements.txt constraint solving
 - **Multiple Data Sources**:
   - PyPA Advisory Database (default)
