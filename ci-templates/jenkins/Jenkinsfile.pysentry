@@ -1,0 +1,218 @@
+/**
+ * Jenkins Pipeline for PySentry Security Scanning Integration
+ * Enterprise-grade CI/CD template for vulnerability scanning
+ */
+
+pipeline {
+    agent any
+    
+    parameters {
+        choice(
+            name: 'SCAN_MODE',
+            choices: ['full', 'incremental', 'critical-only'],
+            description: 'Vulnerability scanning mode'
+        )
+        booleanParam(
+            name: 'FAIL_ON_HIGH',
+            defaultValue: true,
+            description: 'Fail build on high severity vulnerabilities'
+        )
+        booleanParam(
+            name: 'GENERATE_SARIF',
+            defaultValue: true,
+            description: 'Generate SARIF output for security tools'
+        )
+    }
+    
+    environment {
+        PYSENTRY_CONFIG = credentials('pysentry-config')
+        SARIF_OUTPUT = 'pysentry-results.sarif'
+        PYTHON_VERSION = '3.11'
+    }
+    
+    stages {
+        stage('Setup') {
+            steps {
+                script {
+                    // Install Python and PySentry
+                    sh '''
+                        python${PYTHON_VERSION} -m pip install --upgrade pip
+                        pip install pysentry-rs
+                        pip install --requirement requirements.txt || echo "No requirements.txt found"
+                    '''
+                }
+            }
+        }
+        
+        stage('Dependency Scanning') {
+            parallel {
+                stage('Python Dependencies') {
+                    steps {
+                        script {
+                            def scanArgs = ""
+                            
+                            // Configure scan mode
+                            switch(params.SCAN_MODE) {
+                                case 'incremental':
+                                    scanArgs += "--only-changed "
+                                    break
+                                case 'critical-only':
+                                    scanArgs += "--severity critical,high "
+                                    break
+                                default:
+                                    scanArgs += "--recursive "
+                            }
+                            
+                            // Generate SARIF if requested
+                            if (params.GENERATE_SARIF) {
+                                scanArgs += "--output-format sarif --output ${SARIF_OUTPUT} "
+                            }
+                            
+                            // Execute scan
+                            def exitCode = sh(
+                                script: "pysentry-rs ${scanArgs} .",
+                                returnStatus: true
+                            )
+                            
+                            // Handle results
+                            if (exitCode != 0 && params.FAIL_ON_HIGH) {
+                                error("High severity vulnerabilities found - failing build")
+                            } else if (exitCode != 0) {
+                                unstable("Vulnerabilities found but build continuing")
+                            }
+                        }
+                    }
+                    post {
+                        always {
+                            // Archive scan results
+                            archiveArtifacts artifacts: '**/*pysentry*', allowEmptyArchive: true
+                            
+                            // Publish SARIF results if generated
+                            script {
+                                if (params.GENERATE_SARIF && fileExists(env.SARIF_OUTPUT)) {
+                                    publishIssues enabledForFailure: true,
+                                                 tools: [sarif(pattern: env.SARIF_OUTPUT)]
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                stage('License Compliance') {
+                    when {
+                        expression { params.SCAN_MODE == 'full' }
+                    }
+                    steps {
+                        sh '''
+                            # License scanning integration
+                            pysentry-rs --check-licenses --output-format json > license-report.json
+                        '''
+                        
+                        archiveArtifacts artifacts: 'license-report.json', allowEmptyArchive: true
+                    }
+                }
+            }
+        }
+        
+        stage('Security Reporting') {
+            steps {
+                script {
+                    // Generate executive summary
+                    sh '''
+                        pysentry-rs --summary --output-format markdown > security-summary.md
+                    '''
+                    
+                    // Publish to security dashboard (enterprise integration)
+                    if (env.SECURITY_DASHBOARD_URL) {
+                        sh '''
+                            curl -X POST "${SECURITY_DASHBOARD_URL}/api/scans" \
+                                 -H "Authorization: Bearer ${SECURITY_API_TOKEN}" \
+                                 -H "Content-Type: application/json" \
+                                 -d @${SARIF_OUTPUT}
+                        '''
+                    }
+                }
+            }
+            post {
+                always {
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: '.',
+                        reportFiles: 'security-summary.md',
+                        reportName: 'Security Scan Report'
+                    ])
+                }
+            }
+        }
+        
+        stage('Policy Enforcement') {
+            when {
+                expression { env.ENFORCE_SECURITY_POLICY == 'true' }
+            }
+            steps {
+                script {
+                    // Enterprise policy enforcement
+                    def policyViolations = sh(
+                        script: "pysentry-rs --policy-check --config ${PYSENTRY_CONFIG}",
+                        returnStatus: true
+                    )
+                    
+                    if (policyViolations != 0) {
+                        error("Security policy violations detected")
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Cleanup and notifications
+            script {
+                // Send notifications to security team
+                if (currentBuild.result != 'SUCCESS') {
+                    emailext (
+                        subject: "Security Scan Alert: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                        body: "Security vulnerabilities detected in ${env.JOB_NAME}. Check ${env.BUILD_URL} for details.",
+                        to: "${env.SECURITY_TEAM_EMAIL}"
+                    )
+                }
+            }
+            
+            // Archive all artifacts
+            archiveArtifacts artifacts: '**/*pysentry*, **/*security*', allowEmptyArchive: true
+            
+            // Clean workspace
+            cleanWs()
+        }
+        success {
+            echo 'Security scan completed successfully - no critical vulnerabilities found'
+        }
+        failure {
+            echo 'Security scan failed - review vulnerabilities and remediate'
+        }
+        unstable {
+            echo 'Security scan completed with warnings - review and assess risk'
+        }
+    }
+}
+
+// Additional pipeline functions for reusability
+def generateSecurityReport(String format) {
+    return sh(
+        script: "pysentry-rs --output-format ${format} --detailed-report",
+        returnStdout: true
+    ).trim()
+}
+
+def notifySecurityTeam(String message) {
+    if (env.SLACK_WEBHOOK) {
+        sh """
+            curl -X POST -H 'Content-type: application/json' \
+                 --data '{"text":"${message}"}' \
+                 ${env.SLACK_WEBHOOK}
+        """
+    }
+}

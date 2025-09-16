@@ -1,0 +1,285 @@
+# GitLab CI/CD Pipeline for PySentry Security Scanning
+# Enterprise-grade vulnerability scanning integration
+
+stages:
+  - setup
+  - security-scan
+  - compliance
+  - reporting
+  - notification
+
+variables:
+  PYTHON_VERSION: "3.11"
+  PYSENTRY_VERSION: "latest"
+  SARIF_OUTPUT: "pysentry-security-report.sarif"
+  SCAN_CACHE_KEY: "pysentry-${CI_COMMIT_REF_SLUG}"
+
+# Global settings for enterprise environments
+default:
+  image: python:${PYTHON_VERSION}-slim
+  before_script:
+    - pip install --upgrade pip
+    - pip install pysentry-rs==${PYSENTRY_VERSION}
+  cache:
+    key: ${SCAN_CACHE_KEY}
+    paths:
+      - .pysentry-cache/
+      - .pip-cache/
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+
+# Setup stage - prepare environment
+setup:dependencies:
+  stage: setup
+  script:
+    - echo "Setting up PySentry security scanning environment"
+    - pip install --cache-dir .pip-cache -r requirements.txt || echo "No requirements.txt found"
+    - pysentry-rs --version
+  artifacts:
+    reports:
+      dotenv: setup.env
+    paths:
+      - .pip-cache/
+    expire_in: 1 hour
+
+# Security scanning stage with parallel jobs
+.security_scan_base: &security_scan_base
+  stage: security-scan
+  needs: ["setup:dependencies"]
+  variables:
+    GIT_DEPTH: 0  # Full history for comprehensive scanning
+  artifacts:
+    reports:
+      sast: ${SARIF_OUTPUT}
+    paths:
+      - "*.sarif"
+      - "*.json"
+      - "security-*.html"
+    expire_in: 7 days
+    when: always
+
+# Full dependency vulnerability scan
+security:full-scan:
+  <<: *security_scan_base
+  script:
+    - echo "Running comprehensive vulnerability scan"
+    - |
+      pysentry-rs \
+        --recursive \
+        --output-format sarif \
+        --output ${SARIF_OUTPUT} \
+        --detailed-report \
+        --config .pysentry.toml \
+        .
+    - |
+      # Generate human-readable report
+      pysentry-rs \
+        --output-format html \
+        --output security-full-report.html \
+        .
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_MERGE_REQUEST_IID
+    - if: $SECURITY_SCAN_FULL == "true"
+
+# Incremental scan for merge requests
+security:incremental-scan:
+  <<: *security_scan_base
+  script:
+    - echo "Running incremental vulnerability scan for MR"
+    - |
+      # Get changed files
+      git diff --name-only ${CI_MERGE_REQUEST_TARGET_BRANCH_SHA}..HEAD > changed_files.txt
+      
+      # Scan only changed dependency files
+      if grep -E "(requirements.*\.txt|setup\.py|pyproject\.toml|Pipfile)" changed_files.txt; then
+        pysentry-rs \
+          --only-changed \
+          --output-format sarif \
+          --output ${SARIF_OUTPUT} \
+          .
+      else
+        echo "No dependency files changed - skipping scan"
+        echo '{"runs": []}' > ${SARIF_OUTPUT}
+      fi
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+      changes:
+        - "requirements*.txt"
+        - "setup.py"
+        - "pyproject.toml"
+        - "Pipfile*"
+
+# Critical vulnerabilities only (for hotfix branches)
+security:critical-only:
+  <<: *security_scan_base
+  script:
+    - echo "Scanning for critical vulnerabilities only"
+    - |
+      pysentry-rs \
+        --severity critical,high \
+        --output-format sarif \
+        --output ${SARIF_OUTPUT} \
+        --fail-on high \
+        .
+  rules:
+    - if: $CI_COMMIT_BRANCH =~ /^hotfix\/.*/
+    - if: $SECURITY_SCAN_CRITICAL_ONLY == "true"
+  allow_failure: false
+
+# Compliance and license checking
+compliance:license-check:
+  stage: compliance
+  needs: ["security:full-scan"]
+  script:
+    - echo "Checking license compliance"
+    - |
+      pysentry-rs \
+        --check-licenses \
+        --output-format json \
+        --output license-compliance.json \
+        .
+  artifacts:
+    reports:
+      license_scanning: license-compliance.json
+    paths:
+      - license-compliance.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $COMPLIANCE_CHECK_ENABLED == "true"
+
+# Policy enforcement for enterprise environments
+compliance:policy-enforcement:
+  stage: compliance
+  needs: ["security:full-scan"]
+  script:
+    - echo "Enforcing security policies"
+    - |
+      # Enterprise policy check
+      if [ -f ".pysentry-policy.yml" ]; then
+        pysentry-rs \
+          --policy-file .pysentry-policy.yml \
+          --enforce-policy \
+          .
+      else
+        echo "No policy file found - skipping policy enforcement"
+      fi
+  rules:
+    - if: $ENFORCE_SECURITY_POLICY == "true"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  allow_failure: false
+
+# Security reporting and dashboard integration
+reporting:security-dashboard:
+  stage: reporting
+  image: alpine:latest
+  needs: 
+    - "security:full-scan"
+    - "compliance:license-check"
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - echo "Uploading security results to enterprise dashboard"
+    - |
+      if [ -n "${SECURITY_DASHBOARD_URL}" ] && [ -n "${SECURITY_API_TOKEN}" ]; then
+        # Upload SARIF results
+        curl -X POST "${SECURITY_DASHBOARD_URL}/api/sarif" \
+             -H "Authorization: Bearer ${SECURITY_API_TOKEN}" \
+             -H "Content-Type: application/json" \
+             -d @${SARIF_OUTPUT}
+        
+        # Upload license compliance
+        if [ -f "license-compliance.json" ]; then
+          curl -X POST "${SECURITY_DASHBOARD_URL}/api/licenses" \
+               -H "Authorization: Bearer ${SECURITY_API_TOKEN}" \
+               -H "Content-Type: application/json" \
+               -d @license-compliance.json
+        fi
+      else
+        echo "Security dashboard not configured - skipping upload"
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $SECURITY_DASHBOARD_ENABLED == "true"
+
+# Executive reporting for management
+reporting:executive-summary:
+  stage: reporting
+  needs: ["security:full-scan"]
+  script:
+    - echo "Generating executive security summary"
+    - |
+      pysentry-rs \
+        --summary \
+        --output-format markdown \
+        --output executive-security-summary.md \
+        .
+    - |
+      # Create metrics file for GitLab metrics
+      echo "pysentry_vulnerabilities_total $(pysentry-rs --count-only .)" > metrics.txt
+      echo "pysentry_critical_vulnerabilities $(pysentry-rs --severity critical --count-only .)" >> metrics.txt
+  artifacts:
+    reports:
+      metrics: metrics.txt
+    paths:
+      - executive-security-summary.md
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Notification stage for security events
+notification:security-alerts:
+  stage: notification
+  image: alpine:latest
+  needs: 
+    - job: "security:full-scan"
+      artifacts: false
+  before_script:
+    - apk add --no-cache curl
+  script:
+    - echo "Processing security notifications"
+    - |
+      # Check if critical vulnerabilities were found
+      if [ "$CI_JOB_STATUS" != "success" ]; then
+        # Send alert to security team
+        if [ -n "${SLACK_WEBHOOK_URL}" ]; then
+          curl -X POST -H 'Content-type: application/json' \
+               --data "{\"text\":\"🚨 Security Alert: Critical vulnerabilities found in ${CI_PROJECT_NAME} - ${CI_COMMIT_REF_NAME}. Check ${CI_PIPELINE_URL} for details.\"}" \
+               ${SLACK_WEBHOOK_URL}
+        fi
+        
+        # Send email notification if configured
+        if [ -n "${SECURITY_EMAIL}" ]; then
+          echo "Critical security vulnerabilities detected" | \
+          mail -s "Security Alert: ${CI_PROJECT_NAME}" ${SECURITY_EMAIL}
+        fi
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: on_failure
+    - if: $SECURITY_NOTIFICATIONS_ENABLED == "true"
+      when: on_failure
+
+# Include additional security jobs from templates
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+  - template: Security/License-Scanning.gitlab-ci.yml
+
+# Override default dependency scanning to use PySentry
+gemnasium-python-dependency_scanning:
+  variables:
+    DS_PYTHON_VERSION: ${PYTHON_VERSION}
+    DS_REMEDIATE: "true"
+  before_script:
+    - pip install pysentry-rs
+  script:
+    - echo "Using PySentry for enhanced dependency scanning"
+    - pysentry-rs --output-format gitlab-sast --output gl-dependency-scanning-report.json .
+  artifacts:
+    reports:
+      dependency_scanning: gl-dependency-scanning-report.json

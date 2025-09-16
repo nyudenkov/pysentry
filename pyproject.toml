@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.4,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -11,6 +11,7 @@ license = { text = "GPL-3.0" }
 authors = [
     { name = "nyudenkov", email = "nyudenkov@pm.me" }
 ]
+keywords = ["security", "vulnerability", "audit", "python", "dependencies", "windows"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -25,18 +26,49 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
 ]
 dynamic = ["version"]
+dependencies = [
+    "typing-extensions>=4.0.0; python_version<'3.10'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+windows = [
+    "pywin32>=306; sys_platform=='win32'",
+    "winreg; sys_platform=='win32'",
+]
 
 [project.urls]
 Homepage = "https://github.com/nyudenkov/pysentry"
 Repository = "https://github.com/nyudenkov/pysentry"
 Issues = "https://github.com/nyudenkov/pysentry/issues"
+Documentation = "https://github.com/nyudenkov/pysentry#readme"
+Changelog = "https://github.com/nyudenkov/pysentry/releases"
 
 [project.scripts]
 pysentry-rs = "pysentry:main"
+pysentry = "pysentry:main"
 
 [tool.maturin]
-features = ["python", "pyo3/extension-module"]
+features = ["python", "pyo3/extension-module", "pyo3/abi3-py38"]
 python-source = "python"
 module-name = "pysentry._internal"
+# Enable ABI3 for broad Python compatibility
+compatibility = "abi3"
+strip = true
+# Windows-specific build optimizations
+[tool.maturin.target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -280,6 +280,12 @@ jobs:
       - name: Test Python bindings
         run: python -c "import pysentry; print('Python bindings work!')"
 
+      - name: Run Windows-specific tests
+        if: matrix.os == 'windows-latest'
+        run: |
+          pip install pytest
+          python -m pytest tests/test_windows_specific.py -v
+
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest

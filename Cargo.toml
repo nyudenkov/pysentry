@@ -18,7 +18,9 @@ name = "pysentry"
 path = "src/main.rs"
 
 [features]
+default = []
 python = ["pyo3"]
+abi3 = ["pyo3/abi3-py38"]
 
 [dependencies]
 anyhow = "1.0.99"
@@ -30,7 +32,7 @@ fs-err = "3.1.1"
 futures = "0.3.31"
 owo-colors = "4.2.2"
 pep440_rs = "0.7.3"
-pyo3 = { version = "0.26.0", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.26.0", features = ["extension-module", "abi3-py38"], optional = true }
 regex = "1.11.2"
 reqwest = { version = "0.12.23", features = ["json", "stream", "rustls-tls-native-roots"], default-features = false }
 rustc-hash = "2.1.1"
@@ -45,3 +47,25 @@ toml = "0.9.5"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 zip = { version = "5.1.1", default-features = false, features = ["deflate"] }
+
+# Windows-specific dependencies for enhanced integration
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["winuser", "winreg", "processthreadsapi"] }
+
+# Performance optimization profiles
+[profile.release]
+lto = true                    # Link-time optimization for better performance
+codegen-units = 1            # Single codegen unit for maximum optimization
+panic = "abort"              # Smaller binary size and better performance
+strip = true                 # Remove debug symbols
+opt-level = 3                # Maximum optimization
+
+[profile.dev]
+opt-level = 1                # Faster development builds
+debug = true                 # Keep debug info for development
+
+# Python wheel-specific profile for balanced performance and size
+[profile.python-wheel]
+inherits = "release"
+opt-level = "s"              # Optimize for size while maintaining performance
+lto = "thin"                 # Thin LTO for faster compilation
