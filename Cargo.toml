@@ -1,6 +1,6 @@
 [package]
 name = "pysentry"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
