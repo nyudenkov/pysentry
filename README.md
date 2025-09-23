@@ -53,7 +53,7 @@ This method:
 
 ### 📦 From PyPI (Python Package)
 
-For Python 3.8+ on Linux and macOS:
+For Python 3.9+ on Linux, macOS, and Windows:
 
 ```bash
 pip install pysentry-rs
@@ -104,22 +104,21 @@ The binary will be available at `target/release/pysentry`.
 
 ### Requirements
 
-- **For uvx**: Python 3.8+ and [uv](https://docs.astral.sh/uv/) installed (Linux/macOS only)
+- **For uvx**: Python 3.9+ and [uv](https://docs.astral.sh/uv/) installed
 - **For binaries**: No additional dependencies
-- **For Python package**: Python 3.8+ (Linux/macOS only)
+- **For Python package**: Python 3.9+
 - **For Rust package and source**: Rust 1.79+
 
 ### Platform Support
 
 | Installation Method | Linux | macOS | Windows |
 | ------------------- | ----- | ----- | ------- |
-| uvx                 | ✅    | ✅    | ❌      |
-| PyPI (pip)          | ✅    | ✅    | ❌      |
+| uvx                 | ✅    | ✅    | ✅      |
+| PyPI (pip)          | ✅    | ✅    | ✅      |
 | Crates.io (cargo)   | ✅    | ✅    | ✅      |
 | GitHub Releases     | ✅    | ✅    | ✅      |
 | From Source         | ✅    | ✅    | ✅      |
 
-**Note**: Windows Python wheels are not available due to compilation complexity. Windows users should use the pre-built binary from GitHub releases, install via cargo and build from source.
 
 ### CLI Command Names
 
