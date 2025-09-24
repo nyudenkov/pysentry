@@ -157,22 +157,6 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             python: "3.13"
-          # aarch64 Linux (native ARM64 runners)
-          - os: ubuntu-latest-arm64
-            target: aarch64-unknown-linux-gnu
-            python: "3.9"
-          - os: ubuntu-latest-arm64
-            target: aarch64-unknown-linux-gnu
-            python: "3.10"
-          - os: ubuntu-latest-arm64
-            target: aarch64-unknown-linux-gnu
-            python: "3.11"
-          - os: ubuntu-latest-arm64
-            target: aarch64-unknown-linux-gnu
-            python: "3.12"
-          - os: ubuntu-latest-arm64
-            target: aarch64-unknown-linux-gnu
-            python: "3.13"
           # macOS
           - os: macos-latest
             target: x86_64-apple-darwin
