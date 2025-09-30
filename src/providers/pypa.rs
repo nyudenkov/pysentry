@@ -406,7 +406,7 @@ impl PypaSource {
             cvss_score,
             published,
             modified,
-            source: Some("pypa-zip".to_string()),
+            source: Some("pypa".to_string()),
             withdrawn,
         })
     }
@@ -621,7 +621,7 @@ impl PypaSource {
 #[async_trait]
 impl VulnerabilityProvider for PypaSource {
     fn name(&self) -> &'static str {
-        "pypa-zip"
+        "pypa"
     }
 
     async fn fetch_vulnerabilities(
@@ -816,7 +816,7 @@ published: \"2025-01-14T19:15:32Z\"
             vulnerability.description,
             Some("Test vulnerability conversion".to_string())
         );
-        assert_eq!(vulnerability.source, Some("pypa-zip".to_string()));
+        assert_eq!(vulnerability.source, Some("pypa".to_string()));
         assert_eq!(vulnerability.references.len(), 1);
         assert_eq!(vulnerability.withdrawn, None);
     }
