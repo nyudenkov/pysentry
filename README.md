@@ -174,8 +174,8 @@ pysentry /path/to/project
 pysentry --resolver uv /path/to/project
 pysentry --resolver pip-tools /path/to/project
 
-# Include all dependencies (main + dev + optional)
-pysentry --all-extras
+# Exclude extra dependencies (only check main dependencies)
+pysentry --exclude-extra
 
 # Filter by severity (only show high and critical)
 pysentry --severity high
@@ -187,8 +187,8 @@ pysentry --format json --output audit-results.json
 ### Advanced Usage
 
 ```bash
-# Using uvx for comprehensive audit
-uvx pysentry-rs --all-extras --format sarif --output security-report.sarif
+# Using uvx for comprehensive audit (extras included by default)
+uvx pysentry-rs --format sarif --output security-report.sarif
 
 # Check multiple vulnerability sources concurrently
 uvx pysentry-rs --sources pypa,osv,pypi /path/to/project
@@ -200,8 +200,8 @@ uvx pysentry-rs --format markdown --output security-report.md
 # Control CI exit codes - only fail on critical vulnerabilities
 uvx pysentry-rs --fail-on critical
 
-# Or with installed binary
-pysentry --all-extras --format sarif --output security-report.sarif
+# Or with installed binary (extras included by default)
+pysentry --format sarif --output security-report.sarif
 pysentry --sources pypa,osv --direct-only
 pysentry --format markdown --output security-report.md
 
@@ -253,8 +253,8 @@ pysentry --sources pypa,pypi,osv --format json --output prod-security.json
 # Generate markdown report for GitHub issues/PRs
 pysentry --format markdown --output SECURITY-REPORT.md
 
-# Comprehensive audit with all sources and full reporting
-pysentry --sources pypa,pypi,osv --all-extras --format json --fail-on low
+# Comprehensive audit with all sources and full reporting (extras included by default)
+pysentry --sources pypa,pypi,osv --format json --fail-on low
 
 # CI environment with fresh resolution cache
 pysentry --clear-resolution-cache --sources pypa,osv --format sarif
@@ -350,7 +350,7 @@ ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
 | `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`     | `low`             |
 | `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity        | `medium`          |
 | `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa`            |
-| `--all-extras`             | Include all dependencies (main + dev + optional)          | `false`           |
+| `--exclude-extra`          | Exclude extra dependencies (dev, optional, etc)           | `false`           |
 | `--direct-only`            | Check only direct dependencies                            | `false`           |
 | `--detailed`               | Show full vulnerability descriptions instead of truncated | `false`           |
 | `--ignore`                 | Vulnerability IDs to ignore (repeatable)                  | `[]`              |

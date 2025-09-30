@@ -139,13 +139,17 @@ pub struct AuditArgs {
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
 
-    /// Include ALL dependencies (main + dev, optional, etc) [DEPRECATED: use --all-extras instead]
+    /// Include ALL dependencies (main + dev, optional, etc) [DEPRECATED: extras now included by default]
     #[arg(long, hide = true)]
     pub all: bool,
 
-    /// Include ALL extra dependencies (main + dev, optional, etc)
-    #[arg(long)]
+    /// Include ALL extra dependencies (main + dev, optional, etc) [DEPRECATED: extras now included by default]
+    #[arg(long, hide = true)]
     pub all_extras: bool,
+
+    /// Exclude extra dependencies (dev, optional, etc - only include main dependencies)
+    #[arg(long)]
+    pub exclude_extra: bool,
 
     /// Only check direct dependencies (exclude transitive)
     #[arg(long)]
@@ -216,21 +220,13 @@ impl AuditArgs {
     fn include_all_dependencies(&self) -> bool {
         static DEPRECATION_WARNING_SHOWN: Once = Once::new();
 
-        if self.all && self.all_extras {
+        if self.all || self.all_extras {
             DEPRECATION_WARNING_SHOWN.call_once(|| {
-                eprintln!("Warning: Both --all and --all-extras flags are specified. Using --all-extras only. The --all flag is deprecated.");
+                eprintln!("Warning: --all and --all-extras flags are deprecated. Extra dependencies are now included by default. Use --exclude-extra to exclude them.");
             });
-            return true;
         }
 
-        if self.all {
-            DEPRECATION_WARNING_SHOWN.call_once(|| {
-                eprintln!("Warning: --all flag is deprecated and will be removed in a future version. Use --all-extras instead.");
-            });
-            return true;
-        }
-
-        self.all_extras
+        !self.exclude_extra
     }
 
     pub fn include_dev(&self) -> bool {
@@ -245,7 +241,7 @@ impl AuditArgs {
         if self.include_all_dependencies() {
             "all (main + dev,optional,prod,etc)"
         } else {
-            "main only"
+            "main only (extras excluded)"
         }
     }
 
@@ -355,8 +351,8 @@ impl AuditArgs {
             };
         }
 
-        if !self.all && !self.all_extras && config.defaults.scope == "all" {
-            merged.all_extras = true;
+        if !self.exclude_extra && config.defaults.scope == "main" {
+            merged.exclude_extra = true;
         }
 
         if !self.direct_only {

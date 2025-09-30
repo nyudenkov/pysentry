@@ -551,7 +551,7 @@ fn default_fail_on() -> String {
     "medium".to_string()
 }
 fn default_scope() -> String {
-    "main".to_string()
+    "all".to_string()
 }
 fn default_sources() -> Vec<String> {
     vec!["pypa".to_string()]
