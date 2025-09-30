@@ -197,20 +197,19 @@ impl OsvSource {
 
     /// Convert OSV advisory to internal vulnerability format
     fn convert_osv_vulnerability(advisory: OsvAdvisory) -> Option<Vulnerability> {
-        // Extract package name from affected entries
         if advisory.affected.is_empty() {
             return None;
         }
-        let first_affected = &advisory.affected[0];
 
-        // Map OSV severity
         let severity = Self::map_osv_severity(&advisory);
 
-        // Extract version ranges
-        let affected_versions = Self::extract_osv_ranges(first_affected);
+        let mut affected_versions = Vec::new();
+        let mut fixed_versions = Vec::new();
 
-        // Extract fixed versions
-        let fixed_versions = Self::extract_fixed_versions(first_affected);
+        for affected in &advisory.affected {
+            affected_versions.extend(Self::extract_osv_ranges(affected));
+            fixed_versions.extend(Self::extract_fixed_versions(affected));
+        }
 
         // Build references
         let mut references = vec![];
