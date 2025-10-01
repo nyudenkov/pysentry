@@ -20,12 +20,14 @@ use crate::cache::CacheEntry;
 use crate::types::{PackageName, Version};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use tracing::debug;
 
+use super::retry::{is_http_error_retryable, retry_with_backoff};
 use crate::{
     AuditCache, AuditError, Result, Severity, VersionRange, Vulnerability, VulnerabilityDatabase,
     VulnerabilityProvider,
@@ -169,26 +171,46 @@ pub struct PypaSeverity {
 /// Client for downloading `PyPA` advisory database
 pub(super) struct PypaClient {
     client: Client,
+    http_config: crate::config::HttpConfig,
 }
 
 impl PypaClient {
-    /// Create a new `PyPA` client
-    pub(super) fn new() -> Self {
+    /// Create a new `PyPA` client with HTTP configuration
+    pub(super) fn new(http_config: crate::config::HttpConfig) -> Self {
         let client = Client::builder()
-            .user_agent(format!("uv/{}", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(format!("pysentry/{}", env!("CARGO_PKG_VERSION")))
+            .timeout(std::time::Duration::from_secs(http_config.timeout))
+            .connect_timeout(std::time::Duration::from_secs(http_config.connect_timeout))
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { client }
+        Self {
+            client,
+            http_config,
+        }
     }
 
-    /// Download the `PyPA` advisory database ZIP file
+    /// Download the `PyPA` advisory database ZIP file with retries and progress indication
     pub(super) async fn download_advisory_database(&self) -> Result<Vec<u8>> {
-        debug!(
-            "Downloading PyPA advisory database from {}",
-            PYPA_ADVISORY_DB_URL
-        );
+        retry_with_backoff(
+            self.http_config.max_retries,
+            self.http_config.retry_initial_backoff,
+            self.http_config.retry_max_backoff,
+            is_http_error_retryable,
+            || self.download_with_progress(),
+            "PyPA advisory database download",
+        )
+        .await
+        .map_err(|err| AuditError::DatabaseDownloadDetailed {
+            resource: "PyPA Advisory Database".to_string(),
+            url: PYPA_ADVISORY_DB_URL.to_string(),
+            source: Box::new(err),
+        })
+    }
+
+    /// Download the database with progress indication
+    async fn download_with_progress(&self) -> Result<Vec<u8>> {
+        use futures::StreamExt;
 
         let response = self.client.get(PYPA_ADVISORY_DB_URL).send().await?;
 
@@ -198,16 +220,53 @@ impl PypaClient {
             )));
         }
 
-        let bytes = response.bytes().await?;
-        debug!("Downloaded advisory database: {} bytes", bytes.len());
+        let total_size = response.content_length();
 
-        Ok(bytes.to_vec())
+        let pb = if self.http_config.show_progress {
+            if let Some(size) = total_size {
+                let bar = ProgressBar::new(size);
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+                        .unwrap()
+                        .progress_chars("#>-"),
+                );
+                bar.set_message("Downloading PyPA advisory database");
+                Some(bar)
+            } else {
+                let bar = ProgressBar::new_spinner();
+                bar.set_message("Downloading PyPA advisory database...");
+                Some(bar)
+            }
+        } else {
+            None
+        };
+
+        let mut downloaded: u64 = 0;
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            bytes.extend_from_slice(&chunk);
+            downloaded += chunk.len() as u64;
+
+            if let Some(ref bar) = pb {
+                bar.set_position(downloaded);
+            }
+        }
+
+        if let Some(bar) = pb {
+            bar.finish_with_message("Downloaded PyPA advisory database");
+        }
+
+        Ok(bytes)
     }
 }
 
 impl Default for PypaClient {
     fn default() -> Self {
-        Self::new()
+        Self::new(crate::config::HttpConfig::default())
     }
 }
 
@@ -219,11 +278,11 @@ pub struct PypaSource {
 }
 
 impl PypaSource {
-    /// Create a new `PyPA` source
-    pub fn new(cache: AuditCache, no_cache: bool) -> Self {
+    /// Create a new `PyPA` source with HTTP configuration
+    pub fn new(cache: AuditCache, no_cache: bool, http_config: crate::config::HttpConfig) -> Self {
         Self {
             cache,
-            client: PypaClient::new(),
+            client: PypaClient::new(http_config),
             no_cache,
         }
     }
@@ -647,6 +706,10 @@ mod tests {
         AuditCache::new(temp_dir.path().to_path_buf())
     }
 
+    fn create_test_http_config() -> crate::config::HttpConfig {
+        crate::config::HttpConfig::default()
+    }
+
     #[test]
     fn test_pypa_advisory_parsing() {
         let yaml = r#"
@@ -678,7 +741,7 @@ modified: "2021-07-15T02:22:07.728618Z"
 published: "2007-10-30T19:46:00Z"
 "#;
 
-        let _source = PypaSource::new(create_test_cache(), true);
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
 
         let advisory = PypaSource::parse_advisory(yaml).unwrap();
         assert_eq!(advisory.id, "PYSEC-2007-1");
@@ -706,7 +769,7 @@ affected:
 references: []
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true);
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_names = PypaSource::extract_package_names(&pypa_advisory);
@@ -734,7 +797,7 @@ affected:
 references: []
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true);
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_names = PypaSource::extract_package_names(&pypa_advisory);
@@ -769,7 +832,7 @@ affected:
 references: []
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true);
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_names = PypaSource::extract_package_names(&pypa_advisory);
@@ -803,7 +866,7 @@ modified: \"2025-01-14T21:22:18.665005Z\"
 published: \"2025-01-14T19:15:32Z\"
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true);
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_name = PackageName::from_str("requests").unwrap();
@@ -843,7 +906,7 @@ published: "2022-12-07T00:00:00Z"
 withdrawn: "2023-11-08T00:54:24Z"
 "#;
 
-        let _source = PypaSource::new(create_test_cache(), true);
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_name = PackageName::from_str("aiohttp").unwrap();

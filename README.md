@@ -337,7 +337,16 @@ color = "auto"
 [ignore]
 ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
 while_no_fix = ["CVE-2025-8869"]
+
+[http]
+timeout = 120
+connect_timeout = 30
+max_retries = 3
+retry_initial_backoff = 1
+retry_max_backoff = 60
+show_progress = true
 ```
+
 
 ### Environment Variables
 
@@ -727,6 +736,42 @@ curl -I https://osv-vulnerabilities.storage.googleapis.com/
 # Try with different or multiple sources
 pysentry --sources pypi
 pysentry --sources pypa,osv
+
+# For slow or unstable networks, increase timeout and retries
+# Create/edit .pysentry.toml in your project:
+```
+
+```toml
+[http]
+timeout = 300           # 5 minute timeout
+max_retries = 5         # More retry attempts
+retry_max_backoff = 120 # Longer backoff delays
+```
+
+```bash
+# Then run again
+pysentry
+```
+
+**Network timeout errors:**
+
+PySentry includes automatic retry with exponential backoff for network issues. If you still experience timeouts:
+
+```bash
+# Increase timeout values in config
+pysentry config init --output .pysentry.toml
+# Edit .pysentry.toml and adjust [http] section
+```
+
+**Rate limiting (HTTP 429 errors):**
+
+PySentry automatically handles rate limiting. If rate limits persist:
+
+```toml
+[http]
+max_retries = 5              # More attempts
+retry_initial_backoff = 5    # Longer initial wait
+retry_max_backoff = 300      # Up to 5 minute backoff
 ```
 
 **Slow requirements.txt resolution**

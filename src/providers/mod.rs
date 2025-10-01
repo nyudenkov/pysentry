@@ -28,6 +28,7 @@ pub(crate) use self::pypi::PypiSource;
 pub(crate) mod osv;
 mod pypa;
 mod pypi;
+mod retry;
 
 /// Trait for vulnerability data sources
 #[async_trait]
@@ -58,19 +59,17 @@ impl VulnerabilitySource {
         source: crate::types::VulnerabilitySource,
         cache: crate::AuditCache,
         no_cache: bool,
+        http_config: crate::config::HttpConfig,
     ) -> Self {
         match source {
             crate::types::VulnerabilitySource::Pypa => {
-                // PypaSource is now self-contained with direct PyPA parsing
-                VulnerabilitySource::PypaZip(PypaSource::new(cache, no_cache))
+                VulnerabilitySource::PypaZip(PypaSource::new(cache, no_cache, http_config))
             }
             crate::types::VulnerabilitySource::Pypi => {
-                // PypiSource queries PyPI JSON API directly
-                VulnerabilitySource::Pypi(PypiSource::new(cache, no_cache))
+                VulnerabilitySource::Pypi(PypiSource::new(cache, no_cache, http_config))
             }
             crate::types::VulnerabilitySource::Osv => {
-                // OsvSource directly queries OSV API
-                VulnerabilitySource::Osv(OsvSource::new(cache, no_cache))
+                VulnerabilitySource::Osv(OsvSource::new(cache, no_cache, http_config))
             }
         }
     }

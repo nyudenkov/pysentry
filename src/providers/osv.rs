@@ -21,11 +21,14 @@ use crate::types::Version;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::stream::{FuturesUnordered, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
+use super::retry::{is_http_error_retryable, retry_with_backoff};
 use crate::{
     AuditCache, AuditError, Result, Severity, VersionRange, Vulnerability, VulnerabilityDatabase,
     VulnerabilityProvider,
@@ -162,13 +165,15 @@ pub struct OsvSource {
     cache: AuditCache,
     no_cache: bool,
     client: reqwest::Client,
+    http_config: crate::config::HttpConfig,
 }
 
 impl OsvSource {
-    /// Create a new OSV source
-    pub fn new(cache: AuditCache, no_cache: bool) -> Self {
+    /// Create a new OSV source with HTTP configuration
+    pub fn new(cache: AuditCache, no_cache: bool, http_config: crate::config::HttpConfig) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs(http_config.timeout))
+            .connect_timeout(std::time::Duration::from_secs(http_config.connect_timeout))
             .build()
             .unwrap_or_default();
 
@@ -176,6 +181,7 @@ impl OsvSource {
             cache,
             no_cache,
             client,
+            http_config,
         }
     }
 
@@ -620,13 +626,75 @@ impl OsvSource {
         }
     }
 
-    /// Create a future for fetching vulnerability details
+    /// Create a future for fetching vulnerability details with retry
     async fn fetch_vulnerability_future(
         &self,
         vuln_id: String,
     ) -> (String, Result<Option<OsvAdvisory>>) {
-        let result = self.fetch_vulnerability_details(&vuln_id).await;
+        let vuln_id_clone = vuln_id.clone();
+        let context = format!("OSV vulnerability {}", vuln_id);
+
+        let result = retry_with_backoff(
+            self.http_config.max_retries,
+            self.http_config.retry_initial_backoff,
+            self.http_config.retry_max_backoff,
+            is_http_error_retryable,
+            || self.fetch_vulnerability_details(&vuln_id_clone),
+            &context,
+        )
+        .await
+        .map_err(|err| AuditError::DatabaseDownloadDetailed {
+            resource: format!("OSV vulnerability {}", vuln_id_clone),
+            url: format!("{}/vulns/{}", OSV_API_BASE, vuln_id_clone),
+            source: Box::new(err),
+        });
+
         (vuln_id, result)
+    }
+
+    /// Query OSV batch API with retry logic
+    async fn query_batch(&self, batch: &[OsvQuery]) -> Result<OsvBatchResponse> {
+        let batch_len = batch.len();
+        let batch_clone = batch.to_vec();
+        let context = format!("OSV batch query ({} packages)", batch_len);
+
+        retry_with_backoff(
+            self.http_config.max_retries,
+            self.http_config.retry_initial_backoff,
+            self.http_config.retry_max_backoff,
+            is_http_error_retryable,
+            || async {
+                let request = OsvBatchRequest {
+                    queries: batch_clone.clone(),
+                };
+
+                let response = self
+                    .client
+                    .post(format!("{OSV_API_BASE}/querybatch"))
+                    .json(&request)
+                    .send()
+                    .await?;
+
+                if !response.status().is_success() {
+                    return Err(AuditError::other(format!(
+                        "OSV API returned error: {}",
+                        response.status()
+                    )));
+                }
+
+                let response_text = response.text().await?;
+                let batch_response: OsvBatchResponse = serde_json::from_str(&response_text)?;
+
+                Ok(batch_response)
+            },
+            &context,
+        )
+        .await
+        .map_err(|err| AuditError::DatabaseDownloadDetailed {
+            resource: format!("OSV batch query ({} packages)", batch_len),
+            url: format!("{}/querybatch", OSV_API_BASE),
+            source: Box::new(err),
+        })
     }
 }
 
@@ -678,66 +746,73 @@ impl VulnerabilityProvider for OsvSource {
         let mut all_vulnerability_ids = Vec::new();
         let mut package_vuln_mapping = HashMap::new();
 
-        for batch in queries.chunks(BATCH_SIZE) {
-            let request = OsvBatchRequest {
-                queries: batch.to_vec(),
-            };
+        let batches: Vec<_> = queries.chunks(BATCH_SIZE).collect();
+        let total_batches = batches.len();
 
+        // Create progress bar for batch queries if enabled
+        let batch_pb = if self.http_config.show_progress && total_batches > 1 {
+            let bar = ProgressBar::new(total_batches as u64);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} batches")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            bar.set_message("Querying OSV for vulnerability IDs");
+            Some(Arc::new(bar))
+        } else {
+            None
+        };
+
+        for batch in batches {
             debug!("Querying OSV API with {} packages", batch.len());
 
-            let response = self
-                .client
-                .post(format!("{OSV_API_BASE}/querybatch"))
-                .json(&request)
-                .send()
-                .await
-                .map_err(|e| AuditError::DatabaseDownload(Box::new(e)))?;
-
-            if !response.status().is_success() {
-                warn!("OSV API returned error: {}", response.status());
-                continue;
-            }
-
-            let response_text = response
-                .text()
-                .await
-                .map_err(|e| AuditError::DatabaseDownload(Box::new(e)))?;
-
-            debug!("OSV API response body: {}", response_text);
-
-            let batch_response: OsvBatchResponse =
-                serde_json::from_str(&response_text).map_err(|e| {
-                    warn!("Failed to parse OSV response: {}", e);
-                    warn!("Response text: {}", response_text);
-                    AuditError::Json(e)
-                })?;
-
-            debug!(
-                "Successfully parsed batch response with {} results",
-                batch_response.results.len()
-            );
-
-            // Collect vulnerability IDs and map them to packages
-            for (idx, result) in batch_response.results.into_iter().enumerate() {
-                let package_name = if let Some(query) = batch.get(idx) {
-                    query
-                        .package
-                        .as_ref()
-                        .map(|p| p.name.clone())
-                        .unwrap_or_else(|| "unknown".to_string())
-                } else {
-                    "unknown".to_string()
-                };
-
-                for vuln in result.vulns {
+            match self.query_batch(batch).await {
+                Ok(batch_response) => {
                     debug!(
-                        "Found vulnerability {} for package {}",
-                        vuln.id, package_name
+                        "Successfully parsed batch response with {} results",
+                        batch_response.results.len()
                     );
-                    all_vulnerability_ids.push(vuln.id.clone());
-                    package_vuln_mapping.insert(vuln.id, package_name.clone());
+
+                    // Collect vulnerability IDs and map them to packages
+                    for (idx, result) in batch_response.results.into_iter().enumerate() {
+                        let package_name = if let Some(query) = batch.get(idx) {
+                            query
+                                .package
+                                .as_ref()
+                                .map(|p| p.name.clone())
+                                .unwrap_or_else(|| "unknown".to_string())
+                        } else {
+                            "unknown".to_string()
+                        };
+
+                        for vuln in result.vulns {
+                            debug!(
+                                "Found vulnerability {} for package {}",
+                                vuln.id, package_name
+                            );
+                            all_vulnerability_ids.push(vuln.id.clone());
+                            package_vuln_mapping.insert(vuln.id, package_name.clone());
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to query OSV batch: {}", e);
                 }
             }
+
+            // Update batch progress bar
+            if let Some(ref bar) = batch_pb {
+                bar.inc(1);
+            }
+        }
+
+        // Finish batch progress bar
+        if let Some(bar) = batch_pb {
+            bar.finish_with_message(format!(
+                "Queried OSV: {} vulnerability IDs found",
+                all_vulnerability_ids.len()
+            ));
         }
 
         debug!(
@@ -749,6 +824,21 @@ impl VulnerabilityProvider for OsvSource {
         let mut all_vulnerabilities = HashMap::new();
         let mut successful_fetches = 0;
         let mut failed_fetches = 0;
+
+        // Create progress bar for vulnerability details if enabled
+        let details_pb = if self.http_config.show_progress && all_vulnerability_ids.len() > 1 {
+            let bar = ProgressBar::new(all_vulnerability_ids.len() as u64);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} vulnerabilities ({eta})")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            bar.set_message("Fetching OSV vulnerability details");
+            Some(Arc::new(bar))
+        } else {
+            None
+        };
 
         // Create concurrent futures with rate limiting
         const MAX_CONCURRENT_REQUESTS: usize = 10; // Limit concurrent requests to avoid overwhelming OSV API
@@ -812,6 +902,19 @@ impl VulnerabilityProvider for OsvSource {
                     }
                 }
             }
+
+            // Update details progress bar
+            if let Some(ref bar) = details_pb {
+                bar.inc(1);
+            }
+        }
+
+        // Finish details progress bar
+        if let Some(bar) = details_pb {
+            bar.finish_with_message(format!(
+                "Fetched OSV details: {} successful, {} failed",
+                successful_fetches, failed_fetches
+            ));
         }
 
         debug!(

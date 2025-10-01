@@ -727,7 +727,11 @@ pub async fn check_for_update_silent() -> Result<Option<String>> {
     }
 }
 
-pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
+pub async fn audit(
+    audit_args: &AuditArgs,
+    cache_dir: &Path,
+    http_config: crate::config::HttpConfig,
+) -> Result<i32> {
     if audit_args.verbose {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
@@ -762,7 +766,7 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
         }
     }
 
-    let audit_result = perform_audit(audit_args, cache_dir).await;
+    let audit_result = perform_audit(audit_args, cache_dir, http_config).await;
 
     let report = match audit_result {
         Ok(report) => report,
@@ -821,7 +825,11 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
     }
 }
 
-async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<AuditReport> {
+async fn perform_audit(
+    audit_args: &AuditArgs,
+    cache_dir: &Path,
+    http_config: crate::config::HttpConfig,
+) -> Result<AuditReport> {
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
@@ -839,6 +847,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
                 source_type.clone().into(),
                 audit_cache.clone(),
                 audit_args.no_cache,
+                http_config.clone(),
             )
         })
         .collect();
@@ -1138,6 +1147,7 @@ pub async fn config_init(args: &ConfigInitArgs) -> Result<()> {
     println!("- Severity: low, medium, high, critical");
     println!("- Sources: pypa, pypi, osv");
     println!("- Resolver: uv, pip-tools");
+    println!("- HTTP: Configure timeouts, retries, and progress indication");
     println!("- Include withdrawn: true/false");
 
     Ok(())
@@ -1269,6 +1279,25 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
         println!("  CI format: {}", config_loader.config.ci.format);
         println!("  CI fail on: {}", config_loader.config.ci.fail_on);
         println!("  CI annotations: {}", config_loader.config.ci.annotations);
+        println!();
+        println!("  HTTP timeout: {}s", config_loader.config.http.timeout);
+        println!(
+            "  HTTP connect timeout: {}s",
+            config_loader.config.http.connect_timeout
+        );
+        println!(
+            "  HTTP max retries: {}",
+            config_loader.config.http.max_retries
+        );
+        println!(
+            "  HTTP retry backoff: {}-{}s",
+            config_loader.config.http.retry_initial_backoff,
+            config_loader.config.http.retry_max_backoff
+        );
+        println!(
+            "  HTTP show progress: {}",
+            config_loader.config.http.show_progress
+        );
     }
 
     Ok(())

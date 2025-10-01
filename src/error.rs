@@ -30,6 +30,13 @@ pub enum AuditError {
     #[error("Failed to download vulnerability database: {0}")]
     DatabaseDownload(Box<dyn std::error::Error + Send + Sync>),
 
+    #[error("Failed to download {resource} from {url}: {source}")]
+    DatabaseDownloadDetailed {
+        resource: String,
+        url: String,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
     #[error("Failed to read project dependencies: {0}")]
     DependencyRead(Box<dyn std::error::Error + Send + Sync>),
 

@@ -116,7 +116,12 @@ impl AuditEngine {
             AuditCache::new(temp_dir)
         });
 
-        let vuln_source = VulnerabilitySource::new(source_type, cache, false);
+        let vuln_source = VulnerabilitySource::new(
+            source_type,
+            cache,
+            false,
+            crate::config::HttpConfig::default(),
+        );
 
         // 3. Fetch vulnerabilities
         let packages: Vec<(String, String)> = dependencies

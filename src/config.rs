@@ -54,6 +54,9 @@ pub struct Config {
 
     #[serde(default)]
     pub ci: CiConfig,
+
+    #[serde(default)]
+    pub http: HttpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +178,27 @@ pub struct CiConfig {
 
     #[serde(default = "default_ci_annotations")]
     pub annotations: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpConfig {
+    #[serde(default = "default_http_timeout")]
+    pub timeout: u64,
+
+    #[serde(default = "default_http_connect_timeout")]
+    pub connect_timeout: u64,
+
+    #[serde(default = "default_http_max_retries")]
+    pub max_retries: u32,
+
+    #[serde(default = "default_http_retry_initial_backoff")]
+    pub retry_initial_backoff: u64,
+
+    #[serde(default = "default_http_retry_max_backoff")]
+    pub retry_max_backoff: u64,
+
+    #[serde(default = "default_http_show_progress")]
+    pub show_progress: bool,
 }
 
 pub struct ConfigLoader {
@@ -404,6 +428,23 @@ impl Config {
 
         self.validate_severity(&self.ci.fail_on, "ci.fail_on")?;
 
+        if self.http.timeout == 0 {
+            anyhow::bail!("HTTP timeout must be greater than 0 seconds");
+        }
+        if self.http.connect_timeout == 0 {
+            anyhow::bail!("HTTP connect timeout must be greater than 0 seconds");
+        }
+        if self.http.retry_initial_backoff == 0 {
+            anyhow::bail!("HTTP retry initial backoff must be greater than 0 seconds");
+        }
+        if self.http.retry_max_backoff < self.http.retry_initial_backoff {
+            anyhow::bail!(
+                "HTTP retry max backoff ({}) must be greater than or equal to initial backoff ({})",
+                self.http.retry_max_backoff,
+                self.http.retry_initial_backoff
+            );
+        }
+
         for (i, pattern) in self.ignore.patterns.iter().enumerate() {
             if let Err(e) = regex::Regex::new(pattern) {
                 anyhow::bail!(
@@ -474,6 +515,7 @@ impl Default for Config {
             ignore: IgnoreConfig::default(),
             projects: Vec::new(),
             ci: CiConfig::default(),
+            http: HttpConfig::default(),
         }
     }
 }
@@ -541,6 +583,19 @@ impl Default for CiConfig {
     }
 }
 
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            timeout: default_http_timeout(),
+            connect_timeout: default_http_connect_timeout(),
+            max_retries: default_http_max_retries(),
+            retry_initial_backoff: default_http_retry_initial_backoff(),
+            retry_max_backoff: default_http_retry_max_backoff(),
+            show_progress: default_http_show_progress(),
+        }
+    }
+}
+
 fn default_version() -> u32 {
     1
 }
@@ -587,5 +642,23 @@ fn default_ci_fail_on() -> String {
     "high".to_string()
 }
 fn default_ci_annotations() -> bool {
+    true
+}
+fn default_http_timeout() -> u64 {
+    120
+}
+fn default_http_connect_timeout() -> u64 {
+    30
+}
+fn default_http_max_retries() -> u32 {
+    3
+}
+fn default_http_retry_initial_backoff() -> u64 {
+    1
+}
+fn default_http_retry_max_backoff() -> u64 {
+    60
+}
+fn default_http_show_progress() -> bool {
     true
 }
