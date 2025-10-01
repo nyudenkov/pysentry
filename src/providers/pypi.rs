@@ -19,10 +19,14 @@
 use crate::cache::CacheEntry;
 use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, warn};
+
+use super::retry::{is_http_error_retryable, retry_with_backoff};
 
 use crate::types::Version;
 use crate::{
@@ -35,13 +39,15 @@ pub struct PypiSource {
     cache: AuditCache,
     no_cache: bool,
     client: reqwest::Client,
+    http_config: crate::config::HttpConfig,
 }
 
 impl PypiSource {
-    /// Create a new PyPI source
-    pub fn new(cache: AuditCache, no_cache: bool) -> Self {
+    /// Create a new PyPI source with HTTP configuration
+    pub fn new(cache: AuditCache, no_cache: bool, http_config: crate::config::HttpConfig) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(http_config.timeout))
+            .connect_timeout(std::time::Duration::from_secs(http_config.connect_timeout))
             .build()
             .unwrap_or_default();
 
@@ -49,6 +55,7 @@ impl PypiSource {
             cache,
             no_cache,
             client,
+            http_config,
         }
     }
 
@@ -57,7 +64,7 @@ impl PypiSource {
         self.cache.database_entry(&format!("pypi-{name}-{version}"))
     }
 
-    /// Fetch vulnerability data from PyPI for a single package
+    /// Fetch vulnerability data from PyPI for a single package with retry
     async fn fetch_package_vulnerabilities(
         &self,
         name: &str,
@@ -196,13 +203,34 @@ impl PypiSource {
         vec![]
     }
 
-    /// Create a future for fetching package vulnerabilities
+    /// Create a future for fetching package vulnerabilities with retry
     async fn fetch_package_future(
         &self,
         name: String,
         version: String,
     ) -> (String, String, Result<Vec<Vulnerability>>) {
-        let result = self.fetch_package_vulnerabilities(&name, &version).await;
+        let name_clone = name.clone();
+        let version_clone = version.clone();
+        let context = format!("PyPI query for {} {}", name, version);
+
+        let result = retry_with_backoff(
+            self.http_config.max_retries,
+            self.http_config.retry_initial_backoff,
+            self.http_config.retry_max_backoff,
+            is_http_error_retryable,
+            || self.fetch_package_vulnerabilities(&name_clone, &version_clone),
+            &context,
+        )
+        .await
+        .map_err(|err| AuditError::DatabaseDownloadDetailed {
+            resource: format!("PyPI package {} {}", name_clone, version_clone),
+            url: format!(
+                "https://pypi.org/pypi/{}/{}/json",
+                name_clone, version_clone
+            ),
+            source: Box::new(err),
+        });
+
         (name, version, result)
     }
 }
@@ -221,6 +249,21 @@ impl VulnerabilityProvider for PypiSource {
             "Fetching vulnerabilities for {} packages from PyPI",
             packages.len()
         );
+
+        // Create progress bar if enabled
+        let pb = if self.http_config.show_progress && packages.len() > 1 {
+            let bar = ProgressBar::new(packages.len() as u64);
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} packages ({eta})")
+                    .unwrap()
+                    .progress_chars("#>-"),
+            );
+            bar.set_message("Querying PyPI for vulnerabilities");
+            Some(Arc::new(bar))
+        } else {
+            None
+        };
 
         // Fetch vulnerabilities for all packages concurrently with rate limiting
         const MAX_CONCURRENT_REQUESTS: usize = 15; // Limit to avoid overwhelming PyPI API
@@ -266,6 +309,19 @@ impl VulnerabilityProvider for PypiSource {
                     );
                 }
             }
+
+            // Update progress bar
+            if let Some(ref bar) = pb {
+                bar.inc(1);
+            }
+        }
+
+        // Finish progress bar
+        if let Some(bar) = pb {
+            bar.finish_with_message(format!(
+                "Queried PyPI: {} successful, {} failed",
+                successful_fetches, failed_fetches
+            ));
         }
 
         debug!(

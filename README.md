@@ -174,8 +174,8 @@ pysentry /path/to/project
 pysentry --resolver uv /path/to/project
 pysentry --resolver pip-tools /path/to/project
 
-# Include all dependencies (main + dev + optional)
-pysentry --all-extras
+# Exclude extra dependencies (only check main dependencies)
+pysentry --exclude-extra
 
 # Filter by severity (only show high and critical)
 pysentry --severity high
@@ -187,8 +187,8 @@ pysentry --format json --output audit-results.json
 ### Advanced Usage
 
 ```bash
-# Using uvx for comprehensive audit
-uvx pysentry-rs --all-extras --format sarif --output security-report.sarif
+# Using uvx for comprehensive audit (extras included by default)
+uvx pysentry-rs --format sarif --output security-report.sarif
 
 # Check multiple vulnerability sources concurrently
 uvx pysentry-rs --sources pypa,osv,pypi /path/to/project
@@ -200,13 +200,16 @@ uvx pysentry-rs --format markdown --output security-report.md
 # Control CI exit codes - only fail on critical vulnerabilities
 uvx pysentry-rs --fail-on critical
 
-# Or with installed binary
-pysentry --all-extras --format sarif --output security-report.sarif
+# Or with installed binary (extras included by default)
+pysentry --format sarif --output security-report.sarif
 pysentry --sources pypa,osv --direct-only
 pysentry --format markdown --output security-report.md
 
 # Ignore specific vulnerabilities
 pysentry --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
+
+# Ignore unfixable vulnerabilities (only while they have no fix available)
+pysentry --ignore-while-no-fix CVE-2025-8869
 
 # Disable caching for CI environments
 pysentry --no-cache
@@ -253,8 +256,8 @@ pysentry --sources pypa,pypi,osv --format json --output prod-security.json
 # Generate markdown report for GitHub issues/PRs
 pysentry --format markdown --output SECURITY-REPORT.md
 
-# Comprehensive audit with all sources and full reporting
-pysentry --sources pypa,pypi,osv --all-extras --format json --fail-on low
+# Comprehensive audit with all sources and full reporting (extras included by default)
+pysentry --sources pypa,pypi,osv --format json --fail-on low
 
 # CI environment with fresh resolution cache
 pysentry --clear-resolution-cache --sources pypa,osv --format sarif
@@ -333,7 +336,17 @@ color = "auto"
 
 [ignore]
 ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
+while_no_fix = ["CVE-2025-8869"]
+
+[http]
+timeout = 120
+connect_timeout = 30
+max_retries = 3
+retry_initial_backoff = 1
+retry_max_backoff = 60
+show_progress = true
 ```
+
 
 ### Environment Variables
 
@@ -350,10 +363,11 @@ ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
 | `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`     | `low`             |
 | `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity        | `medium`          |
 | `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa`            |
-| `--all-extras`             | Include all dependencies (main + dev + optional)          | `false`           |
+| `--exclude-extra`          | Exclude extra dependencies (dev, optional, etc)           | `false`           |
 | `--direct-only`            | Check only direct dependencies                            | `false`           |
 | `--detailed`               | Show full vulnerability descriptions instead of truncated | `false`           |
 | `--ignore`                 | Vulnerability IDs to ignore (repeatable)                  | `[]`              |
+| `--ignore-while-no-fix`    | Ignore vulnerabilities only while no fix is available     | `[]`              |
 | `--output`                 | Output file path                                          | `stdout`          |
 | `--no-cache`               | Disable all caching                                       | `false`           |
 | `--cache-dir`              | Custom cache directory                                    | Platform-specific |
@@ -722,6 +736,42 @@ curl -I https://osv-vulnerabilities.storage.googleapis.com/
 # Try with different or multiple sources
 pysentry --sources pypi
 pysentry --sources pypa,osv
+
+# For slow or unstable networks, increase timeout and retries
+# Create/edit .pysentry.toml in your project:
+```
+
+```toml
+[http]
+timeout = 300           # 5 minute timeout
+max_retries = 5         # More retry attempts
+retry_max_backoff = 120 # Longer backoff delays
+```
+
+```bash
+# Then run again
+pysentry
+```
+
+**Network timeout errors:**
+
+PySentry includes automatic retry with exponential backoff for network issues. If you still experience timeouts:
+
+```bash
+# Increase timeout values in config
+pysentry config init --output .pysentry.toml
+# Edit .pysentry.toml and adjust [http] section
+```
+
+**Rate limiting (HTTP 429 errors):**
+
+PySentry automatically handles rate limiting. If rate limits persist:
+
+```toml
+[http]
+max_retries = 5              # More attempts
+retry_initial_backoff = 5    # Longer initial wait
+retry_max_backoff = 300      # Up to 5 minute backoff
 ```
 
 **Slow requirements.txt resolution**

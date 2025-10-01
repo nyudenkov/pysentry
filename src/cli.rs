@@ -135,17 +135,25 @@ pub struct AuditArgs {
     #[arg(long = "ignore", value_name = "ID")]
     pub ignore_ids: Vec<String>,
 
+    /// Vulnerability IDs to ignore only while no fix is available (can be specified multiple times)
+    #[arg(long = "ignore-while-no-fix", value_name = "ID")]
+    pub ignore_while_no_fix: Vec<String>,
+
     /// Output file path (defaults to stdout)
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
 
-    /// Include ALL dependencies (main + dev, optional, etc) [DEPRECATED: use --all-extras instead]
+    /// Include ALL dependencies (main + dev, optional, etc) [DEPRECATED: extras now included by default]
     #[arg(long, hide = true)]
     pub all: bool,
 
-    /// Include ALL extra dependencies (main + dev, optional, etc)
-    #[arg(long)]
+    /// Include ALL extra dependencies (main + dev, optional, etc) [DEPRECATED: extras now included by default]
+    #[arg(long, hide = true)]
     pub all_extras: bool,
+
+    /// Exclude extra dependencies (dev, optional, etc - only include main dependencies)
+    #[arg(long)]
+    pub exclude_extra: bool,
 
     /// Only check direct dependencies (exclude transitive)
     #[arg(long)]
@@ -216,21 +224,13 @@ impl AuditArgs {
     fn include_all_dependencies(&self) -> bool {
         static DEPRECATION_WARNING_SHOWN: Once = Once::new();
 
-        if self.all && self.all_extras {
+        if self.all || self.all_extras {
             DEPRECATION_WARNING_SHOWN.call_once(|| {
-                eprintln!("Warning: Both --all and --all-extras flags are specified. Using --all-extras only. The --all flag is deprecated.");
+                eprintln!("Warning: --all and --all-extras flags are deprecated. Extra dependencies are now included by default. Use --exclude-extra to exclude them.");
             });
-            return true;
         }
 
-        if self.all {
-            DEPRECATION_WARNING_SHOWN.call_once(|| {
-                eprintln!("Warning: --all flag is deprecated and will be removed in a future version. Use --all-extras instead.");
-            });
-            return true;
-        }
-
-        self.all_extras
+        !self.exclude_extra
     }
 
     pub fn include_dev(&self) -> bool {
@@ -245,7 +245,7 @@ impl AuditArgs {
         if self.include_all_dependencies() {
             "all (main + dev,optional,prod,etc)"
         } else {
-            "main only"
+            "main only (extras excluded)"
         }
     }
 
@@ -355,8 +355,8 @@ impl AuditArgs {
             };
         }
 
-        if !self.all && !self.all_extras && config.defaults.scope == "all" {
-            merged.all_extras = true;
+        if !self.exclude_extra && config.defaults.scope == "main" {
+            merged.exclude_extra = true;
         }
 
         if !self.direct_only {
@@ -399,6 +399,10 @@ impl AuditArgs {
         let mut ignore_ids = self.ignore_ids.clone();
         ignore_ids.extend(config.ignore.ids.clone());
         merged.ignore_ids = ignore_ids;
+
+        let mut ignore_while_no_fix = self.ignore_while_no_fix.clone();
+        ignore_while_no_fix.extend(config.ignore.while_no_fix.clone());
+        merged.ignore_while_no_fix = ignore_while_no_fix;
 
         if !self.quiet {
             merged.quiet = config.output.quiet;
@@ -723,7 +727,11 @@ pub async fn check_for_update_silent() -> Result<Option<String>> {
     }
 }
 
-pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
+pub async fn audit(
+    audit_args: &AuditArgs,
+    cache_dir: &Path,
+    http_config: crate::config::HttpConfig,
+) -> Result<i32> {
     if audit_args.verbose {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
@@ -749,9 +757,16 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
                 audit_args.ignore_ids.join(", ")
             );
         }
+
+        if !audit_args.ignore_while_no_fix.is_empty() {
+            eprintln!(
+                "Ignoring unfixable vulnerability IDs: {}",
+                audit_args.ignore_while_no_fix.join(", ")
+            );
+        }
     }
 
-    let audit_result = perform_audit(audit_args, cache_dir).await;
+    let audit_result = perform_audit(audit_args, cache_dir, http_config).await;
 
     let report = match audit_result {
         Ok(report) => report,
@@ -810,7 +825,11 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
     }
 }
 
-async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<AuditReport> {
+async fn perform_audit(
+    audit_args: &AuditArgs,
+    cache_dir: &Path,
+    http_config: crate::config::HttpConfig,
+) -> Result<AuditReport> {
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
@@ -828,6 +847,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
                 source_type.clone().into(),
                 audit_cache.clone(),
                 audit_args.no_cache,
+                http_config.clone(),
             )
         })
         .collect();
@@ -1017,6 +1037,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
     let matcher_config = MatcherConfig::new(
         audit_args.severity.clone().into(),
         audit_args.ignore_ids.to_vec(),
+        audit_args.ignore_while_no_fix.to_vec(),
         audit_args.direct_only,
         audit_args.include_withdrawn,
     );
@@ -1126,6 +1147,7 @@ pub async fn config_init(args: &ConfigInitArgs) -> Result<()> {
     println!("- Severity: low, medium, high, critical");
     println!("- Sources: pypa, pypi, osv");
     println!("- Resolver: uv, pip-tools");
+    println!("- HTTP: Configure timeouts, retries, and progress indication");
     println!("- Include withdrawn: true/false");
 
     Ok(())
@@ -1257,6 +1279,25 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
         println!("  CI format: {}", config_loader.config.ci.format);
         println!("  CI fail on: {}", config_loader.config.ci.fail_on);
         println!("  CI annotations: {}", config_loader.config.ci.annotations);
+        println!();
+        println!("  HTTP timeout: {}s", config_loader.config.http.timeout);
+        println!(
+            "  HTTP connect timeout: {}s",
+            config_loader.config.http.connect_timeout
+        );
+        println!(
+            "  HTTP max retries: {}",
+            config_loader.config.http.max_retries
+        );
+        println!(
+            "  HTTP retry backoff: {}-{}s",
+            config_loader.config.http.retry_initial_backoff,
+            config_loader.config.http.retry_max_backoff
+        );
+        println!(
+            "  HTTP show progress: {}",
+            config_loader.config.http.show_progress
+        );
     }
 
     Ok(())
@@ -1320,8 +1361,14 @@ enabled = ["pypa"]
 # Add vulnerability IDs to ignore
 ids = []
 
+# Add vulnerability IDs to ignore only while they have no fix available
+# This is useful for acknowledging unfixable vulnerabilities temporarily
+# Once a fix becomes available, the scan will fail again
+while_no_fix = []
+
 # Example:
 # ids = ["GHSA-1234-5678-90ab", "CVE-2024-12345"]
+# while_no_fix = ["CVE-2025-8869"]
 "#
     .to_string()
 }

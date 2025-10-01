@@ -32,13 +32,15 @@ async fn main() -> Result<()> {
     match args.command {
         // No subcommand provided - run audit with flattened args
         None => {
-            let (merged_audit_args, _config) = match args.audit_args.load_and_merge_config() {
+            let (merged_audit_args, config) = match args.audit_args.load_and_merge_config() {
                 Ok(result) => result,
                 Err(e) => {
                     eprintln!("Configuration error: {e}");
                     std::process::exit(1);
                 }
             };
+
+            let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
 
             let log_level = if merged_audit_args.verbose {
                 "info"
@@ -56,7 +58,7 @@ async fn main() -> Result<()> {
                     .join("pysentry")
             });
 
-            let exit_code = audit(&merged_audit_args, &cache_dir).await?;
+            let exit_code = audit(&merged_audit_args, &cache_dir, http_config).await?;
 
             std::process::exit(exit_code);
         }

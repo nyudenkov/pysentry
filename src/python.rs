@@ -73,7 +73,9 @@ fn run_cli(args: Vec<String>) -> PyResult<i32> {
                         .join("pysentry")
                 });
 
-                match audit(&audit_args, &cache_dir).await {
+                let http_config = crate::config::HttpConfig::default();
+
+                match audit(&audit_args, &cache_dir, http_config).await {
                     Ok(exit_code) => Ok(exit_code),
                     Err(e) => {
                         eprintln!("Error: Audit failed: {e}");
