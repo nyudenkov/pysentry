@@ -127,6 +127,9 @@ pub struct IgnoreConfig {
     pub ids: Vec<String>,
 
     #[serde(default)]
+    pub while_no_fix: Vec<String>,
+
+    #[serde(default)]
     pub patterns: Vec<String>,
 
     #[serde(default)]

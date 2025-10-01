@@ -130,6 +130,7 @@ impl AuditEngine {
         let matcher_config = MatcherConfig::new(
             min_severity,
             ignore_ids.to_vec(),
+            vec![],
             direct_only,
             include_withdrawn,
         );

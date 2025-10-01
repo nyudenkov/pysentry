@@ -135,6 +135,10 @@ pub struct AuditArgs {
     #[arg(long = "ignore", value_name = "ID")]
     pub ignore_ids: Vec<String>,
 
+    /// Vulnerability IDs to ignore only while no fix is available (can be specified multiple times)
+    #[arg(long = "ignore-while-no-fix", value_name = "ID")]
+    pub ignore_while_no_fix: Vec<String>,
+
     /// Output file path (defaults to stdout)
     #[arg(long, short, value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
@@ -395,6 +399,10 @@ impl AuditArgs {
         let mut ignore_ids = self.ignore_ids.clone();
         ignore_ids.extend(config.ignore.ids.clone());
         merged.ignore_ids = ignore_ids;
+
+        let mut ignore_while_no_fix = self.ignore_while_no_fix.clone();
+        ignore_while_no_fix.extend(config.ignore.while_no_fix.clone());
+        merged.ignore_while_no_fix = ignore_while_no_fix;
 
         if !self.quiet {
             merged.quiet = config.output.quiet;
@@ -745,6 +753,13 @@ pub async fn audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<i32> {
                 audit_args.ignore_ids.join(", ")
             );
         }
+
+        if !audit_args.ignore_while_no_fix.is_empty() {
+            eprintln!(
+                "Ignoring unfixable vulnerability IDs: {}",
+                audit_args.ignore_while_no_fix.join(", ")
+            );
+        }
     }
 
     let audit_result = perform_audit(audit_args, cache_dir).await;
@@ -1013,6 +1028,7 @@ async fn perform_audit(audit_args: &AuditArgs, cache_dir: &Path) -> Result<Audit
     let matcher_config = MatcherConfig::new(
         audit_args.severity.clone().into(),
         audit_args.ignore_ids.to_vec(),
+        audit_args.ignore_while_no_fix.to_vec(),
         audit_args.direct_only,
         audit_args.include_withdrawn,
     );
@@ -1316,8 +1332,14 @@ enabled = ["pypa"]
 # Add vulnerability IDs to ignore
 ids = []
 
+# Add vulnerability IDs to ignore only while they have no fix available
+# This is useful for acknowledging unfixable vulnerabilities temporarily
+# Once a fix becomes available, the scan will fail again
+while_no_fix = []
+
 # Example:
 # ids = ["GHSA-1234-5678-90ab", "CVE-2024-12345"]
+# while_no_fix = ["CVE-2025-8869"]
 "#
     .to_string()
 }

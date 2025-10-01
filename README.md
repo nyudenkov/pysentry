@@ -208,6 +208,9 @@ pysentry --format markdown --output security-report.md
 # Ignore specific vulnerabilities
 pysentry --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
 
+# Ignore unfixable vulnerabilities (only while they have no fix available)
+pysentry --ignore-while-no-fix CVE-2025-8869
+
 # Disable caching for CI environments
 pysentry --no-cache
 
@@ -333,6 +336,7 @@ color = "auto"
 
 [ignore]
 ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
+while_no_fix = ["CVE-2025-8869"]
 ```
 
 ### Environment Variables
@@ -354,6 +358,7 @@ ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
 | `--direct-only`            | Check only direct dependencies                            | `false`           |
 | `--detailed`               | Show full vulnerability descriptions instead of truncated | `false`           |
 | `--ignore`                 | Vulnerability IDs to ignore (repeatable)                  | `[]`              |
+| `--ignore-while-no-fix`    | Ignore vulnerabilities only while no fix is available     | `[]`              |
 | `--output`                 | Output file path                                          | `stdout`          |
 | `--no-cache`               | Disable all caching                                       | `false`           |
 | `--cache-dir`              | Custom cache directory                                    | Platform-specific |
