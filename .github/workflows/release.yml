@@ -136,80 +136,26 @@ jobs:
 
   build-python-wheels:
     name: Build Python Wheels
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.osarch.os }}
     strategy:
-      fail-fast: false
       matrix:
-        include:
-          # x86_64 Linux
+        osarch:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            python: "3.9"
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            python: "3.10"
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            python: "3.11"
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            python: "3.12"
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            python: "3.13"
-          # macOS
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            python: "3.9"
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            python: "3.10"
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            python: "3.11"
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            python: "3.12"
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            python: "3.13"
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            python: "3.9"
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            python: "3.10"
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            python: "3.11"
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            python: "3.12"
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            python: "3.13"
-          # Windows
+            target: aarch64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            python: "3.9"
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            python: "3.10"
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            python: "3.11"
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            python: "3.12"
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            python: "3.13"
-
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies (Ubuntu)
-        if: startsWith(matrix.os, 'ubuntu')
+        if: startsWith(matrix.osarch.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Set up Python
@@ -227,12 +173,12 @@ jobs:
           args: --release --features python --out dist -i ${{ matrix.python }}
           sccache: "true"
           manylinux: auto
-          target: ${{ matrix.target }}
+          target: ${{ matrix.osarch.target }}
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}-${{ matrix.python }}
+          name: wheels-${{ matrix.osarch.os }}-${{ matrix.osarch.target }}-${{ matrix.python }}
           path: dist/*.whl
 
   build-sdist:
