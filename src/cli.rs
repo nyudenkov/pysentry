@@ -741,11 +741,11 @@ pub async fn audit(
 
     if audit_args.verbose {
         eprintln!(
-            "Configuration: format={:?}, severity={:?}, fail_on={:?}, source={:?}, scope='{}', direct_only={}",
+            "Configuration: format={:?}, severity={:?}, fail_on={:?}, sources=[{}], scope='{}', direct_only={}",
             audit_args.format,
             audit_args.severity,
             audit_args.fail_on,
-            audit_args.source,
+            audit_args.sources.join(", "),
             audit_args.scope_description(),
             audit_args.direct_only
         );
