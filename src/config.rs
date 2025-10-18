@@ -662,3 +662,89 @@ fn default_http_retry_max_backoff() -> u64 {
 fn default_http_show_progress() -> bool {
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_config_load_from_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".pysentry.toml");
+
+        let config_content = r#"
+version = 1
+
+[defaults]
+format = "markdown"
+severity = "medium"
+fail_on = "low"
+
+[sources]
+enabled = ["pypa", "pypi", "osv"]
+
+[cache]
+enabled = false
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let loader = ConfigLoader::load_from_file(&config_path).unwrap();
+
+        assert_eq!(loader.config.defaults.format, "markdown");
+        assert_eq!(loader.config.defaults.severity, "medium");
+        assert_eq!(loader.config.defaults.fail_on, "low");
+        assert_eq!(loader.config.sources.enabled, vec!["pypa", "pypi", "osv"]);
+        assert!(!loader.config.cache.enabled);
+        assert!(loader.config_path.is_some());
+    }
+
+    #[test]
+    fn test_config_default_values() {
+        let config = Config::default();
+
+        assert_eq!(config.version, 1);
+        assert_eq!(config.defaults.format, "human");
+        assert_eq!(config.defaults.severity, "low");
+        assert_eq!(config.defaults.fail_on, "medium");
+        assert_eq!(config.sources.enabled, vec!["pypa"]);
+        assert!(config.cache.enabled);
+    }
+
+    #[test]
+    fn test_config_validation() {
+        let mut config = Config::default();
+
+        // Valid config should pass
+        assert!(config.validate().is_ok());
+
+        // Invalid format
+        config.defaults.format = "invalid".to_string();
+        assert!(config.validate().is_err());
+        config.defaults.format = "human".to_string();
+
+        // Invalid severity
+        config.defaults.severity = "invalid".to_string();
+        assert!(config.validate().is_err());
+        config.defaults.severity = "low".to_string();
+
+        // Invalid source
+        config.sources.enabled = vec!["invalid".to_string()];
+        assert!(config.validate().is_err());
+        config.sources.enabled = vec!["pypa".to_string()];
+
+        // Empty sources
+        config.sources.enabled = vec![];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_loader_with_no_config() {
+        // Test that loader works even when no config file exists
+        let loader = ConfigLoader::load_with_options(true).unwrap();
+        assert!(loader.config_path.is_none());
+        assert_eq!(loader.config.defaults.format, "human");
+    }
+}
