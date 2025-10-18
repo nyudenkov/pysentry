@@ -123,13 +123,23 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set manylinux version
+        id: manylinux
+        if: startsWith(matrix.osarch.os, 'ubuntu')
+        run: |
+          if [[ "${{ matrix.osarch.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            echo "version=2_28" >> $GITHUB_OUTPUT
+          else
+            echo "version=auto" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1.49.4
         with:
           command: build
           args: --release --features python --out dist -i ${{ matrix.python }}
           sccache: "true"
-          manylinux: auto
+          manylinux: ${{ steps.manylinux.outputs.version || 'auto' }}
           target: ${{ matrix.osarch.target }}
 
       - name: Upload wheels

@@ -53,7 +53,7 @@ This method:
 
 ### 📦 From PyPI (Python Package)
 
-For Python 3.9+ on Linux, macOS, and Windows:
+For Python 3.9-3.14 on Linux, macOS, and Windows:
 
 ```bash
 pip install pysentry-rs
@@ -104,20 +104,23 @@ The binary will be available at `target/release/pysentry`.
 
 ### Requirements
 
-- **For uvx**: Python 3.9+ and [uv](https://docs.astral.sh/uv/) installed
+- **For uvx**: Python 3.9-3.14 and [uv](https://docs.astral.sh/uv/) installed
 - **For binaries**: No additional dependencies
-- **For Python package**: Python 3.9+
+- **For Python package**: Python 3.9-3.14
 - **For Rust package and source**: Rust 1.79+
 
 ### Platform Support
 
-| Installation Method | Linux | macOS | Windows |
-| ------------------- | ----- | ----- | ------- |
-| uvx                 | ✅    | ✅    | ✅      |
-| PyPI (pip)          | ✅    | ✅    | ✅      |
-| Crates.io (cargo)   | ✅    | ✅    | ✅      |
-| GitHub Releases     | ✅    | ✅    | ✅      |
-| From Source         | ✅    | ✅    | ✅      |
+| Installation Method | Linux (x64) | Linux (ARM64) | macOS (x64) | macOS (ARM64) | Windows (x64) |
+| ------------------- | ----------- | ------------- | ----------- | ------------- | ------------- |
+| uvx                 | ✅          | ✅            | ✅          | ✅            | ✅            |
+| PyPI (pip)          | ✅          | ✅            | ✅          | ✅            | ✅            |
+| Crates.io (cargo)   | ✅          | ✅            | ✅          | ✅            | ✅            |
+| GitHub Releases     | ✅          | ✅            | ✅          | ✅            | ✅            |
+| From Source         | ✅          | ✅            | ✅          | ✅            | ✅            |
+
+**Supported Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13, 3.14
+**Supported Architectures**: x86_64 (x64), ARM64 (aarch64)
 
 
 ### CLI Command Names

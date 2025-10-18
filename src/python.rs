@@ -65,17 +65,23 @@ fn run_cli(args: Vec<String>) -> PyResult<i32> {
 
         match cli.command {
             None => {
-                let audit_args = cli.audit_args;
+                let (merged_audit_args, config) = match cli.audit_args.load_and_merge_config() {
+                    Ok(result) => result,
+                    Err(e) => {
+                        eprintln!("Configuration error: {e}");
+                        return Ok(1);
+                    }
+                };
 
-                let cache_dir = audit_args.cache_dir.clone().unwrap_or_else(|| {
+                let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+
+                let cache_dir = merged_audit_args.cache_dir.clone().unwrap_or_else(|| {
                     dirs::cache_dir()
                         .unwrap_or_else(std::env::temp_dir)
                         .join("pysentry")
                 });
 
-                let http_config = crate::config::HttpConfig::default();
-
-                match audit(&audit_args, &cache_dir, http_config).await {
+                match audit(&merged_audit_args, &cache_dir, http_config).await {
                     Ok(exit_code) => Ok(exit_code),
                     Err(e) => {
                         eprintln!("Error: Audit failed: {e}");

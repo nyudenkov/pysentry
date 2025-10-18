@@ -314,6 +314,80 @@ impl RequirementsParser {
         Ok(filtered_dependencies)
     }
 
+    /// Parse include directive (-r or -c) from a requirements line
+    fn parse_include_directive(line: &str) -> Option<(&str, &str)> {
+        let trimmed = line.trim();
+
+        // Handle -r and --requirement (for requirements includes)
+        if let Some(path) = trimmed.strip_prefix("-r ") {
+            return Some(("r", path.trim()));
+        }
+        if let Some(path) = trimmed.strip_prefix("--requirement ") {
+            return Some(("r", path.trim()));
+        }
+        if let Some(path) = trimmed.strip_prefix("--requirement=") {
+            return Some(("r", path.trim()));
+        }
+
+        // Handle -c and --constraint (for constraint files - same issue)
+        if let Some(path) = trimmed.strip_prefix("-c ") {
+            return Some(("c", path.trim()));
+        }
+        if let Some(path) = trimmed.strip_prefix("--constraint ") {
+            return Some(("c", path.trim()));
+        }
+        if let Some(path) = trimmed.strip_prefix("--constraint=") {
+            return Some(("c", path.trim()));
+        }
+
+        None
+    }
+
+    /// Resolve relative -r/-c directive paths to absolute paths
+    fn resolve_requirements_includes(content: &str, source_file: &Path) -> Result<String> {
+        let parent_dir = source_file.parent().ok_or_else(|| {
+            AuditError::other(format!(
+                "Cannot get parent directory for: {}",
+                source_file.display()
+            ))
+        })?;
+
+        let mut resolved = String::new();
+
+        for line in content.lines() {
+            if let Some((directive_type, rel_path)) = Self::parse_include_directive(line) {
+                // Resolve relative path to absolute path
+                let include_path = parent_dir.join(rel_path);
+
+                match include_path.canonicalize() {
+                    Ok(abs_path) => {
+                        let flag = if directive_type == "r" { "-r" } else { "-c" };
+                        debug!("Resolved {} {} -> {}", flag, rel_path, abs_path.display());
+                        resolved.push_str(&format!("{} {}\n", flag, abs_path.display()));
+                    }
+                    Err(e) => {
+                        // If file doesn't exist, keep original path and let UV handle the error
+                        // This preserves existing error messages from UV
+                        warn!(
+                            "Could not resolve include path '{}' from {}: {}. Using original path.",
+                            rel_path,
+                            source_file.display(),
+                            e
+                        );
+                        resolved.push_str(line);
+                        resolved.push('\n');
+                    }
+                }
+            } else {
+                // Not an include directive, keep line as-is
+                resolved.push_str(line);
+                resolved.push('\n');
+            }
+        }
+
+        Ok(resolved)
+    }
+
     /// Combine multiple explicit requirements files into single content
     async fn combine_explicit_files(&self, files: &[PathBuf]) -> Result<String> {
         let mut combined = String::new();
@@ -329,8 +403,11 @@ impl RequirementsParser {
                 ))
             })?;
 
+            // Resolve relative -r/-c directives to absolute paths
+            let resolved_content = Self::resolve_requirements_includes(&content, file)?;
+
             combined.push_str(&format!("# From: {}\n", file.display()));
-            combined.push_str(&content);
+            combined.push_str(&resolved_content);
             combined.push('\n');
         }
 
@@ -505,5 +582,185 @@ click>=8.0.0
         assert!(result.contains(&PackageName::new("requests")));
         assert!(result.contains(&PackageName::new("flask")));
         assert!(result.contains(&PackageName::new("click")));
+    }
+
+    #[test]
+    fn test_parse_include_directive() {
+        // Test -r directive
+        assert_eq!(
+            RequirementsParser::parse_include_directive("-r ../requirements.txt"),
+            Some(("r", "../requirements.txt"))
+        );
+
+        // Test --requirement directive
+        assert_eq!(
+            RequirementsParser::parse_include_directive("--requirement base.txt"),
+            Some(("r", "base.txt"))
+        );
+
+        // Test --requirement= directive
+        assert_eq!(
+            RequirementsParser::parse_include_directive("--requirement=../requirements.txt"),
+            Some(("r", "../requirements.txt"))
+        );
+
+        // Test -c constraint directive
+        assert_eq!(
+            RequirementsParser::parse_include_directive("-c constraints.txt"),
+            Some(("c", "constraints.txt"))
+        );
+
+        // Test --constraint directive
+        assert_eq!(
+            RequirementsParser::parse_include_directive("--constraint ../constraints.txt"),
+            Some(("c", "../constraints.txt"))
+        );
+
+        // Test --constraint= directive
+        assert_eq!(
+            RequirementsParser::parse_include_directive("--constraint=constraints.txt"),
+            Some(("c", "constraints.txt"))
+        );
+
+        // Test with extra whitespace
+        assert_eq!(
+            RequirementsParser::parse_include_directive("  -r   ../requirements.txt  "),
+            Some(("r", "../requirements.txt"))
+        );
+
+        // Test non-directive lines
+        assert_eq!(
+            RequirementsParser::parse_include_directive("requests>=2.25.0"),
+            None
+        );
+        assert_eq!(
+            RequirementsParser::parse_include_directive("# Comment"),
+            None
+        );
+        assert_eq!(RequirementsParser::parse_include_directive(""), None);
+    }
+
+    #[test]
+    fn test_resolve_requirements_includes() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path();
+
+        // Create requirements files
+        let base_req = project_path.join("requirements.txt");
+        fs::write(&base_req, "flask==2.0.0\n").unwrap();
+
+        // Create dev subdirectory
+        let dev_dir = project_path.join("dev");
+        fs::create_dir(&dev_dir).unwrap();
+        let dev_req = dev_dir.join("requirements.txt");
+
+        // Test content with relative path
+        let content_with_include = "-r ../requirements.txt\npytest==8.4.2\n";
+
+        let resolved =
+            RequirementsParser::resolve_requirements_includes(content_with_include, &dev_req)
+                .unwrap();
+
+        // Should contain absolute path to requirements.txt
+        assert!(resolved.contains("-r"));
+        assert!(resolved.contains("requirements.txt"));
+        assert!(resolved.contains("pytest==8.4.2"));
+
+        // Verify the path was made absolute
+        let expected_abs_path = base_req.canonicalize().unwrap();
+        assert!(resolved.contains(&expected_abs_path.display().to_string()));
+    }
+
+    #[test]
+    fn test_resolve_requirements_includes_constraint_files() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path();
+
+        // Create constraint file
+        let constraints = project_path.join("constraints.txt");
+        fs::write(&constraints, "flask<3.0\n").unwrap();
+
+        // Create dev subdirectory
+        let dev_dir = project_path.join("dev");
+        fs::create_dir(&dev_dir).unwrap();
+        let dev_req = dev_dir.join("requirements.txt");
+
+        let content = "-c ../constraints.txt\nflask>=2.0\n";
+
+        let resolved =
+            RequirementsParser::resolve_requirements_includes(content, &dev_req).unwrap();
+
+        // Should contain absolute path to constraints.txt
+        assert!(resolved.contains("-c"));
+        assert!(resolved.contains("constraints.txt"));
+        assert!(resolved.contains("flask>=2.0"));
+
+        let expected_abs_path = constraints.canonicalize().unwrap();
+        assert!(resolved.contains(&expected_abs_path.display().to_string()));
+    }
+
+    #[test]
+    fn test_resolve_requirements_includes_preserves_regular_lines() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("requirements.txt");
+        fs::write(&test_file, "").unwrap();
+
+        let content = r#"
+# This is a comment
+requests>=2.25.0
+flask[async]>=2.0,<3.0
+
+click==8.0.0
+"#;
+
+        let resolved =
+            RequirementsParser::resolve_requirements_includes(content, &test_file).unwrap();
+
+        // All lines should be preserved
+        assert!(resolved.contains("# This is a comment"));
+        assert!(resolved.contains("requests>=2.25.0"));
+        assert!(resolved.contains("flask[async]>=2.0,<3.0"));
+        assert!(resolved.contains("click==8.0.0"));
+    }
+
+    #[test]
+    fn test_resolve_requirements_includes_multiple_directives() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let project_path = temp_dir.path();
+
+        // Create referenced files
+        let base_req = project_path.join("base.txt");
+        fs::write(&base_req, "flask==2.0.0\n").unwrap();
+
+        let security_req = project_path.join("security.txt");
+        fs::write(&security_req, "cryptography>=3.0\n").unwrap();
+
+        let dev_req = project_path.join("dev.txt");
+
+        let content = "-r base.txt\n-r security.txt\npytest==8.4.2\n";
+
+        let resolved =
+            RequirementsParser::resolve_requirements_includes(content, &dev_req).unwrap();
+
+        // Both includes should be resolved to absolute paths
+        let base_abs = base_req.canonicalize().unwrap();
+        let security_abs = security_req.canonicalize().unwrap();
+
+        assert!(resolved.contains(&format!("-r {}", base_abs.display())));
+        assert!(resolved.contains(&format!("-r {}", security_abs.display())));
+        assert!(resolved.contains("pytest==8.4.2"));
     }
 }
