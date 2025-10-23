@@ -668,6 +668,8 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+    use assert_cmd::Command;
+    use predicates::prelude::*;
 
     #[test]
     fn test_config_load_from_file() {
@@ -746,5 +748,51 @@ enabled = false
         let loader = ConfigLoader::load_with_options(true).unwrap();
         assert!(loader.config_path.is_none());
         assert_eq!(loader.config.defaults.format, "human");
+    }
+
+    #[test]
+    fn test_display_sources_verbose_output() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".pysentry.toml");
+
+        // Default config without sources specified
+        let config_content = r#"
+version = 1
+
+[cache]
+enabled = false
+
+[output]
+quiet = false
+verbose = true
+"#;
+        fs::write(&config_path, config_content).unwrap();
+
+        // Call the pysentry binary with the config file
+        // Only the default source "pypa" should be displayed
+        let mut cmd = Command::cargo_bin("pysentry").unwrap();
+        cmd.arg("--config").arg(config_path.to_str().unwrap());
+        cmd.assert()
+            .success()
+            .stderr(predicate::str::contains(", sources=[pypa],"));
+
+        // Add multiple sources to config and save file
+        let config_content = format!("{}\n{}",
+            config_content,
+            r#"
+
+[sources]
+enabled = ["pypa", "pypi", "osv"]
+"#);
+
+        fs::write(&config_path, config_content).unwrap();
+
+        // Call the pysentry binary again with the updated config file
+        // Now all specified sources should be displayed
+        let mut cmd = Command::cargo_bin("pysentry").unwrap();
+        cmd.arg("--config").arg(config_path.to_str().unwrap());
+        cmd.assert()
+            .success()
+            .stderr(predicate::str::contains(", sources=[pypa, pypi, osv],"));
     }
 }

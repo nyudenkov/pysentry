@@ -46,3 +46,7 @@ toml = "0.9.7"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 zip = { version = "5.1.1", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+assert_cmd = "2.0.17"
+predicates = "3.1.3"
