@@ -612,7 +612,7 @@ fn default_scope() -> String {
     "all".to_string()
 }
 fn default_sources() -> Vec<String> {
-    vec!["pypa".to_string()]
+    vec!["pypa".to_string(), "pypi".to_string(), "osv".to_string()]
 }
 fn default_resolver_type() -> String {
     "uv".to_string()
@@ -709,7 +709,7 @@ enabled = false
         assert_eq!(config.defaults.format, "human");
         assert_eq!(config.defaults.severity, "low");
         assert_eq!(config.defaults.fail_on, "medium");
-        assert_eq!(config.sources.enabled, vec!["pypa"]);
+        assert_eq!(config.sources.enabled, vec!["pypa", "pypi", "osv"]);
         assert!(config.cache.enabled);
     }
 

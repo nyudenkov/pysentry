@@ -1351,11 +1351,11 @@ fail_on = "high"
 # include_withdrawn = true
 
 [sources]
-# Choose your vulnerability sources
-enabled = ["pypa"]
-
-# Uncomment to add more sources
+# All vulnerability sources are enabled by default: PyPA, PyPI, and OSV
 # enabled = ["pypa", "pypi", "osv"]
+
+# Uncomment to use specific sources only
+# enabled = ["pypa"]
 
 [ignore]
 # Add vulnerability IDs to ignore

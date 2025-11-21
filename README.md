@@ -17,8 +17,8 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
 
 - **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, and `requirements.txt` files
 - **External Resolver Integration**: Leverages `uv` and `pip-tools` for accurate requirements.txt constraint solving
-- **Multiple Data Sources**:
-  - PyPA Advisory Database (default)
+- **Multiple Data Sources** (all sources used by default):
+  - PyPA Advisory Database
   - PyPI JSON API
   - OSV.dev (Open Source Vulnerabilities)
 - **Flexible Output for different workflows**: Human-readable, JSON, SARIF, and Markdown formats
@@ -193,9 +193,9 @@ pysentry --format json --output audit-results.json
 # Using uvx for comprehensive audit (extras included by default)
 uvx pysentry-rs --format sarif --output security-report.sarif
 
-# Check multiple vulnerability sources concurrently
-uvx pysentry-rs --sources pypa,osv,pypi /path/to/project
-uvx pysentry-rs --sources pypa --sources osv --sources pypi
+# Use specific vulnerability sources (all sources used by default)
+uvx pysentry-rs --sources pypa /path/to/project
+uvx pysentry-rs --sources pypa --sources osv /path/to/project
 
 # Generate markdown report
 uvx pysentry-rs --format markdown --output security-report.md
@@ -365,7 +365,7 @@ show_progress = true
 | `--format`                 | Output format: `human`, `json`, `sarif`, `markdown`       | `human`           |
 | `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`     | `low`             |
 | `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity        | `medium`          |
-| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa`            |
+| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa,pypi,osv`   |
 | `--exclude-extra`          | Exclude extra dependencies (dev, optional, etc)           | `false`           |
 | `--direct-only`            | Check only direct dependencies                            | `false`           |
 | `--detailed`               | Show full vulnerability descriptions instead of truncated | `false`           |
@@ -573,7 +573,9 @@ Support for projects without lock files:
 
 ## Vulnerability Data Sources
 
-### PyPA Advisory Database (Default)
+PySentry uses all three vulnerability sources by default for comprehensive coverage.
+
+### PyPA Advisory Database
 
 - Comprehensive coverage of Python ecosystem
 - Community-maintained vulnerability database
