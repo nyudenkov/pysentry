@@ -20,11 +20,12 @@
 //!
 //! This module provides TOML-based configuration file support for PySentry,
 //! allowing users to define default settings, ignore rules, and project-specific
-//! configurations in `.pysentry.toml` files.
+//! configurations in `.pysentry.toml` files or `pyproject.toml` `[tool.pysentry]` sections.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -201,8 +202,41 @@ pub struct HttpConfig {
     pub show_progress: bool,
 }
 
+/// Tracks where the configuration was loaded from
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum ConfigSource {
+    /// Configuration from .pysentry.toml file
+    PySentryToml,
+    /// Configuration from pyproject.toml [tool.pysentry] section
+    PyProjectToml,
+    /// Configuration from user config (~/.config/pysentry/config.toml)
+    UserConfig,
+    /// Configuration from system config (/etc/pysentry/config.toml)
+    #[cfg(unix)]
+    SystemConfig,
+    /// Configuration from PYSENTRY_CONFIG environment variable
+    EnvironmentVariable,
+    /// No configuration file found, using built-in defaults
+    #[default]
+    BuiltInDefaults,
+}
+
+/// Wrapper struct for parsing pyproject.toml [tool.pysentry] section
+#[derive(Debug, Deserialize)]
+struct PyProjectToml {
+    tool: Option<ToolSection>,
+}
+
+/// Tool section within pyproject.toml
+#[derive(Debug, Deserialize)]
+struct ToolSection {
+    pysentry: Option<Config>,
+}
+
 pub struct ConfigLoader {
     pub config_path: Option<PathBuf>,
+
+    pub config_source: ConfigSource,
 
     pub config: Config,
 }
@@ -217,6 +251,7 @@ impl ConfigLoader {
     pub fn new() -> Self {
         Self {
             config_path: None,
+            config_source: ConfigSource::BuiltInDefaults,
             config: Config::default(),
         }
     }
@@ -232,16 +267,30 @@ impl ConfigLoader {
             return Ok(loader);
         }
 
+        // Handle PYSENTRY_CONFIG environment variable
         if let Ok(env_config_path) = std::env::var("PYSENTRY_CONFIG") {
-            let config_path = PathBuf::from(env_config_path);
+            let config_path = PathBuf::from(&env_config_path);
             if config_path.exists() {
-                loader.config = Self::load_config_file(&config_path).with_context(|| {
-                    format!(
-                        "Failed to load config from environment variable PYSENTRY_CONFIG: {}",
-                        config_path.display()
-                    )
-                })?;
+                // Detect if it's a pyproject.toml based on filename
+                let is_pyproject = config_path
+                    .file_name()
+                    .is_some_and(|n| n == "pyproject.toml");
+
+                let source = if is_pyproject {
+                    ConfigSource::PyProjectToml
+                } else {
+                    ConfigSource::EnvironmentVariable
+                };
+
+                loader.config =
+                    Self::load_config_for_source(&config_path, &source).with_context(|| {
+                        format!(
+                            "Failed to load config from environment variable PYSENTRY_CONFIG: {}",
+                            config_path.display()
+                        )
+                    })?;
                 loader.config_path = Some(config_path);
+                loader.config_source = source;
                 return Ok(loader);
             } else {
                 anyhow::bail!(
@@ -251,10 +300,18 @@ impl ConfigLoader {
             }
         }
 
-        if let Some(config_path) = Self::discover_config_file()? {
-            loader.config = Self::load_config_file(&config_path)
-                .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
+        // Discover config file from hierarchy (with cached config for pyproject.toml)
+        if let Some((config_path, source, cached_config)) = Self::discover_config_file_with_cache()?
+        {
+            // Use cached config if available (avoids double-parsing pyproject.toml)
+            loader.config = match cached_config {
+                Some(config) => config,
+                None => Self::load_config_for_source(&config_path, &source).with_context(|| {
+                    format!("Failed to load config from {}", config_path.display())
+                })?,
+            };
             loader.config_path = Some(config_path);
+            loader.config_source = source;
         }
 
         Ok(loader)
@@ -262,26 +319,73 @@ impl ConfigLoader {
 
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let config_path = path.as_ref().to_path_buf();
-        let config = Self::load_config_file(&config_path)
+
+        // Detect source type based on filename
+        let is_pyproject = config_path
+            .file_name()
+            .is_some_and(|n| n == "pyproject.toml");
+
+        let source = if is_pyproject {
+            ConfigSource::PyProjectToml
+        } else {
+            ConfigSource::PySentryToml
+        };
+
+        let config = Self::load_config_for_source(&config_path, &source)
             .with_context(|| format!("Failed to load config from {}", config_path.display()))?;
 
         Ok(Self {
             config_path: Some(config_path),
+            config_source: source,
             config,
         })
     }
 
-    pub fn discover_config_file() -> Result<Option<PathBuf>> {
-        let config_names = [".pysentry.toml"];
-
+    /// Discover configuration file from the hierarchy.
+    ///
+    /// Search order:
+    /// 1. Directory walk (current to .git or root):
+    ///    - `.pysentry.toml` (highest priority in directory)
+    ///    - `pyproject.toml [tool.pysentry]` (lower priority, graceful fallback on error)
+    /// 2. User config: `~/.config/pysentry/config.toml`
+    /// 3. System config: `/etc/pysentry/config.toml` (Unix only)
+    ///
+    /// Returns the path, source type, and optionally the pre-parsed config (for pyproject.toml).
+    fn discover_config_file_with_cache() -> Result<Option<(PathBuf, ConfigSource, Option<Config>)>>
+    {
         if let Ok(current_dir) = std::env::current_dir() {
             let mut dir = current_dir.as_path();
 
             loop {
-                for config_name in &config_names {
-                    let config_path = dir.join(config_name);
-                    if config_path.exists() {
-                        return Ok(Some(config_path));
+                // Check .pysentry.toml first (highest priority)
+                let pysentry_toml = dir.join(".pysentry.toml");
+                if pysentry_toml.exists() {
+                    return Ok(Some((pysentry_toml, ConfigSource::PySentryToml, None)));
+                }
+
+                // Check pyproject.toml second (with graceful fallback)
+                let pyproject_toml = dir.join("pyproject.toml");
+                if pyproject_toml.exists() {
+                    match Self::try_load_from_pyproject(&pyproject_toml) {
+                        Ok(Some(config)) => {
+                            // Valid [tool.pysentry] section found - cache the parsed config
+                            return Ok(Some((
+                                pyproject_toml,
+                                ConfigSource::PyProjectToml,
+                                Some(config),
+                            )));
+                        }
+                        Ok(None) => {
+                            // No [tool.pysentry] section, continue searching
+                        }
+                        Err(e) => {
+                            // Invalid config in [tool.pysentry], warn and continue
+                            warn!(
+                                "Invalid [tool.pysentry] in {}: {}. Falling back to next configuration source.",
+                                pyproject_toml.display(),
+                                e
+                            );
+                        }
                     }
                 }
 
@@ -293,24 +397,41 @@ impl ConfigLoader {
             }
         }
 
+        // Check user config
         if let Some(config_dir) = dirs::config_dir() {
             let user_config = config_dir.join("pysentry").join("config.toml");
             if user_config.exists() {
-                return Ok(Some(user_config));
+                return Ok(Some((user_config, ConfigSource::UserConfig, None)));
             }
         }
 
+        // Check system config (Unix only)
         #[cfg(unix)]
         {
             let system_config = PathBuf::from("/etc/pysentry/config.toml");
             if system_config.exists() {
-                return Ok(Some(system_config));
+                return Ok(Some((system_config, ConfigSource::SystemConfig, None)));
             }
         }
 
         Ok(None)
     }
 
+    /// Discover configuration file from the hierarchy (public API).
+    pub fn discover_config_file() -> Result<Option<(PathBuf, ConfigSource)>> {
+        Self::discover_config_file_with_cache()
+            .map(|opt| opt.map(|(path, source, _)| (path, source)))
+    }
+
+    /// Load configuration from a file, dispatching to the appropriate loader based on source type.
+    fn load_config_for_source<P: AsRef<Path>>(path: P, source: &ConfigSource) -> Result<Config> {
+        match source {
+            ConfigSource::PyProjectToml => Self::load_from_pyproject(&path),
+            _ => Self::load_config_file(&path),
+        }
+    }
+
+    /// Load configuration from a .pysentry.toml or config.toml file.
     fn load_config_file<P: AsRef<Path>>(path: P) -> Result<Config> {
         let content = fs_err::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
@@ -327,9 +448,65 @@ impl ConfigLoader {
         Ok(config)
     }
 
+    /// Load configuration from pyproject.toml [tool.pysentry] section.
+    fn load_from_pyproject<P: AsRef<Path>>(path: P) -> Result<Config> {
+        Self::try_load_from_pyproject(&path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "No [tool.pysentry] section found in {}",
+                path.as_ref().display()
+            )
+        })
+    }
+
+    /// Try to load configuration from pyproject.toml [tool.pysentry] section.
+    ///
+    /// Returns:
+    /// - `Ok(Some(config))` if [tool.pysentry] exists and is valid
+    /// - `Ok(None)` if [tool.pysentry] section doesn't exist
+    /// - `Err(...)` if [tool.pysentry] exists but has invalid configuration
+    fn try_load_from_pyproject<P: AsRef<Path>>(path: P) -> Result<Option<Config>> {
+        let content = fs_err::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
+
+        // Quick check before full parsing
+        if !content.contains("[tool.pysentry]") {
+            return Ok(None);
+        }
+
+        // Parse pyproject.toml
+        let pyproject: PyProjectToml = toml::from_str(&content).with_context(|| {
+            format!(
+                "Failed to parse pyproject.toml: {}",
+                path.as_ref().display()
+            )
+        })?;
+
+        // Extract [tool.pysentry] section
+        let config = match pyproject.tool.and_then(|t| t.pysentry) {
+            Some(config) => config,
+            None => return Ok(None),
+        };
+
+        // Validate the configuration
+        config.validate().with_context(|| {
+            format!(
+                "Invalid configuration in [tool.pysentry] section of {}",
+                path.as_ref().display()
+            )
+        })?;
+
+        Ok(Some(config))
+    }
+
     pub fn config_path_display(&self) -> String {
         match &self.config_path {
-            Some(path) => path.display().to_string(),
+            Some(path) => {
+                let suffix = match self.config_source {
+                    ConfigSource::PyProjectToml => " [tool.pysentry]",
+                    _ => "",
+                };
+                format!("{}{}", path.display(), suffix)
+            }
             None => "<built-in defaults>".to_string(),
         }
     }
@@ -746,5 +923,322 @@ enabled = false
         let loader = ConfigLoader::load_with_options(true).unwrap();
         assert!(loader.config_path.is_none());
         assert_eq!(loader.config.defaults.format, "human");
+        assert_eq!(loader.config_source, ConfigSource::BuiltInDefaults);
+    }
+
+    #[test]
+    fn test_load_config_from_pyproject_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        let content = r#"
+[project]
+name = "test-project"
+
+[tool.pysentry]
+version = 1
+
+[tool.pysentry.defaults]
+format = "json"
+severity = "high"
+
+[tool.pysentry.sources]
+enabled = ["pypa", "osv"]
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
+
+        assert_eq!(loader.config.defaults.format, "json");
+        assert_eq!(loader.config.defaults.severity, "high");
+        assert_eq!(loader.config.sources.enabled, vec!["pypa", "osv"]);
+        assert_eq!(loader.config_source, ConfigSource::PyProjectToml);
+    }
+
+    #[test]
+    fn test_pyproject_without_tool_pysentry_section() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        let content = r#"
+[project]
+name = "test-project"
+
+[tool.black]
+line-length = 100
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let result = ConfigLoader::try_load_from_pyproject(&pyproject_path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_invalid_config_in_pyproject_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        let content = r#"
+[tool.pysentry]
+version = 1
+
+[tool.pysentry.defaults]
+format = "invalid_format"
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let result = ConfigLoader::try_load_from_pyproject(&pyproject_path);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(
+            err.contains("Invalid format") || err.contains("invalid_format"),
+            "Error message should contain format validation error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_pyproject_toml_partial_config_uses_defaults() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        // Only specify format, rest should use defaults
+        let content = r#"
+[tool.pysentry]
+version = 1
+
+[tool.pysentry.defaults]
+format = "json"
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
+
+        assert_eq!(loader.config.defaults.format, "json");
+        // These should be defaults
+        assert_eq!(loader.config.defaults.severity, "low");
+        assert_eq!(loader.config.defaults.fail_on, "medium");
+        assert_eq!(loader.config.sources.enabled, vec!["pypa", "pypi", "osv"]);
+    }
+
+    #[test]
+    fn test_config_path_display_shows_tool_section() {
+        let loader = ConfigLoader {
+            config_path: Some(PathBuf::from("/path/to/pyproject.toml")),
+            config_source: ConfigSource::PyProjectToml,
+            config: Config::default(),
+        };
+
+        assert_eq!(
+            loader.config_path_display(),
+            "/path/to/pyproject.toml [tool.pysentry]"
+        );
+    }
+
+    #[test]
+    fn test_config_path_display_pysentry_toml() {
+        let loader = ConfigLoader {
+            config_path: Some(PathBuf::from("/path/to/.pysentry.toml")),
+            config_source: ConfigSource::PySentryToml,
+            config: Config::default(),
+        };
+
+        assert_eq!(loader.config_path_display(), "/path/to/.pysentry.toml");
+    }
+
+    #[test]
+    fn test_config_source_default() {
+        let loader = ConfigLoader::new();
+        assert_eq!(loader.config_source, ConfigSource::BuiltInDefaults);
+    }
+
+    #[test]
+    fn test_pysentry_toml_sets_correct_source() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".pysentry.toml");
+
+        let config_content = r#"
+version = 1
+
+[defaults]
+format = "markdown"
+"#;
+
+        fs::write(&config_path, config_content).unwrap();
+
+        let loader = ConfigLoader::load_from_file(&config_path).unwrap();
+        assert_eq!(loader.config_source, ConfigSource::PySentryToml);
+    }
+
+    #[test]
+    fn test_pyproject_full_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        let content = r#"
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "test-project"
+version = "1.0.0"
+
+[tool.pysentry]
+version = 1
+
+[tool.pysentry.defaults]
+format = "sarif"
+severity = "medium"
+fail_on = "high"
+scope = "main"
+direct_only = true
+detailed = true
+
+[tool.pysentry.sources]
+enabled = ["pypa"]
+
+[tool.pysentry.resolver]
+type = "pip-tools"
+fallback = "uv"
+
+[tool.pysentry.cache]
+enabled = false
+resolution_ttl = 48
+vulnerability_ttl = 72
+
+[tool.pysentry.ignore]
+ids = ["PYSEC-2024-123"]
+while_no_fix = ["GHSA-abc123"]
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
+
+        assert_eq!(loader.config.defaults.format, "sarif");
+        assert_eq!(loader.config.defaults.severity, "medium");
+        assert_eq!(loader.config.defaults.fail_on, "high");
+        assert_eq!(loader.config.defaults.scope, "main");
+        assert!(loader.config.defaults.direct_only);
+        assert!(loader.config.defaults.detailed);
+        assert_eq!(loader.config.sources.enabled, vec!["pypa"]);
+        assert_eq!(loader.config.resolver.resolver_type, "pip-tools");
+        assert_eq!(loader.config.resolver.fallback, "uv");
+        assert!(!loader.config.cache.enabled);
+        assert_eq!(loader.config.cache.resolution_ttl, 48);
+        assert_eq!(loader.config.cache.vulnerability_ttl, 72);
+        assert_eq!(loader.config.ignore.ids, vec!["PYSEC-2024-123"]);
+        assert_eq!(loader.config.ignore.while_no_fix, vec!["GHSA-abc123"]);
+    }
+
+    #[test]
+    fn test_pysentry_toml_takes_priority_over_pyproject() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create .pysentry.toml with format = "json"
+        fs::write(
+            temp_dir.path().join(".pysentry.toml"),
+            r#"
+version = 1
+[defaults]
+format = "json"
+"#,
+        )
+        .unwrap();
+
+        // Create pyproject.toml with format = "sarif"
+        fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            r#"
+[tool.pysentry]
+version = 1
+[tool.pysentry.defaults]
+format = "sarif"
+"#,
+        )
+        .unwrap();
+
+        // Save and change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = ConfigLoader::discover_config_file();
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        // Verify .pysentry.toml is chosen (format = "json")
+        let (path, source) = result.unwrap().unwrap();
+        assert_eq!(source, ConfigSource::PySentryToml);
+        assert!(path.ends_with(".pysentry.toml"));
+    }
+
+    #[test]
+    fn test_env_var_with_pyproject_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        let content = r#"
+[project]
+name = "test-project"
+
+[tool.pysentry]
+version = 1
+
+[tool.pysentry.defaults]
+format = "markdown"
+severity = "critical"
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        // Set environment variable to point to pyproject.toml
+        std::env::set_var("PYSENTRY_CONFIG", pyproject_path.to_str().unwrap());
+
+        let result = ConfigLoader::load();
+
+        // Clean up environment variable
+        std::env::remove_var("PYSENTRY_CONFIG");
+
+        let loader = result.unwrap();
+        assert_eq!(loader.config.defaults.format, "markdown");
+        assert_eq!(loader.config.defaults.severity, "critical");
+        assert_eq!(loader.config_source, ConfigSource::PyProjectToml);
+    }
+
+    #[test]
+    fn test_pyproject_used_when_no_pysentry_toml() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create only pyproject.toml (no .pysentry.toml)
+        fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            r#"
+[tool.pysentry]
+version = 1
+[tool.pysentry.defaults]
+format = "sarif"
+"#,
+        )
+        .unwrap();
+
+        // Save and change to temp directory
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = ConfigLoader::discover_config_file();
+
+        // Restore original directory
+        std::env::set_current_dir(original_dir).unwrap();
+
+        // Verify pyproject.toml is chosen
+        let (path, source) = result.unwrap().unwrap();
+        assert_eq!(source, ConfigSource::PyProjectToml);
+        assert!(path.ends_with("pyproject.toml"));
     }
 }
