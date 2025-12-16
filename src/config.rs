@@ -469,7 +469,7 @@ impl ConfigLoader {
             .with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
 
         // Quick check before full parsing
-        if !content.contains("[tool.pysentry]") && !content.contains("tool.pysentry") {
+        if !content.contains("[tool.pysentry]") {
             return Ok(None);
         }
 
