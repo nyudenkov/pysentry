@@ -17,8 +17,8 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
 
 - **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, and `requirements.txt` files
 - **External Resolver Integration**: Leverages `uv` and `pip-tools` for accurate requirements.txt constraint solving
-- **Multiple Data Sources**:
-  - PyPA Advisory Database (default)
+- **Multiple Data Sources** (all sources used by default):
+  - PyPA Advisory Database
   - PyPI JSON API
   - OSV.dev (Open Source Vulnerabilities)
 - **Flexible Output for different workflows**: Human-readable, JSON, SARIF, and Markdown formats
@@ -193,9 +193,9 @@ pysentry --format json --output audit-results.json
 # Using uvx for comprehensive audit (extras included by default)
 uvx pysentry-rs --format sarif --output security-report.sarif
 
-# Check multiple vulnerability sources concurrently
-uvx pysentry-rs --sources pypa,osv,pypi /path/to/project
-uvx pysentry-rs --sources pypa --sources osv --sources pypi
+# Use specific vulnerability sources (all sources used by default)
+uvx pysentry-rs --sources pypa /path/to/project
+uvx pysentry-rs --sources pypa --sources osv /path/to/project
 
 # Generate markdown report
 uvx pysentry-rs --format markdown --output security-report.md
@@ -304,11 +304,15 @@ Pre-commit will automatically install PySentry, uv and pip-tools via PyPI.
 
 PySentry supports TOML-based configuration files for persistent settings management. Configuration files follow a hierarchical discovery pattern:
 
-1. **Project-level**: `.pysentry.toml` in current or parent directories
+1. **Project-level** (in current or parent directories, walking up to `.git` root):
+   - `.pysentry.toml` (highest priority)
+   - `pyproject.toml` `[tool.pysentry]` section (lower priority, convenient for existing Python projects)
 2. **User-level**: `~/.config/pysentry/config.toml` (Linux/macOS)
 3. **System-level**: `/etc/pysentry/config.toml` (Unix systems)
 
-### Configuration File Example
+**Priority**: When both `.pysentry.toml` and `pyproject.toml` exist in the same directory, `.pysentry.toml` takes precedence. This allows you to override `pyproject.toml` settings when needed.
+
+### Configuration File Example (.pysentry.toml)
 
 ```toml
 version = 1
@@ -350,13 +354,65 @@ retry_max_backoff = 60
 show_progress = true
 ```
 
+### pyproject.toml Configuration
+
+You can configure PySentry directly in your `pyproject.toml` using the `[tool.pysentry]` section:
+
+```toml
+[project]
+name = "my-project"
+version = "1.0.0"
+
+[tool.pysentry]
+version = 1
+
+[tool.pysentry.defaults]
+format = "json"
+severity = "medium"
+fail_on = "high"
+scope = "main"
+direct_only = false
+
+[tool.pysentry.sources]
+enabled = ["pypa", "osv"]
+
+[tool.pysentry.resolver]
+type = "uv"
+fallback = "pip-tools"
+
+[tool.pysentry.cache]
+enabled = true
+resolution_ttl = 48
+vulnerability_ttl = 72
+
+[tool.pysentry.output]
+quiet = false
+verbose = false
+color = "auto"
+
+[tool.pysentry.ignore]
+ids = ["CVE-2023-12345"]
+while_no_fix = ["CVE-2025-8869"]
+
+[tool.pysentry.http]
+timeout = 120
+connect_timeout = 30
+max_retries = 3
+```
+
+**Benefits of pyproject.toml configuration:**
+- Keep all project configuration in a single file
+- No additional config files to manage
+- Works seamlessly with existing Python project tooling
+- Graceful fallback: Invalid `[tool.pysentry]` sections log a warning and continue to next configuration source
+
 
 ### Environment Variables
 
-| Variable             | Description                     | Example                                |
-| -------------------- | ------------------------------- | -------------------------------------- |
-| `PYSENTRY_CONFIG`    | Override config file path       | `PYSENTRY_CONFIG=/path/to/config.toml` |
-| `PYSENTRY_NO_CONFIG` | Disable all config file loading | `PYSENTRY_NO_CONFIG=1`                 |
+| Variable             | Description                                                                 | Example                                     |
+| -------------------- | --------------------------------------------------------------------------- | ------------------------------------------- |
+| `PYSENTRY_CONFIG`    | Override config file path (supports `.pysentry.toml` or `pyproject.toml`)   | `PYSENTRY_CONFIG=/path/to/pyproject.toml`   |
+| `PYSENTRY_NO_CONFIG` | Disable all config file loading                                             | `PYSENTRY_NO_CONFIG=1`                      |
 
 ### Command Line Options
 
@@ -365,7 +421,7 @@ show_progress = true
 | `--format`                 | Output format: `human`, `json`, `sarif`, `markdown`       | `human`           |
 | `--severity`               | Minimum severity: `low`, `medium`, `high`, `critical`     | `low`             |
 | `--fail-on`                | Fail (exit non-zero) on vulnerabilities ≥ severity        | `medium`          |
-| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa`            |
+| `--sources`                | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple)   | `pypa,pypi,osv`   |
 | `--exclude-extra`          | Exclude extra dependencies (dev, optional, etc)           | `false`           |
 | `--direct-only`            | Check only direct dependencies                            | `false`           |
 | `--detailed`               | Show full vulnerability descriptions instead of truncated | `false`           |
@@ -573,7 +629,9 @@ Support for projects without lock files:
 
 ## Vulnerability Data Sources
 
-### PyPA Advisory Database (Default)
+PySentry uses all three vulnerability sources by default for comprehensive coverage.
+
+### PyPA Advisory Database
 
 - Comprehensive coverage of Python ecosystem
 - Community-maintained vulnerability database
