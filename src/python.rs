@@ -43,80 +43,83 @@ async fn handle_config_command(config_command: ConfigCommands) -> Result<()> {
 }
 
 #[pyfunction]
-fn run_cli(args: Vec<String>) -> PyResult<i32> {
+fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
     ensure_tracing_initialized();
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
+    // Release GIL during Rust execution - allows Python to handle signals
+    py.detach(|| {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
 
-    rt.block_on(async {
-        use crate::cli::{audit, check_resolvers, check_version, Cli, Commands};
-        use clap::Parser;
+        rt.block_on(async {
+            use crate::cli::{audit, check_resolvers, check_version, Cli, Commands};
+            use clap::Parser;
 
-        let cli_result = Cli::try_parse_from(&args);
+            let cli_result = Cli::try_parse_from(&args);
 
-        let cli = match cli_result {
-            Ok(cli) => cli,
-            Err(e) => {
-                eprint!("{e}");
-                return Ok(if e.exit_code() == 0 { 0 } else { 2 });
-            }
-        };
+            let cli = match cli_result {
+                Ok(cli) => cli,
+                Err(e) => {
+                    eprint!("{e}");
+                    return Ok(if e.exit_code() == 0 { 0 } else { 2 });
+                }
+            };
 
-        match cli.command {
-            None => {
-                let (merged_audit_args, config) = match cli.audit_args.load_and_merge_config() {
-                    Ok(result) => result,
-                    Err(e) => {
-                        eprintln!("Configuration error: {e}");
-                        return Ok(1);
+            match cli.command {
+                None => {
+                    let (merged_audit_args, config) = match cli.audit_args.load_and_merge_config() {
+                        Ok(result) => result,
+                        Err(e) => {
+                            eprintln!("Configuration error: {e}");
+                            return Ok(1);
+                        }
+                    };
+
+                    let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+
+                    let cache_dir = merged_audit_args.cache_dir.clone().unwrap_or_else(|| {
+                        dirs::cache_dir()
+                            .unwrap_or_else(std::env::temp_dir)
+                            .join("pysentry")
+                    });
+
+                    match audit(&merged_audit_args, &cache_dir, http_config).await {
+                        Ok(exit_code) => Ok(exit_code),
+                        Err(e) => {
+                            eprintln!("Error: Audit failed: {e}");
+                            Ok(1)
+                        }
                     }
-                };
-
-                let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
-
-                let cache_dir = merged_audit_args.cache_dir.clone().unwrap_or_else(|| {
-                    dirs::cache_dir()
-                        .unwrap_or_else(std::env::temp_dir)
-                        .join("pysentry")
-                });
-
-                match audit(&merged_audit_args, &cache_dir, http_config).await {
-                    Ok(exit_code) => Ok(exit_code),
-                    Err(e) => {
-                        eprintln!("Error: Audit failed: {e}");
-                        Ok(1)
+                }
+                Some(Commands::Resolvers(resolvers_args)) => {
+                    match check_resolvers(resolvers_args.verbose).await {
+                        Ok(()) => Ok(0),
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            Ok(1)
+                        }
+                    }
+                }
+                Some(Commands::CheckVersion(check_version_args)) => {
+                    match check_version(check_version_args.verbose).await {
+                        Ok(()) => Ok(0),
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            Ok(1)
+                        }
+                    }
+                }
+                Some(Commands::Config(config_command)) => {
+                    match handle_config_command(config_command).await {
+                        Ok(()) => Ok(0),
+                        Err(e) => {
+                            eprintln!("Error: {e}");
+                            Ok(1)
+                        }
                     }
                 }
             }
-            Some(Commands::Resolvers(resolvers_args)) => {
-                match check_resolvers(resolvers_args.verbose).await {
-                    Ok(()) => Ok(0),
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        Ok(1)
-                    }
-                }
-            }
-            Some(Commands::CheckVersion(check_version_args)) => {
-                match check_version(check_version_args.verbose).await {
-                    Ok(()) => Ok(0),
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        Ok(1)
-                    }
-                }
-            }
-            Some(Commands::Config(config_command)) => {
-                match handle_config_command(config_command).await {
-                    Ok(()) => Ok(0),
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        Ok(1)
-                    }
-                }
-            }
-        }
+        })
     })
 }
 
