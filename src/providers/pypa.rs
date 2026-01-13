@@ -451,8 +451,9 @@ impl PypaSource {
             summary: pypa.summary.clone().unwrap_or_else(|| {
                 // Truncate details to create a summary if none exists
                 let details = &pypa.details;
-                if details.len() > 120 {
-                    format!("{}...", &details[..117])
+                let truncated = super::truncate_chars(details, 117);
+                if truncated.len() < details.len() {
+                    format!("{truncated}...")
                 } else {
                     details.clone()
                 }
