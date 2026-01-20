@@ -31,12 +31,10 @@ mod pypi;
 mod retry;
 
 fn truncate_chars(value: &str, max_chars: usize) -> &str {
-    let mut count = 0;
-    for (idx, _) in value.char_indices() {
+    for (count, (idx, _)) in value.char_indices().enumerate() {
         if count == max_chars {
             return &value[..idx];
         }
-        count += 1;
     }
     value
 }

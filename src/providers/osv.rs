@@ -602,11 +602,7 @@ impl OsvSource {
                     vuln_id, e
                 );
                 let truncated_response = super::truncate_chars(&response_text, 200);
-                debug!(
-                    "Raw response (first 200 chars): {}",
-                    truncated_response
-                );
-
+                debug!("Raw response (first 200 chars): {}", truncated_response);
                 // Try to recover data from malformed JSON
                 if let Ok(generic) = serde_json::from_str::<serde_json::Value>(&response_text) {
                     if let Some(advisory) = Self::recover_from_malformed_json(&generic, vuln_id) {
