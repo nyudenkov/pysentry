@@ -1,10 +1,10 @@
 [package]
 name = "pysentry"
-version = "0.3.13"
+version = "0.3.14"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
-license = "GPL-3.0"
+license = "MIT"
 repository = "https://github.com/nyudenkov/pysentry"
 keywords = ["python", "security", "audit", "vulnerabilities"]
 categories = ["development-tools"]

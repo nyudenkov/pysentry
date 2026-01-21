@@ -1,20 +1,4 @@
-/*
- * pysentry - Python security vulnerability scanner
- * Copyright (C) 2025 nyudenkov <nyudenkov@pm.me>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
+// SPDX-License-Identifier: MIT
 
 use crate::cache::CacheEntry;
 use crate::types::Version;
@@ -232,8 +216,9 @@ impl OsvSource {
                 (_, Some(details)) => {
                     // Truncate details for summary (first sentence or 100 chars)
                     let summary = details.split('.').next().unwrap_or(details);
-                    if summary.len() > 100 {
-                        format!("{}...", &summary[..100])
+                    let truncated = super::truncate_chars(summary, 100);
+                    if truncated.len() < summary.len() {
+                        format!("{truncated}...")
                     } else {
                         summary.to_string()
                     }
@@ -600,11 +585,8 @@ impl OsvSource {
                     "Failed to parse OSV response for vulnerability {}: {}",
                     vuln_id, e
                 );
-                debug!(
-                    "Raw response (first 200 chars): {}",
-                    &response_text[..response_text.len().min(200)]
-                );
-
+                let truncated_response = super::truncate_chars(&response_text, 200);
+                debug!("Raw response (first 200 chars): {}", truncated_response);
                 // Try to recover data from malformed JSON
                 if let Ok(generic) = serde_json::from_str::<serde_json::Value>(&response_text) {
                     if let Some(advisory) = Self::recover_from_malformed_json(&generic, vuln_id) {
