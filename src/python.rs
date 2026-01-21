@@ -128,7 +128,7 @@ fn get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-#[pymodule]
+#[pymodule(gil_used = false)]
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_cli, m)?)?;
     m.add_function(wrap_pyfunction!(get_version, m)?)?;
