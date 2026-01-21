@@ -232,8 +232,9 @@ impl OsvSource {
                 (_, Some(details)) => {
                     // Truncate details for summary (first sentence or 100 chars)
                     let summary = details.split('.').next().unwrap_or(details);
-                    if summary.len() > 100 {
-                        format!("{}...", &summary[..100])
+                    let truncated = super::truncate_chars(summary, 100);
+                    if truncated.len() < summary.len() {
+                        format!("{truncated}...")
                     } else {
                         summary.to_string()
                     }
@@ -600,11 +601,8 @@ impl OsvSource {
                     "Failed to parse OSV response for vulnerability {}: {}",
                     vuln_id, e
                 );
-                debug!(
-                    "Raw response (first 200 chars): {}",
-                    &response_text[..response_text.len().min(200)]
-                );
-
+                let truncated_response = super::truncate_chars(&response_text, 200);
+                debug!("Raw response (first 200 chars): {}", truncated_response);
                 // Try to recover data from malformed JSON
                 if let Ok(generic) = serde_json::from_str::<serde_json::Value>(&response_text) {
                     if let Some(advisory) = Self::recover_from_malformed_json(&generic, vuln_id) {

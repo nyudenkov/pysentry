@@ -30,6 +30,15 @@ mod pypa;
 mod pypi;
 mod retry;
 
+fn truncate_chars(value: &str, max_chars: usize) -> &str {
+    for (count, (idx, _)) in value.char_indices().enumerate() {
+        if count == max_chars {
+            return &value[..idx];
+        }
+    }
+    value
+}
+
 /// Trait for vulnerability data sources
 #[async_trait]
 pub trait VulnerabilityProvider: Send + Sync {
