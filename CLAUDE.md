@@ -1,32 +1,33 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+**PySentry** - A fast, reliable security vulnerability scanner for Python projects, written in Rust.
 
-## Project Overview
+## Codebase Map
 
-**PySentry** - A fast, reliable security vulnerability scanner for Python projects, written in Rust. Provides comprehensive vulnerability scanning by analyzing dependency files (`uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, `requirements.txt`) against multiple vulnerability databases.
+**Architecture:** Dual interface (Rust binary `pysentry` + Python package `pysentry-rs`)
 
-### Core Architecture
+**Key Modules:**
+- `src/main.rs` - CLI entry point
+- `src/lib.rs` - `AuditEngine` API (high-level audit orchestrator)
+- `src/cache/` - Multi-tier caching
+  - `audit.rs` - `AuditCache` interface
+  - `storage.rs` - `CacheEntry` abstraction
+- `src/dependency/` - Dependency scanning + external resolvers
+  - `scanner.rs` - `DependencyScanner` (main orchestration)
+  - `resolvers/uv.rs` - UV resolver (preferred, Rust-based)
+  - `resolvers/pip_tools.rs` - pip-compile fallback
+- `src/parsers/` - 7 parsers with priority system
+  - Priority 1: lock.rs (uv.lock), poetry_lock.rs, pipfile_lock.rs, pylock.rs
+  - Priority 3: pyproject.rs (requires external resolver)
+  - Priority 4: pipfile.rs (requires external resolver)
+  - Priority 5: requirements.rs (requires external resolver)
+  - See `ParserTrait::priority()` for implementation details
+- `src/providers/` - PyPA, PyPI, OSV.dev integrations
+- `src/vulnerability/` - Matching engine + database
+- `src/output/` - Human, JSON, SARIF, markdown reports
+- `src/config.rs` - Hierarchical TOML config
 
-- **Primary Language**: Rust (with Python bindings via PyO3)
-- **Binary Name**: `pysentry` (Rust), `pysentry-rs` (Python package)
-- **Version**: 0.3.7
-- **Dual Interface**: Native Rust binary + Python package for maximum deployment flexibility
-
-### Key Components
-
-```
-src/
-├── main.rs           # CLI entry point
-├── lib.rs            # Library API with AuditEngine
-├── cache/            # Multi-tier caching (vulnerability DB + dependency resolution)
-├── dependency/       # Dependency scanning with external resolver integration
-├── parsers/          # Project file parsers (uv.lock, poetry.lock, Pipfile.lock, pylock.toml, pyproject.toml, Pipfile, requirements.txt)
-├── providers/        # Vulnerability data sources (PyPA, PyPI, OSV.dev)
-├── vulnerability/    # Vulnerability matching engine and database
-├── output/           # Report generation (human, JSON, SARIF, markdown)
-└── config.rs         # TOML-based configuration system
-```
+**Cache Locations:** `~/.cache/pysentry/vulnerability-db/`, `~/.cache/pysentry/dependency-resolution/`
 
 ## Common Development Commands
 
@@ -36,7 +37,7 @@ src/
 # Build release binary
 cargo build --release
 
-# Run all tests
+# Run all tests (embedded #[cfg(test)] modules)
 cargo test
 
 # Run tests with output
@@ -83,111 +84,59 @@ cd benchmarks && python main.py
 # Pre-commit hooks
 pre-commit run --all-files
 
-# Checking out Github (IMPORTANT: YOU SE IT ONLY FOR READING)
-gh ...
+# GitHub CLI (READ-ONLY)
+gh pr view <number>
+gh issue view <number>
 ```
 
-## Architecture Highlights
+## Critical Development Rules
 
-### Multi-Tier Caching System
+**Resolver Isolation (CRITICAL):**
+- Resolvers MUST run in isolated temp directories
+- ALWAYS force cache to temp dir (`UV_CACHE_DIR`, `PIP_CACHE_DIR`) - never use project cache
+- See `UvResolver::create_isolated_temp_dir()` and `PipToolsResolver::create_isolated_temp_dir()` for reference
+- Default timeout: 5 minutes (hardcoded) - may fail on slow networks/large dependency trees
 
-**Vulnerability Database Cache**: `~/.cache/pysentry/vulnerability-db/`
+**Error Handling:**
+- Use `?` operator, NEVER `.unwrap()` or `.expect()` in production code
+- Replace `.unwrap()` with `.ok_or_else()` or `.context()` for proper error propagation
+- Exception: `let _ = self.cached_*.set()` is intentional (OnceLock set failure is benign)
+- All errors should propagate with context or be logged at WARN level
+- Never `let _ =` on fallible operations without logging at WARN level
 
-- Caches PyPA, PyPI, OSV vulnerability databases
-- 24-hour TTL with atomic updates
-- Prevents redundant API calls
+**Parser Priority System:**
+- Lower number = higher priority (1-5 scale)
+- Lock files (priority 1) always preferred over manifest files (priority 3-5)
+- When implementing new parsers, return priority via `ParserTrait::priority()`
 
-**Resolution Cache**: `~/.cache/pysentry/dependency-resolution/`
+**Parser Limitations to Remember:**
+- Path dependencies NOT extracted from lock files (virtual/editable installs skipped)
+- Poetry 2.x uses different marker format than 1.x (custom deserializer handles this)
+- Virtual packages and editable installs are excluded from vulnerability scans
 
-- Caches resolved dependencies from `uv`/`pip-tools`
-- Content-based cache keys (requirements + resolver version + Python version)
-- Dramatic performance improvements for requirements.txt and Pipfile scanning (>90% time savings)
+**Cache Safety:**
+- NO concurrent access protection - avoid parallel scans on same cache directory
+- Write failures only logged at WARN level, never retried
+- Resolution cache: 24h TTL, content-based keys (requirements + resolver + Python version)
+- Vuln DB cache: 24h TTL, atomic updates
 
-### External Resolver Integration
+## Rust Guidelines (PySentry-Specific)
 
-PySentry leverages external tools for accurate dependency resolution:
+**Code Structure:**
+- Prefer `module_name.rs` over `mod.rs` (Rust 2024 / Zed guideline)
+- Only "why" comments, NO organizational/summary comments
+- Full words for variable names (avoid single-letter except standard idioms like `i` for index)
 
-- **uv**: Rust-based resolver (preferred) - extremely fast
-- **pip-tools**: Python-based fallback using `pip-compile`
-- **Auto-detection**: Automatically selects best available resolver
-- **Isolated execution**: Runs in temporary directories to prevent project pollution
+**Safety:**
+- Prefer `.get()` over `[]` indexing to avoid panic-on-bounds
+- Use `Option` and `Result` extensively, never bypass with unwrap
+- All public APIs should return `Result<T>` for fallible operations
 
-### Vulnerability Data Sources
+## Config & Runtime
 
-- **PyPA Advisory Database** (default): Community-maintained, comprehensive Python ecosystem coverage
-- **PyPI JSON API**: Official PyPI vulnerability data, real-time information
-- **OSV.dev**: Google-maintained cross-ecosystem vulnerability database
+**Config Discovery:** `.pysentry.toml` (project) → `~/.config/pysentry/config.toml` (user) → `/etc/pysentry/config.toml` (system)
+**Override Env Vars:** `PYSENTRY_CONFIG` (path override), `PYSENTRY_NO_CONFIG` (disable all config)
 
-## Testing Strategy
-
-- **Unit tests**: Embedded in source files with `#[cfg(test)]`
-- **Integration tests**: End-to-end CLI testing
-- **Benchmark suite**: `benchmarks/` directory with performance comparisons
-- **Pre-commit hooks**: Automated formatting, linting, and testing
-
-## Python Bindings Architecture
-
-The project uses **maturin** to create Python bindings:
-
-- `python/pysentry/` contains Python module structure
-- `src/python.rs` defines PyO3 bindings (feature-gated)
-- `pyproject.toml` configures Python package metadata
-
-## Configuration System
-
-Hierarchical TOML configuration discovery:
-
-1. Project-level: `.pysentry.toml` (current or parent directories)
-2. User-level: `~/.config/pysentry/config.toml`
-3. System-level: `/etc/pysentry/config.toml`
-
-Environment variables:
-
-- `PYSENTRY_CONFIG`: Override config file path
-- `PYSENTRY_NO_CONFIG`: Disable config file loading
-
-## CLI Command Structure
-
-```bash
-# Main audit command (no subcommand)
-pysentry [options] [path]
-
-# Subcommands
-pysentry resolvers          # Check available dependency resolvers
-pysentry check-version      # Check for newer versions
-pysentry config init        # Initialize configuration
-pysentry config show        # Show current configuration
-pysentry config validate    # Validate configuration
-```
-
-## Performance Characteristics
-
-- **Concurrent processing**: Parallel vulnerability data fetching
-- **Streaming**: Large databases processed without excessive memory usage
-- **In-memory indexing**: Fast vulnerability lookups
-- **Resolution caching**: Near-instantaneous repeated scans of requirements.txt
-
-## Development Notes
-
-- **Error handling**: Uses `anyhow` for error chaining and context
-- **Async runtime**: Tokio for concurrent I/O operations
-- **Logging**: `tracing` crate with configurable verbosity
-- **CLI**: `clap` for command-line interface with derive macros
-- **Platform support**: Linux, macOS, Windows (Rust binary); Linux/macOS only (Python wheels)
-
-## Supported Project Formats
-
-1. **uv.lock** (recommended): Complete dependency graph, exact versions
-2. **poetry.lock**: Full Poetry lock file support, no external tools needed
-3. **Pipfile.lock**: Pipenv lock file with exact versions and cryptographic hashes, no external tools needed
-4. **pylock.toml**: PEP 751 standardized lock file format, exact versions with comprehensive metadata
-5. **pyproject.toml**: Requires external resolver for constraint resolution
-6. **Pipfile**: Pipenv specification file, requires external resolver (uv or pip-tools)
-7. **requirements.txt**: Requires external resolver (uv or pip-tools)
-
-## Output Formats
-
-- **Human**: Default, colorized terminal output
-- **JSON**: Structured data for programmatic processing
-- **SARIF**: Static Analysis Results Interchange Format (IDE/CI integration)
-- **Markdown**: GitHub-friendly format for reports and documentation
+**CLI Structure:** See src/cli.rs and src/main.rs
+- Main: `pysentry [options] [path]`
+- Subcommands: `resolvers`, `check-version`, `config {init|show|validate}`
