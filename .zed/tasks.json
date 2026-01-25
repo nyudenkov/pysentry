@@ -1,0 +1,18 @@
+[
+  {
+    "label": "watch",
+    "command": "cargo watch",
+  },
+  {
+    "label": "build",
+    "command": "cargo build",
+  },
+  {
+    "label": "build-release",
+    "command": "cargo build --release",
+  },
+  {
+    "label": "test",
+    "command": "cargo test",
+  },
+]
