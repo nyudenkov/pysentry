@@ -222,6 +222,7 @@ impl ProjectParser for UvLockParser {
                 source,
                 path: None, // TODO: Extract path for local dependencies
                 dependency_type,
+                source_file: Some("uv.lock".to_string()),
             };
 
             dependencies.push(dependency);
@@ -258,6 +259,7 @@ impl ProjectParser for UvLockParser {
                 source: DependencySource::Registry, // Default assumption
                 path: None,
                 dependency_type: dep_type,
+                source_file: Some("uv.lock".to_string()),
             };
 
             dependencies.push(dependency);

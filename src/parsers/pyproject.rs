@@ -166,6 +166,7 @@ impl PyProjectParser {
                 source,
                 path,
                 dependency_type: dep_type,
+                source_file: Some("pyproject.toml".to_string()),
             });
         }
 
@@ -290,6 +291,7 @@ impl PyProjectParser {
                             source: DependencySource::Registry, // Resolver typically works with PyPI
                             path: None,
                             dependency_type,
+                            source_file: Some("pyproject.toml".to_string()),
                         });
                     }
                     Err(e) => {

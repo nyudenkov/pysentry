@@ -53,6 +53,8 @@ pub struct ParsedDependency {
     pub path: Option<std::path::PathBuf>,
     /// Type of dependency (main, dev, optional)
     pub dependency_type: DependencyType,
+    /// Source file where this dependency was parsed from (e.g., "uv.lock", "poetry.lock")
+    pub source_file: Option<String>,
 }
 
 /// Source type for dependencies

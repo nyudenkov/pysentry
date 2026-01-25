@@ -64,6 +64,7 @@ impl DependencyScanner {
                 is_direct: dep.is_direct,
                 source: dep.source.into(),
                 path: dep.path,
+                source_file: dep.source_file,
             })
             .collect();
 
@@ -91,6 +92,7 @@ impl DependencyScanner {
                 source: dep.source.clone().into(),
                 path: dep.path.clone(),
                 dependency_type: crate::parsers::DependencyType::Main, // Default assumption for backward compatibility
+                source_file: dep.source_file.clone(),
             })
             .collect();
 
@@ -113,6 +115,7 @@ impl DependencyScanner {
                 source: dep.source.clone().into(),
                 path: dep.path.clone(),
                 dependency_type: crate::parsers::DependencyType::Main,
+                source_file: dep.source_file.clone(),
             })
             .collect();
 
@@ -135,6 +138,8 @@ pub struct ScannedDependency {
     pub source: DependencySource,
     /// Optional path for path dependencies
     pub path: Option<std::path::PathBuf>,
+    /// Source file where this dependency was parsed from (e.g., "uv.lock", "poetry.lock")
+    pub source_file: Option<String>,
 }
 
 /// Backward compatibility: DependencySource enum
@@ -216,6 +221,7 @@ mod tests {
                 is_direct: true,
                 source: DependencySource::Registry,
                 path: None,
+                source_file: None,
             },
             ScannedDependency {
                 name: crate::types::PackageName::from_str("package2").unwrap(),
@@ -223,6 +229,7 @@ mod tests {
                 is_direct: false,
                 source: DependencySource::Registry,
                 path: None,
+                source_file: None,
             },
         ];
 
@@ -250,6 +257,7 @@ mod tests {
             is_direct: true,
             source: DependencySource::Registry,
             path: None,
+            source_file: None,
         }];
 
         let scanner = DependencyScanner::default();
@@ -275,6 +283,7 @@ mod tests {
             is_direct: true,
             source: DependencySource::Registry,
             path: None,
+            source_file: None,
         }];
 
         let skipped_packages = vec![

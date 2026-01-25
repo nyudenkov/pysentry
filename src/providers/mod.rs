@@ -12,7 +12,7 @@ pub(crate) use self::pypi::PypiSource;
 pub(crate) mod osv;
 mod pypa;
 mod pypi;
-mod retry;
+pub(crate) mod retry;
 
 fn truncate_chars(value: &str, max_chars: usize) -> &str {
     for (count, (idx, _)) in value.char_indices().enumerate() {

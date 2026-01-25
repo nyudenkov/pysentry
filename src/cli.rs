@@ -202,6 +202,31 @@ pub struct AuditArgs {
     /// Disable configuration file loading
     #[arg(long)]
     pub no_config: bool,
+
+    // PEP 792 Project Status Markers options
+    /// Disable PEP 792 project status checks
+    #[arg(long)]
+    pub no_maintenance_check: bool,
+
+    /// Fail on archived packages (not receiving updates)
+    #[arg(long)]
+    pub forbid_archived: bool,
+
+    /// Fail on deprecated packages (obsolete)
+    #[arg(long)]
+    pub forbid_deprecated: bool,
+
+    /// Fail on quarantined packages (malware/compromised)
+    #[arg(long)]
+    pub forbid_quarantined: bool,
+
+    /// Fail on any unmaintained packages (enables --forbid-archived, --forbid-deprecated, --forbid-quarantined)
+    #[arg(long)]
+    pub forbid_unmaintained: bool,
+
+    /// Only check direct dependencies for maintenance status (skip transitive)
+    #[arg(long)]
+    pub maintenance_direct_only: bool,
 }
 
 impl AuditArgs {
@@ -223,6 +248,21 @@ impl AuditArgs {
 
     pub fn include_optional(&self) -> bool {
         self.include_all_dependencies()
+    }
+
+    /// Check if maintenance checks are enabled
+    pub fn maintenance_enabled(&self) -> bool {
+        !self.no_maintenance_check
+    }
+
+    /// Create a MaintenanceCheckConfig from CLI args
+    pub fn maintenance_check_config(&self) -> crate::MaintenanceCheckConfig {
+        crate::MaintenanceCheckConfig {
+            forbid_archived: self.forbid_archived || self.forbid_unmaintained,
+            forbid_deprecated: self.forbid_deprecated || self.forbid_unmaintained,
+            forbid_quarantined: self.forbid_quarantined || self.forbid_unmaintained,
+            check_direct_only: self.maintenance_direct_only,
+        }
     }
 
     pub fn scope_description(&self) -> &'static str {
@@ -393,6 +433,26 @@ impl AuditArgs {
         }
         if !self.verbose {
             merged.verbose = config.output.verbose;
+        }
+
+        // Merge maintenance (PEP 792) settings
+        if !self.no_maintenance_check && !config.maintenance.enabled {
+            merged.no_maintenance_check = true;
+        }
+        if !self.forbid_archived && config.maintenance.forbid_archived {
+            merged.forbid_archived = true;
+        }
+        if !self.forbid_deprecated && config.maintenance.forbid_deprecated {
+            merged.forbid_deprecated = true;
+        }
+        if !self.forbid_quarantined && config.maintenance.forbid_quarantined {
+            merged.forbid_quarantined = true;
+        }
+        if !self.forbid_unmaintained && config.maintenance.forbid_unmaintained {
+            merged.forbid_unmaintained = true;
+        }
+        if !self.maintenance_direct_only && config.maintenance.check_direct_only {
+            merged.maintenance_direct_only = true;
         }
 
         merged
@@ -802,7 +862,14 @@ pub async fn audit(
         }
     }
 
-    if report.should_fail_on_severity(&audit_args.fail_on.clone().into()) {
+    // Check if we should fail due to vulnerabilities
+    let fail_vulns = report.should_fail_on_severity(&audit_args.fail_on.clone().into());
+
+    // Check if we should fail due to maintenance issues (PEP 792)
+    let maintenance_config = audit_args.maintenance_check_config();
+    let fail_maintenance = report.should_fail_on_maintenance(&maintenance_config);
+
+    if fail_vulns || fail_maintenance {
         Ok(1)
     } else {
         Ok(0)
@@ -930,6 +997,7 @@ async fn perform_audit(
                         is_direct: dep.is_direct,
                         source: dep.source.into(),
                         path: dep.path,
+                        source_file: dep.source_file,
                     })
                     .collect(),
                 skipped_packages,
@@ -1001,7 +1069,38 @@ async fn perform_audit(
         async move { source.fetch_vulnerabilities(&packages).await }
     });
 
-    let databases = try_join_all(fetch_tasks).await?;
+    // Fetch maintenance status (PEP 792) in parallel if enabled
+    let maintenance_future = async {
+        if audit_args.maintenance_enabled() {
+            if audit_args.verbose {
+                eprintln!("Checking PEP 792 project status markers...");
+            }
+            let maintenance_client = crate::maintenance::SimpleIndexClient::new(
+                http_config.clone(),
+                Some(audit_cache.clone()),
+            );
+            let config = audit_args.maintenance_check_config();
+            maintenance_client
+                .check_maintenance_status(&dependencies, &config)
+                .await
+                .unwrap_or_else(|e| {
+                    // Always log failures - quiet mode only affects stdout, not diagnostics
+                    tracing::warn!("Failed to check maintenance status: {}", e);
+                    if !audit_args.quiet {
+                        eprintln!("Warning: Failed to check maintenance status: {}", e);
+                    }
+                    Vec::new()
+                })
+        } else {
+            Vec::new()
+        }
+    };
+
+    // Run vulnerability fetching and maintenance checks in parallel
+    let (vuln_result, maintenance_issues) =
+        tokio::join!(try_join_all(fetch_tasks), maintenance_future);
+
+    let databases = vuln_result?;
 
     let database = if databases.len() == 1 {
         databases.into_iter().next().unwrap()
@@ -1039,14 +1138,24 @@ async fn perform_audit(
         filtered_matches,
         fix_analysis,
         warnings,
+        maintenance_issues,
     );
 
     let summary = report.summary();
+    let maint_summary = report.maintenance_summary();
     if audit_args.verbose {
         eprintln!(
             "Audit complete: {} vulnerabilities found in {} packages",
             summary.total_vulnerabilities, summary.vulnerable_packages
         );
+        if maint_summary.has_issues() {
+            eprintln!(
+                "Maintenance issues: {} archived, {} deprecated, {} quarantined",
+                maint_summary.archived_count,
+                maint_summary.deprecated_count,
+                maint_summary.quarantined_count
+            );
+        }
     }
 
     Ok(report)
@@ -1076,6 +1185,7 @@ async fn scan_explicit_requirements(
             is_direct: dep.is_direct,
             source: dep.source.into(),
             path: dep.path,
+            source_file: dep.source_file,
         })
         .collect();
 
@@ -1094,6 +1204,7 @@ fn calculate_dependency_stats(
             source: dep.source.clone().into(),
             path: dep.path.clone(),
             dependency_type: crate::parsers::DependencyType::Main,
+            source_file: dep.source_file.clone(),
         })
         .collect();
 

@@ -147,6 +147,7 @@ impl RequirementsParser {
         &self,
         resolved_content: &str,
         original_requirements: &str,
+        source_file: Option<String>,
     ) -> Result<Vec<ParsedDependency>> {
         let mut dependencies = Vec::new();
 
@@ -188,6 +189,7 @@ impl RequirementsParser {
                             source: DependencySource::Registry, // Most resolvers work with PyPI
                             path: None,
                             dependency_type: DependencyType::Main, // We'll refine this based on file patterns later
+                            source_file: source_file.clone(),
                         });
                     }
                     Err(e) => {
@@ -270,6 +272,22 @@ impl RequirementsParser {
         // Combine all requirements files into one
         let combined_requirements = self.combine_explicit_files(requirements_files).await?;
 
+        // Build source file description from the actual filenames
+        let source_file = if requirements_files.len() == 1 {
+            requirements_files[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        } else {
+            // Multiple files - list them all
+            Some(
+                requirements_files
+                    .iter()
+                    .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        };
+
         // Resolve dependencies using the configured resolver
         let resolved_content = self
             .resolver
@@ -278,7 +296,7 @@ impl RequirementsParser {
 
         // Parse the resolved dependencies
         let dependencies = self
-            .parse_resolved_content(&resolved_content, &combined_requirements)
+            .parse_resolved_content(&resolved_content, &combined_requirements, source_file)
             .await?;
 
         // Filter dependencies based on options
@@ -447,6 +465,22 @@ impl ProjectParser for RequirementsParser {
         // Combine all requirements files into one
         let combined_requirements = self.combine_requirements_files(&requirements_files).await?;
 
+        // Build source file description from the discovered filenames
+        let source_file = if requirements_files.len() == 1 {
+            requirements_files[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        } else {
+            // Multiple files - list them all
+            Some(
+                requirements_files
+                    .iter()
+                    .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        };
+
         // Resolve dependencies using the configured resolver
         let resolved_content = self
             .resolver
@@ -455,7 +489,7 @@ impl ProjectParser for RequirementsParser {
 
         // Parse the resolved dependencies
         let dependencies = self
-            .parse_resolved_content(&resolved_content, &combined_requirements)
+            .parse_resolved_content(&resolved_content, &combined_requirements, source_file)
             .await?;
 
         // Filter dependencies based on options
