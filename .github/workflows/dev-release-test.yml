@@ -48,6 +48,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "release-${{ matrix.target }}"
+          shared-key: "pysentry"
+
       - name: Install cross
         if: matrix.target != 'x86_64-unknown-linux-gnu'
         run: cargo install cross
@@ -106,7 +112,8 @@ jobs:
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
-        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        python:
+          ["3.9", "3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
     steps:
       - uses: actions/checkout@v4
 
@@ -164,7 +171,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build sdist
-        uses: PyO3/maturin-action@v1.49.3
+        uses: PyO3/maturin-action@v1.49.4
         with:
           command: sdist
           args: --out dist
