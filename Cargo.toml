@@ -43,6 +43,7 @@ tempfile = "3.24.0"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["fs", "io-util", "rt-multi-thread", "macros", "process"] }
 toml = "0.9.11"
+clap-verbosity-flag = { version = "3.0", default-features = false, features = ["tracing"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 zip = { version = "5.1.1", default-features = false, features = ["deflate"] }

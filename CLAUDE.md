@@ -120,6 +120,9 @@ gh issue view <number>
 - Resolution cache: 24h TTL, content-based keys (requirements + resolver + Python version)
 - Vuln DB cache: 24h TTL, atomic updates
 
+**CLI consistency:**
+- When changing CLI keep it consistent with Python src/python.rs
+
 ## Rust Guidelines (PySentry-Specific)
 
 **Code Structure:**
