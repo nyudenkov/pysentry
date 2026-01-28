@@ -17,10 +17,11 @@ use std::fmt;
 /// - `Archived`: No future updates expected
 /// - `Deprecated`: Obsolete, possibly superseded
 /// - `Quarantined`: Unsafe (malware/compromised)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ProjectState {
     /// Under active development (default)
+    #[default]
     Active,
     /// No future updates expected
     Archived,
@@ -28,12 +29,6 @@ pub enum ProjectState {
     Deprecated,
     /// Unsafe - identified as malware, compromised, or otherwise dangerous
     Quarantined,
-}
-
-impl Default for ProjectState {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 impl fmt::Display for ProjectState {
