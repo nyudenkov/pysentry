@@ -24,14 +24,14 @@ python = ["pyo3"]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 chrono = { version = "0.4.43", features = ["serde"] }
-clap = { version = "4.5.54", features = ["derive"] }
+clap = { version = "4.5.55", features = ["derive"] }
 dirs = "6.0.0"
 fs-err = "3.2.2"
 futures = "0.3.31"
 indicatif = "0.18.3"
 owo-colors = "4.2.3"
 pep440_rs = "0.7.3"
-pyo3 = { version = "0.26.0", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.27.2", features = ["extension-module"], optional = true }
 regex = "1.12.2"
 reqwest = { version = "0.12.28", features = ["json", "stream", "rustls-tls-native-roots"], default-features = false }
 rustc-hash = "2.1.1"
@@ -45,4 +45,4 @@ tokio = { version = "1.49.0", features = ["fs", "io-util", "rt-multi-thread", "m
 toml = "0.9.11"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-zip = { version = "5.1.1", default-features = false, features = ["deflate"] }
+zip = { version = "7.2.0", default-features = false, features = ["deflate"] }
