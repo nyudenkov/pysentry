@@ -2,12 +2,12 @@
 
 use anyhow::Result;
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
 
 use pysentry::cli::{
     audit, check_resolvers, check_version, config_init, config_path, config_show, config_validate,
     Cli, Commands, ConfigCommands,
 };
+use pysentry::logging;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,15 +26,7 @@ async fn main() -> Result<()> {
 
             let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
 
-            let log_level = if merged_audit_args.verbose {
-                "info"
-            } else {
-                "error"
-            };
-
-            tracing_subscriber::fmt()
-                .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
-                .init();
+            logging::init_tracing(&merged_audit_args.verbosity)?;
 
             let cache_dir = merged_audit_args.cache_dir.clone().unwrap_or_else(|| {
                 dirs::cache_dir()
@@ -47,49 +39,33 @@ async fn main() -> Result<()> {
             std::process::exit(exit_code);
         }
         Some(Commands::Resolvers(resolvers_args)) => {
-            let log_level = if resolvers_args.verbose {
-                "debug"
-            } else {
-                "error"
-            };
+            logging::init_tracing(&resolvers_args.verbosity)?;
 
-            tracing_subscriber::fmt()
-                .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
-                .init();
-
-            check_resolvers(resolvers_args.verbose).await?;
+            check_resolvers(&resolvers_args).await?;
             std::process::exit(0);
         }
         Some(Commands::CheckVersion(check_version_args)) => {
-            let log_level = if check_version_args.verbose {
-                "debug"
-            } else {
-                "error"
-            };
+            logging::init_tracing(&check_version_args.verbosity)?;
 
-            tracing_subscriber::fmt()
-                .with_env_filter(EnvFilter::from_default_env().add_directive(log_level.parse()?))
-                .init();
-
-            check_version(check_version_args.verbose).await?;
+            check_version(&check_version_args).await?;
             std::process::exit(0);
         }
         Some(Commands::Config(config_command)) => {
-            tracing_subscriber::fmt()
-                .with_env_filter(EnvFilter::from_default_env().add_directive("error".parse()?))
-                .init();
-
             match config_command {
                 ConfigCommands::Init(init_args) => {
+                    logging::init_tracing(&init_args.verbosity)?;
                     config_init(&init_args).await?;
                 }
                 ConfigCommands::Validate(validate_args) => {
+                    logging::init_tracing(&validate_args.verbosity)?;
                     config_validate(&validate_args).await?;
                 }
                 ConfigCommands::Show(show_args) => {
+                    logging::init_tracing(&show_args.verbosity)?;
                     config_show(&show_args).await?;
                 }
                 ConfigCommands::Path(path_args) => {
+                    logging::init_tracing(&path_args.verbosity)?;
                     config_path(&path_args).await?;
                 }
             }

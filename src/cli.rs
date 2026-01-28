@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Once;
 
 use crate::dependency::resolvers::ResolverRegistry;
+use crate::logging::AppVerbosity;
 use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
 use crate::{
@@ -183,13 +184,9 @@ pub struct AuditArgs {
     #[arg(long = "requirements-files", value_name = "FILE", num_args = 1..)]
     pub requirements_files: Vec<std::path::PathBuf>,
 
-    /// Enable verbose output
-    #[arg(long, short)]
-    pub verbose: bool,
-
-    /// Suppress non-error output
-    #[arg(long, short)]
-    pub quiet: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
 
     /// Show detailed vulnerability descriptions (full text instead of truncated)
     #[arg(long)]
@@ -230,6 +227,16 @@ pub struct AuditArgs {
 }
 
 impl AuditArgs {
+    /// Check if quiet mode is enabled (either via -q flag or config).
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
+
+    /// Check if verbose mode is enabled (via -v flags or config).
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
     fn include_all_dependencies(&self) -> bool {
         static DEPRECATION_WARNING_SHOWN: Once = Once::new();
 
@@ -428,12 +435,9 @@ impl AuditArgs {
         ignore_while_no_fix.extend(config.ignore.while_no_fix.clone());
         merged.ignore_while_no_fix = ignore_while_no_fix;
 
-        if !self.quiet {
-            merged.quiet = config.output.quiet;
-        }
-        if !self.verbose {
-            merged.verbose = config.output.verbose;
-        }
+        // Note: verbosity is controlled via CLI flags (-v/-q) and RUST_LOG env var.
+        // Config file output.quiet and output.verbose are respected for backward compatibility
+        // but CLI flags always take precedence through the verbosity struct.
 
         // Merge maintenance (PEP 792) settings
         if !self.no_maintenance_check && !config.maintenance.enabled {
@@ -461,14 +465,36 @@ impl AuditArgs {
 
 #[derive(Debug, Parser)]
 pub struct ResolversArgs {
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ResolversArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
 pub struct CheckVersionArgs {
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl CheckVersionArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -481,6 +507,20 @@ pub struct ConfigInitArgs {
 
     #[arg(long)]
     pub minimal: bool,
+
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigInitArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -488,8 +528,19 @@ pub struct ConfigValidateArgs {
     #[arg(value_name = "FILE")]
     pub config: Option<std::path::PathBuf>,
 
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigValidateArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -499,12 +550,33 @@ pub struct ConfigShowArgs {
 
     #[arg(long)]
     pub toml: bool,
+
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigShowArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
 pub struct ConfigPathArgs {
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigPathArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
 }
 
 impl From<AuditFormat> for crate::AuditFormat {
@@ -548,8 +620,9 @@ impl From<ResolverTypeArg> for ResolverType {
     }
 }
 
-pub async fn check_resolvers(verbose: bool) -> Result<()> {
-    if !verbose {
+pub async fn check_resolvers(args: &ResolversArgs) -> Result<()> {
+    // Info commands always show output - -q flag is accepted for CLI consistency but ignored
+    if !args.is_verbose() {
         println!("Checking available dependency resolvers...");
         println!();
     }
@@ -560,7 +633,7 @@ pub async fn check_resolvers(verbose: bool) -> Result<()> {
     let mut unavailable_resolvers = Vec::new();
 
     for resolver_type in all_resolvers {
-        if verbose {
+        if args.is_verbose() {
             println!("Checking {resolver_type}...");
         }
 
@@ -610,11 +683,12 @@ pub async fn check_resolvers(verbose: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn check_version(verbose: bool) -> Result<()> {
+pub async fn check_version(args: &CheckVersionArgs) -> Result<()> {
     const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
     const GITHUB_REPO: &str = "nyudenkov/pysentry";
 
-    if verbose {
+    // Info commands always show output - -q flag is accepted for CLI consistency but ignored
+    if args.is_verbose() {
         println!("Checking for updates...");
         println!("Current version: {CURRENT_VERSION}");
         println!("Repository: {GITHUB_REPO}");
@@ -625,7 +699,7 @@ pub async fn check_version(verbose: bool) -> Result<()> {
     let client = reqwest::Client::new();
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
 
-    if verbose {
+    if args.is_verbose() {
         println!("Fetching: {url}");
     }
 
@@ -666,7 +740,7 @@ pub async fn check_version(verbose: bool) -> Result<()> {
 
     let latest_version_str = latest_tag.strip_prefix('v').unwrap_or(latest_tag);
 
-    if verbose {
+    if args.is_verbose() {
         println!("Latest release tag: {latest_tag}");
     }
 
@@ -776,14 +850,14 @@ pub async fn audit(
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
 ) -> Result<i32> {
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
             audit_args.path.display()
         );
     }
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!(
             "Configuration: format={:?}, severity={:?}, fail_on={:?}, source={:?}, scope='{}', direct_only={}",
             audit_args.format,
@@ -830,7 +904,7 @@ pub async fn audit(
 
     if let Some(output_path) = &audit_args.output {
         fs_err::write(output_path, &report_output)?;
-        if !audit_args.quiet {
+        if !audit_args.is_quiet() {
             eprintln!("Audit results written to: {}", output_path.display());
         }
     } else {
@@ -838,7 +912,7 @@ pub async fn audit(
     }
 
     // Show feedback message (once per day)
-    if !audit_args.quiet {
+    if !audit_args.is_quiet() {
         let audit_cache = AuditCache::new(cache_dir.to_path_buf());
         if audit_cache.should_show_feedback().await {
             println!("\n💬 Found a bug? Have ideas for improvements? Or maybe PySentry saved you some time?");
@@ -904,7 +978,7 @@ async fn perform_audit(
         .collect();
 
     let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         if source_names.len() == 1 {
             eprintln!("Fetching vulnerability data from {}...", source_names[0]);
         } else {
@@ -916,13 +990,13 @@ async fn perform_audit(
         }
     }
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!("Scanning project dependencies...");
     }
 
     let (dependencies, skipped_packages, detected_parser_name) =
         if !audit_args.requirements_files.is_empty() {
-            if !audit_args.quiet {
+            if !audit_args.is_quiet() {
                 eprintln!(
                     "Using explicit requirements files: {}",
                     audit_args
@@ -962,7 +1036,7 @@ async fn perform_audit(
                 )
                 .await?;
 
-            if audit_args.verbose {
+            if audit_args.is_verbose() {
                 eprintln!(
                     "Raw parsed dependencies before filtering: {} (from {})",
                     raw_parsed_deps.len(),
@@ -980,7 +1054,7 @@ async fn perform_audit(
 
             let filtered_parsed_deps = audit_args.filter_dependencies(raw_parsed_deps);
 
-            if audit_args.verbose {
+            if audit_args.is_verbose() {
                 eprintln!(
                     "Filtered dependencies after scope filtering: {}",
                     filtered_parsed_deps.len()
@@ -1017,7 +1091,7 @@ async fn perform_audit(
         scanner.get_stats(&dependencies)
     };
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!("{dependency_stats}");
     }
 
@@ -1038,7 +1112,7 @@ async fn perform_audit(
     };
 
     for warning in &warnings {
-        if !audit_args.quiet {
+        if !audit_args.is_quiet() {
             eprintln!("Warning: {warning}");
         }
     }
@@ -1048,7 +1122,7 @@ async fn perform_audit(
         .map(|dep| (dep.name.to_string(), dep.version.to_string()))
         .collect();
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         if source_names.len() == 1 {
             eprintln!(
                 "Fetching vulnerabilities for {} packages from {}...",
@@ -1072,7 +1146,7 @@ async fn perform_audit(
     // Fetch maintenance status (PEP 792) in parallel if enabled
     let maintenance_future = async {
         if audit_args.maintenance_enabled() {
-            if audit_args.verbose {
+            if audit_args.is_verbose() {
                 eprintln!("Checking PEP 792 project status markers...");
             }
             let maintenance_client = crate::maintenance::SimpleIndexClient::new(
@@ -1086,7 +1160,7 @@ async fn perform_audit(
                 .unwrap_or_else(|e| {
                     // Always log failures - quiet mode only affects stdout, not diagnostics
                     tracing::warn!("Failed to check maintenance status: {}", e);
-                    if !audit_args.quiet {
+                    if !audit_args.is_quiet() {
                         eprintln!("Warning: Failed to check maintenance status: {}", e);
                     }
                     Vec::new()
@@ -1105,7 +1179,7 @@ async fn perform_audit(
     let database = if databases.len() == 1 {
         databases.into_iter().next().unwrap()
     } else {
-        if !audit_args.quiet {
+        if !audit_args.is_quiet() {
             eprintln!(
                 "Merging vulnerability data from {} sources...",
                 databases.len()
@@ -1114,7 +1188,7 @@ async fn perform_audit(
         VulnerabilityDatabase::merge(databases)
     };
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!("Matching against vulnerability database...");
     }
     let matcher_config = MatcherConfig::new(
@@ -1143,7 +1217,7 @@ async fn perform_audit(
 
     let summary = report.summary();
     let maint_summary = report.maintenance_summary();
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!(
             "Audit complete: {} vulnerabilities found in {} packages",
             summary.total_vulnerabilities, summary.vulnerable_packages
@@ -1257,7 +1331,7 @@ pub async fn config_validate(args: &ConfigValidateArgs) -> Result<()> {
 
     let config_path = config_loader.config_path_display();
 
-    if args.verbose {
+    if args.is_verbose() {
         println!("Validating configuration file: {config_path}");
     }
 
@@ -1267,7 +1341,7 @@ pub async fn config_validate(args: &ConfigValidateArgs) -> Result<()> {
     if config_loader.config_path.is_some() {
         println!("✅ Configuration is valid: {config_path}");
 
-        if args.verbose {
+        if args.is_verbose() {
             println!("Configuration details:");
             println!("  Version: {}", config_loader.config.version);
             println!("  Format: {}", config_loader.config.defaults.format);
@@ -1404,7 +1478,7 @@ pub async fn config_path(args: &ConfigPathArgs) -> Result<()> {
     if let Some(config_path) = config_loader.config_path {
         println!("{}", config_path.display());
 
-        if args.verbose {
+        if args.is_verbose() {
             println!();
             println!("Configuration file found and loaded successfully.");
 
@@ -1416,7 +1490,7 @@ pub async fn config_path(args: &ConfigPathArgs) -> Result<()> {
                 }
             }
         }
-    } else if args.verbose {
+    } else if args.is_verbose() {
         println!("No configuration file found.");
         println!("Using built-in defaults.");
         println!();

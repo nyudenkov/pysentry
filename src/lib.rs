@@ -25,6 +25,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod dependency;
+pub mod logging;
 pub mod maintenance;
 pub mod output;
 pub mod parsers;
