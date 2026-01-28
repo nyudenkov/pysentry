@@ -5,6 +5,7 @@
 //! This module implements comprehensive SARIF 2.1.0 compliant output for security
 //! vulnerability reports, optimized for GitHub Security and GitLab Security integration.
 
+use crate::maintenance::{MaintenanceIssue, MaintenanceIssueType};
 use crate::parsers::DependencyStats;
 use crate::types::PackageName;
 use crate::vulnerability::database::{Severity, VulnerabilityMatch};
@@ -57,10 +58,12 @@ impl SarifGenerator {
         database_stats: &DatabaseStats,
         fix_suggestions: &[FixSuggestion],
         warnings: &[String],
+        maintenance_issues: &[MaintenanceIssue],
     ) -> Result<String> {
         info!(
-            "Generating SARIF 2.1.0 report with {} vulnerabilities",
-            matches.len()
+            "Generating SARIF 2.1.0 report with {} vulnerabilities and {} maintenance issues",
+            matches.len(),
+            maintenance_issues.len()
         );
 
         // Pre-process locations for better mapping
@@ -69,8 +72,14 @@ impl SarifGenerator {
         // Generate rules for each unique vulnerability
         self.generate_rules(matches);
 
+        // Generate rules for maintenance issues (PEP 792)
+        self.generate_maintenance_rules(maintenance_issues);
+
         // Create SARIF results
-        let results = self.create_sarif_results(matches, fix_suggestions);
+        let mut results = self.create_sarif_results(matches, fix_suggestions);
+
+        // Add maintenance issue results
+        results.extend(self.create_maintenance_results(maintenance_issues));
 
         // Build the complete SARIF document
         let sarif = self.build_sarif_document(&results, dependency_stats, database_stats, warnings);
@@ -333,6 +342,146 @@ impl SarifGenerator {
         }
 
         debug!("Generated {} SARIF rules", self.rules.len());
+    }
+
+    /// Generate rule definitions for maintenance issues (PEP 792)
+    fn generate_maintenance_rules(&mut self, issues: &[MaintenanceIssue]) {
+        let mut seen_types = HashSet::new();
+
+        for issue in issues {
+            let rule_id = Self::maintenance_rule_id(&issue.issue_type);
+
+            if seen_types.contains(&issue.issue_type) {
+                continue;
+            }
+            seen_types.insert(issue.issue_type);
+
+            let (level, severity_score, description) = match issue.issue_type {
+                MaintenanceIssueType::Quarantined => (
+                    "error",
+                    "9.0",
+                    "Package has been quarantined due to malware, security compromise, or other critical issues. Immediate removal is recommended.",
+                ),
+                MaintenanceIssueType::Deprecated => (
+                    "warning",
+                    "4.0",
+                    "Package has been deprecated and is no longer recommended for use. Consider migrating to an alternative.",
+                ),
+                MaintenanceIssueType::Archived => (
+                    "note",
+                    "2.0",
+                    "Package has been archived and will not receive further updates, including security fixes.",
+                ),
+            };
+
+            let rule = json!({
+                "id": rule_id,
+                "name": format!("PEP 792 {} Package", issue.issue_type),
+                "shortDescription": {
+                    "text": format!("Package is {}", issue.issue_type.to_string().to_lowercase())
+                },
+                "fullDescription": {
+                    "text": description
+                },
+                "defaultConfiguration": {
+                    "level": level
+                },
+                "help": {
+                    "text": format!("This package has been marked as {} per PEP 792 Project Status Markers. {}",
+                        issue.issue_type.to_string().to_lowercase(), description),
+                    "markdown": format!("## PEP 792: {} Package\n\n{}\n\nSee [PEP 792](https://peps.python.org/pep-0792/) for more information.",
+                        issue.issue_type, description)
+                },
+                "helpUri": "https://peps.python.org/pep-0792/",
+                "properties": {
+                    "security-severity": severity_score,
+                    "maintenance_status": issue.issue_type.to_string().to_lowercase(),
+                    "tags": ["maintenance", "pep792", issue.issue_type.to_string().to_lowercase()]
+                }
+            });
+
+            self.rules.push(rule);
+        }
+
+        debug!("Generated {} maintenance rules (PEP 792)", seen_types.len());
+    }
+
+    /// Get the SARIF rule ID for a maintenance issue type
+    fn maintenance_rule_id(issue_type: &MaintenanceIssueType) -> String {
+        format!("PEP792-{}", issue_type.to_string().to_uppercase())
+    }
+
+    /// Create SARIF results for maintenance issues
+    fn create_maintenance_results(&self, issues: &[MaintenanceIssue]) -> Vec<Value> {
+        let mut results = Vec::new();
+
+        for issue in issues {
+            let rule_id = Self::maintenance_rule_id(&issue.issue_type);
+
+            let level = match issue.issue_type {
+                MaintenanceIssueType::Quarantined => "error",
+                MaintenanceIssueType::Deprecated => "warning",
+                MaintenanceIssueType::Archived => "note",
+            };
+
+            let message = if let Some(reason) = &issue.reason {
+                format!(
+                    "Package '{}' v{} is {}: {}",
+                    issue.package_name, issue.installed_version, issue.issue_type, reason
+                )
+            } else {
+                format!(
+                    "Package '{}' v{} is {}",
+                    issue.package_name, issue.installed_version, issue.issue_type
+                )
+            };
+
+            let dep_type = if issue.is_direct {
+                "direct"
+            } else {
+                "transitive"
+            };
+
+            // Use source file if available, otherwise fall back to defaults
+            let file_path = issue.source_file.as_deref().unwrap_or(if issue.is_direct {
+                "pyproject.toml"
+            } else {
+                "uv.lock"
+            });
+
+            let result = json!({
+                "ruleId": rule_id,
+                "ruleIndex": self.find_rule_index(&rule_id),
+                "message": {
+                    "text": message
+                },
+                "level": level,
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {
+                            "uri": file_path
+                        }
+                    },
+                    "logicalLocations": [{
+                        "name": issue.package_name.to_string(),
+                        "kind": "package"
+                    }]
+                }],
+                "properties": {
+                    "package_name": issue.package_name.to_string(),
+                    "installed_version": issue.installed_version.to_string(),
+                    "is_direct_dependency": issue.is_direct,
+                    "dependency_type": dep_type,
+                    "maintenance_status": issue.issue_type.to_string().to_lowercase(),
+                    "reason": issue.reason
+                }
+            });
+
+            results.push(result);
+        }
+
+        debug!("Created {} maintenance SARIF results", results.len());
+        results
     }
 
     /// Create help text for a vulnerability
@@ -760,6 +909,7 @@ mod tests {
         };
         let fix_suggestions = vec![];
         let warnings = vec!["Test warning".to_string()];
+        let maintenance_issues = vec![];
 
         let sarif_json = generator
             .generate_report(
@@ -768,6 +918,7 @@ mod tests {
                 &database_stats,
                 &fix_suggestions,
                 &warnings,
+                &maintenance_issues,
             )
             .unwrap();
 
@@ -821,5 +972,97 @@ dev = [
             assert_eq!(test_package_locations[0].file_path, "pyproject.toml");
             assert!(test_package_locations[0].line.is_some());
         }
+    }
+
+    #[test]
+    fn test_maintenance_rule_indexing() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut generator = SarifGenerator::new(temp_dir.path());
+
+        // Create maintenance issues for each type
+        let issues = vec![
+            MaintenanceIssue::new(
+                PackageName::from_str("archived-pkg").unwrap(),
+                Version::from_str("1.0.0").unwrap(),
+                MaintenanceIssueType::Archived,
+                Some("No longer maintained".to_string()),
+                true,
+                Some("pyproject.toml".to_string()),
+            ),
+            MaintenanceIssue::new(
+                PackageName::from_str("deprecated-pkg").unwrap(),
+                Version::from_str("2.0.0").unwrap(),
+                MaintenanceIssueType::Deprecated,
+                Some("Use new-pkg instead".to_string()),
+                false,
+                Some("uv.lock".to_string()),
+            ),
+            MaintenanceIssue::new(
+                PackageName::from_str("quarantined-pkg").unwrap(),
+                Version::from_str("3.0.0").unwrap(),
+                MaintenanceIssueType::Quarantined,
+                Some("Malware detected".to_string()),
+                true,
+                Some("poetry.lock".to_string()),
+            ),
+        ];
+
+        // Generate maintenance rules
+        generator.generate_maintenance_rules(&issues);
+
+        // Verify rules were added (one per unique type)
+        assert_eq!(generator.rules.len(), 3);
+
+        // Verify find_rule_index works for each maintenance rule type
+        let archived_idx = generator.find_rule_index("PEP792-ARCHIVED");
+        let deprecated_idx = generator.find_rule_index("PEP792-DEPRECATED");
+        let quarantined_idx = generator.find_rule_index("PEP792-QUARANTINED");
+
+        assert!(archived_idx.is_some(), "Should find ARCHIVED rule");
+        assert!(deprecated_idx.is_some(), "Should find DEPRECATED rule");
+        assert!(quarantined_idx.is_some(), "Should find QUARANTINED rule");
+
+        // Verify indices are unique
+        let indices: std::collections::HashSet<_> = [archived_idx, deprecated_idx, quarantined_idx]
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(indices.len(), 3, "All indices should be unique");
+
+        // Verify non-existent rule returns None
+        assert!(generator.find_rule_index("PEP792-NONEXISTENT").is_none());
+    }
+
+    #[test]
+    fn test_maintenance_sarif_results_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut generator = SarifGenerator::new(temp_dir.path());
+
+        let issues = vec![MaintenanceIssue::new(
+            PackageName::from_str("bad-pkg").unwrap(),
+            Version::from_str("1.0.0").unwrap(),
+            MaintenanceIssueType::Quarantined,
+            Some("Security compromise".to_string()),
+            true,
+            Some("pyproject.toml".to_string()),
+        )];
+
+        // Must generate rules first (as done in generate_report)
+        generator.generate_maintenance_rules(&issues);
+
+        // Create results
+        let results = generator.create_maintenance_results(&issues);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ruleId"], "PEP792-QUARANTINED");
+        assert_eq!(results[0]["level"], "error");
+        assert!(results[0]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("bad-pkg"));
+        assert!(results[0]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Security compromise"));
     }
 }

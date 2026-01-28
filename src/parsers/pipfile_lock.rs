@@ -299,6 +299,7 @@ impl PipfileLockParser {
             source,
             path,
             dependency_type,
+            source_file: Some("Pipfile.lock".to_string()),
         };
 
         Ok(Some(dependency))

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::sarif::SarifGenerator;
+use crate::maintenance::{MaintenanceCheckConfig, MaintenanceIssue, MaintenanceSummary};
 use crate::parsers::DependencyStats;
 use crate::types::AuditFormat;
 use crate::vulnerability::database::{Severity, VulnerabilityMatch};
@@ -27,6 +28,8 @@ pub struct AuditReport {
     pub fix_analysis: FixAnalysis,
     /// Warnings generated during the audit
     pub warnings: Vec<String>,
+    /// PEP 792 maintenance issues (archived, deprecated, quarantined packages)
+    pub maintenance_issues: Vec<MaintenanceIssue>,
 }
 
 impl AuditReport {
@@ -37,6 +40,7 @@ impl AuditReport {
         matches: Vec<VulnerabilityMatch>,
         fix_analysis: FixAnalysis,
         warnings: Vec<String>,
+        maintenance_issues: Vec<MaintenanceIssue>,
     ) -> Self {
         Self {
             scan_time: Utc::now(),
@@ -45,7 +49,23 @@ impl AuditReport {
             matches,
             fix_analysis,
             warnings,
+            maintenance_issues,
         }
+    }
+
+    /// Check if there are any maintenance issues
+    pub fn has_maintenance_issues(&self) -> bool {
+        !self.maintenance_issues.is_empty()
+    }
+
+    /// Get maintenance summary
+    pub fn maintenance_summary(&self) -> MaintenanceSummary {
+        MaintenanceSummary::from_issues(&self.maintenance_issues)
+    }
+
+    /// Check if the audit should fail based on maintenance config
+    pub fn should_fail_on_maintenance(&self, config: &MaintenanceCheckConfig) -> bool {
+        self.maintenance_summary().should_fail(config)
     }
 
     /// Check if the audit found any vulnerabilities
@@ -330,6 +350,67 @@ impl ReportGenerator {
             writeln!(output)?;
         }
 
+        // Maintenance issues section (PEP 792)
+        if !report.maintenance_issues.is_empty() {
+            writeln!(output)?;
+            writeln!(
+                output,
+                "{}",
+                ColoredOutput::header("MAINTENANCE ISSUES (PEP 792)")
+            )?;
+            writeln!(output, "----------------------------")?;
+            writeln!(output)?;
+
+            let maint_summary = report.maintenance_summary();
+            writeln!(
+                output,
+                "{}: {} issues found ({} archived, {} deprecated, {} quarantined)",
+                ColoredOutput::header("SUMMARY"),
+                maint_summary.total_issues,
+                maint_summary.archived_count,
+                maint_summary.deprecated_count,
+                maint_summary.quarantined_count
+            )?;
+            writeln!(output)?;
+
+            for (i, issue) in report.maintenance_issues.iter().enumerate() {
+                let status_tag = match issue.issue_type {
+                    crate::maintenance::MaintenanceIssueType::Quarantined => {
+                        "QUARANTINED".on_red().white().bold().to_string()
+                    }
+                    crate::maintenance::MaintenanceIssueType::Archived => {
+                        "ARCHIVED".yellow().bold().to_string()
+                    }
+                    crate::maintenance::MaintenanceIssueType::Deprecated => {
+                        "DEPRECATED".blue().bold().to_string()
+                    }
+                };
+
+                let dep_type = if issue.is_direct {
+                    "[direct]"
+                } else {
+                    "[transitive]"
+                };
+
+                write!(
+                    output,
+                    " {}. {}  {} v{}  {}",
+                    i + 1,
+                    status_tag,
+                    ColoredOutput::package_name(&issue.package_name.to_string()),
+                    issue.installed_version,
+                    dep_type.dimmed()
+                )?;
+
+                if let Some(reason) = &issue.reason {
+                    writeln!(output, " - {}", reason)?;
+                } else {
+                    writeln!(output)?;
+                }
+            }
+            writeln!(output)?;
+        }
+
         // Clean footer
         writeln!(
             output,
@@ -503,6 +584,57 @@ impl ReportGenerator {
             writeln!(output)?;
         }
 
+        // Maintenance issues section (PEP 792)
+        if !report.maintenance_issues.is_empty() {
+            writeln!(output, "## 🔧 Maintenance Issues (PEP 792)")?;
+            writeln!(output)?;
+
+            let maint_summary = report.maintenance_summary();
+            writeln!(
+                output,
+                "**Summary:** {} issues found ({} archived, {} deprecated, {} quarantined)",
+                maint_summary.total_issues,
+                maint_summary.archived_count,
+                maint_summary.deprecated_count,
+                maint_summary.quarantined_count
+            )?;
+            writeln!(output)?;
+
+            for (i, issue) in report.maintenance_issues.iter().enumerate() {
+                let (icon, status) = match issue.issue_type {
+                    crate::maintenance::MaintenanceIssueType::Quarantined => ("🔴", "QUARANTINED"),
+                    crate::maintenance::MaintenanceIssueType::Archived => ("📦", "ARCHIVED"),
+                    crate::maintenance::MaintenanceIssueType::Deprecated => ("⚠️", "DEPRECATED"),
+                };
+
+                let dep_type = if issue.is_direct {
+                    "direct"
+                } else {
+                    "transitive"
+                };
+
+                writeln!(
+                    output,
+                    "### {}. {} **{}** `{}`",
+                    i + 1,
+                    icon,
+                    status,
+                    issue.package_name
+                )?;
+                writeln!(output)?;
+                writeln!(
+                    output,
+                    "- **Package:** `{}` v`{}`",
+                    issue.package_name, issue.installed_version
+                )?;
+                writeln!(output, "- **Type:** {}", dep_type)?;
+                if let Some(reason) = &issue.reason {
+                    writeln!(output, "- **Reason:** {}", reason)?;
+                }
+                writeln!(output)?;
+            }
+        }
+
         if !report.fix_analysis.fix_suggestions.is_empty() {
             writeln!(output, "## 💡 Fix Suggestions")?;
             writeln!(output)?;
@@ -567,6 +699,18 @@ impl ReportGenerator {
                 })
                 .collect(),
             warnings: report.warnings.clone(),
+            maintenance_issues: report
+                .maintenance_issues
+                .iter()
+                .map(|issue| JsonMaintenanceIssue {
+                    package_name: issue.package_name.to_string(),
+                    installed_version: issue.installed_version.to_string(),
+                    issue_type: format!("{}", issue.issue_type),
+                    reason: issue.reason.clone(),
+                    is_direct: issue.is_direct,
+                    source_file: issue.source_file.clone(),
+                })
+                .collect(),
         };
 
         Ok(serde_json::to_string_pretty(&json_report)?)
@@ -586,6 +730,7 @@ impl ReportGenerator {
             &report.database_stats,
             &report.fix_analysis.fix_suggestions,
             &report.warnings,
+            &report.maintenance_issues,
         )?;
 
         Ok(sarif_json)
@@ -602,6 +747,7 @@ struct JsonReport {
     vulnerabilities: Vec<JsonVulnerability>,
     fix_suggestions: Vec<JsonFixSuggestion>,
     warnings: Vec<String>,
+    maintenance_issues: Vec<JsonMaintenanceIssue>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -626,6 +772,16 @@ struct JsonFixSuggestion {
     current_version: String,
     suggested_version: String,
     vulnerability_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct JsonMaintenanceIssue {
+    package_name: String,
+    installed_version: String,
+    issue_type: String,
+    reason: Option<String>,
+    is_direct: bool,
+    source_file: Option<String>,
 }
 
 #[cfg(test)]
@@ -691,6 +847,7 @@ mod tests {
             matches,
             fix_analysis,
             vec!["Test warning".to_string()],
+            Vec::new(),
         )
     }
 
@@ -822,6 +979,7 @@ mod tests {
             vec![],
             fix_analysis,
             vec![],
+            Vec::new(),
         );
 
         assert!(!report.has_vulnerabilities());
@@ -888,6 +1046,7 @@ mod tests {
             vec![],
             fix_analysis,
             vec![],
+            Vec::new(),
         );
 
         assert!(!report.should_fail_on_severity(&SeverityLevel::Low));

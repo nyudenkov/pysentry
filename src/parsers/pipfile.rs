@@ -442,6 +442,7 @@ impl PipfileParser {
                 source,
                 path: None,
                 dependency_type: dep_type,
+                source_file: Some("Pipfile".to_string()),
             };
 
             dependencies.push(dependency);
@@ -520,6 +521,7 @@ impl PipfileParser {
                     source: DependencySource::Registry,
                     path: None,
                     dependency_type,
+                    source_file: Some("Pipfile".to_string()),
                 };
 
                 dependencies.push(dependency);

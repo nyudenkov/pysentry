@@ -251,7 +251,32 @@ pub struct ResolutionCacheStats {
     pub pip_tools_entries: usize,
 }
 
+/// Normalize package name per PEP 503 for consistent cache keys
+/// https://peps.python.org/pep-0503/#normalized-names
+fn normalize_package_name(name: &str) -> String {
+    name.to_lowercase().replace(['-', '.', '_'], "-")
+}
+
 impl AuditCache {
+    // Project Status Cache Methods (PEP 792)
+
+    /// Get a cache entry for project status
+    pub fn project_status_entry(&self, package_name: &str) -> CacheEntry {
+        let normalized = normalize_package_name(package_name);
+        self.cache.entry(
+            CacheBucket::ProjectStatus,
+            &format!("status-{}", normalized),
+        )
+    }
+
+    /// Check if project status cache should be refreshed
+    pub fn should_refresh_project_status(&self, package_name: &str, ttl_hours: u64) -> bool {
+        let entry = self.project_status_entry(package_name);
+        let ttl = std::time::Duration::from_secs(ttl_hours * 3600);
+
+        !matches!(entry.freshness(ttl), Ok(Freshness::Fresh))
+    }
+
     pub fn feedback_entry(&self) -> CacheEntry {
         self.cache
             .entry(CacheBucket::UserMessages, "last_feedback_shown")
@@ -531,5 +556,35 @@ mod tests {
         assert!(stats.total_size_bytes > 0);
         assert_eq!(stats.uv_entries, 1);
         assert_eq!(stats.pip_tools_entries, 0);
+    }
+
+    #[test]
+    fn test_normalize_package_name() {
+        use super::normalize_package_name;
+
+        // Case normalization
+        assert_eq!(normalize_package_name("Django"), "django");
+        assert_eq!(normalize_package_name("DJANGO"), "django");
+
+        // Separator normalization (underscore -> hyphen)
+        assert_eq!(normalize_package_name("my_package"), "my-package");
+
+        // Separator normalization (dot -> hyphen)
+        assert_eq!(normalize_package_name("my.package"), "my-package");
+
+        // Combined: case + separator
+        assert_eq!(normalize_package_name("My-Package"), "my-package");
+        assert_eq!(normalize_package_name("My_Package"), "my-package");
+        assert_eq!(normalize_package_name("My.Package"), "my-package");
+
+        // Multiple separators
+        assert_eq!(
+            normalize_package_name("some_complex.package-name"),
+            "some-complex-package-name"
+        );
+
+        // Already normalized
+        assert_eq!(normalize_package_name("requests"), "requests");
+        assert_eq!(normalize_package_name("my-package"), "my-package");
     }
 }

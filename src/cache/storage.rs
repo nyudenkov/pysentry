@@ -12,6 +12,8 @@ pub enum CacheBucket {
     VulnerabilityDatabase,
     DependencyResolution,
     UserMessages,
+    /// PEP 792 project status cache
+    ProjectStatus,
 }
 
 impl CacheBucket {
@@ -20,6 +22,7 @@ impl CacheBucket {
             CacheBucket::VulnerabilityDatabase => "vulnerability-db",
             CacheBucket::DependencyResolution => "dependency-resolution",
             CacheBucket::UserMessages => "user-messages",
+            CacheBucket::ProjectStatus => "project-status",
         }
     }
 }

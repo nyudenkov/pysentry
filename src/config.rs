@@ -42,6 +42,10 @@ pub struct Config {
 
     #[serde(default)]
     pub http: HttpConfig,
+
+    /// PEP 792 project status markers configuration
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +188,43 @@ pub struct HttpConfig {
 
     #[serde(default = "default_http_show_progress")]
     pub show_progress: bool,
+}
+
+/// PEP 792 Project Status Markers configuration
+///
+/// Controls how PySentry handles packages with non-active status markers:
+/// - `archived`: Package no longer maintained, won't receive security updates
+/// - `deprecated`: Package obsolete, possibly superseded by another
+/// - `quarantined`: Package identified as malware or compromised
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceConfig {
+    /// Enable PEP 792 project status checks (default: true)
+    #[serde(default = "default_maintenance_enabled")]
+    pub enabled: bool,
+
+    /// Fail on archived packages (default: false)
+    #[serde(default = "default_maintenance_forbid_archived")]
+    pub forbid_archived: bool,
+
+    /// Fail on deprecated packages (default: false)
+    #[serde(default = "default_maintenance_forbid_deprecated")]
+    pub forbid_deprecated: bool,
+
+    /// Fail on quarantined packages (default: false)
+    #[serde(default = "default_maintenance_forbid_quarantined")]
+    pub forbid_quarantined: bool,
+
+    /// Fail on any unmaintained packages - enables archived, deprecated, quarantined (default: false)
+    #[serde(default = "default_maintenance_forbid_unmaintained")]
+    pub forbid_unmaintained: bool,
+
+    /// Only check direct dependencies (default: false)
+    #[serde(default = "default_maintenance_check_direct_only")]
+    pub check_direct_only: bool,
+
+    /// Cache TTL in hours (default: 1)
+    #[serde(default = "default_maintenance_cache_ttl")]
+    pub cache_ttl: u64,
 }
 
 /// Tracks where the configuration was loaded from
@@ -677,6 +718,7 @@ impl Default for Config {
             projects: Vec::new(),
             ci: CiConfig::default(),
             http: HttpConfig::default(),
+            maintenance: MaintenanceConfig::default(),
         }
     }
 }
@@ -757,6 +799,20 @@ impl Default for HttpConfig {
     }
 }
 
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_maintenance_enabled(),
+            forbid_archived: default_maintenance_forbid_archived(),
+            forbid_deprecated: default_maintenance_forbid_deprecated(),
+            forbid_quarantined: default_maintenance_forbid_quarantined(),
+            forbid_unmaintained: default_maintenance_forbid_unmaintained(),
+            check_direct_only: default_maintenance_check_direct_only(),
+            cache_ttl: default_maintenance_cache_ttl(),
+        }
+    }
+}
+
 fn default_version() -> u32 {
     1
 }
@@ -822,6 +878,29 @@ fn default_http_retry_max_backoff() -> u64 {
 }
 fn default_http_show_progress() -> bool {
     true
+}
+
+// Maintenance config defaults (PEP 792)
+fn default_maintenance_enabled() -> bool {
+    true
+}
+fn default_maintenance_forbid_archived() -> bool {
+    false
+}
+fn default_maintenance_forbid_deprecated() -> bool {
+    false
+}
+fn default_maintenance_forbid_quarantined() -> bool {
+    false
+}
+fn default_maintenance_forbid_unmaintained() -> bool {
+    false
+}
+fn default_maintenance_check_direct_only() -> bool {
+    false
+}
+fn default_maintenance_cache_ttl() -> u64 {
+    1 // 1 hour
 }
 
 #[cfg(test)]

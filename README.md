@@ -21,6 +21,7 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
   - PyPA Advisory Database
   - PyPI JSON API
   - OSV.dev (Open Source Vulnerabilities)
+- **PEP 792 Project Status Markers**: Detects archived, deprecated, and quarantined packages
 - **Flexible Output for different workflows**: Human-readable, JSON, SARIF, and Markdown formats
 - **Performance Focused**:
   - Written in Rust for speed
@@ -214,6 +215,15 @@ pysentry --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
 # Ignore unfixable vulnerabilities (only while they have no fix available)
 pysentry --ignore-while-no-fix CVE-2025-8869
 
+# Fail on unmaintained packages (archived, deprecated, or quarantined)
+pysentry --forbid-unmaintained
+
+# Fail only on quarantined packages (malware/compromised)
+pysentry --forbid-quarantined
+
+# Check maintenance status for direct dependencies only
+pysentry --forbid-unmaintained --maintenance-direct-only
+
 # Disable caching for CI environments
 pysentry --no-cache
 
@@ -267,6 +277,12 @@ pysentry --clear-resolution-cache --sources pypa,osv --format sarif
 
 # CI with resolution cache disabled
 pysentry --no-resolution-cache --format json --output security-report.json
+
+# Strict security - fail on vulnerabilities AND unmaintained packages
+pysentry --fail-on high --forbid-unmaintained --format sarif --output security.sarif
+
+# Block quarantined packages (malware protection)
+pysentry --forbid-quarantined --format json --output security-report.json
 ```
 
 ## Pre-commit Integration
@@ -280,7 +296,7 @@ Add PySentry to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.3.14
+    rev: v0.3.15
     hooks:
       - id: pysentry # default pysentry settings
 ```
@@ -290,7 +306,7 @@ repos:
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.3.14
+    rev: v0.3.15
     hooks:
       - id: pysentry
         args: ["--sources", "pypa,osv", "--fail-on", "high"]
@@ -345,6 +361,15 @@ color = "auto"
 ids = ["CVE-2023-12345", "GHSA-xxxx-yyyy-zzzz"]
 while_no_fix = ["CVE-2025-8869"]
 
+[maintenance]
+enabled = true
+forbid_archived = false
+forbid_deprecated = false
+forbid_quarantined = true
+forbid_unmaintained = false
+check_direct_only = false
+cache_ttl = 1
+
 [http]
 timeout = 120
 connect_timeout = 30
@@ -394,6 +419,15 @@ color = "auto"
 ids = ["CVE-2023-12345"]
 while_no_fix = ["CVE-2025-8869"]
 
+[tool.pysentry.maintenance]
+enabled = true
+forbid_archived = false
+forbid_deprecated = false
+forbid_quarantined = true
+forbid_unmaintained = false
+check_direct_only = false
+cache_ttl = 1
+
 [tool.pysentry.http]
 timeout = 120
 connect_timeout = 30
@@ -437,6 +471,12 @@ max_retries = 3
 | `--quiet`                  | Suppress non-error output                                 | `false`           |
 | `--resolver`               | Dependency resolver: `auto`, `uv`, `pip-tools`            | `auto`            |
 | `--requirements`           | Additional requirements files (repeatable)                | `[]`              |
+| `--no-maintenance-check`   | Disable PEP 792 project status checks                     | `false`           |
+| `--forbid-archived`        | Fail on archived packages                                 | `false`           |
+| `--forbid-deprecated`      | Fail on deprecated packages                               | `false`           |
+| `--forbid-quarantined`     | Fail on quarantined packages (malware/compromised)        | `false`           |
+| `--forbid-unmaintained`    | Fail on any unmaintained packages                         | `false`           |
+| `--maintenance-direct-only`| Only check direct dependencies for maintenance status     | `false`           |
 
 ### Cache Management
 
@@ -648,6 +688,51 @@ PySentry uses all three vulnerability sources by default for comprehensive cover
 - Cross-ecosystem vulnerability database
 - Google-maintained infrastructure
 
+## Project Status Markers (PEP 792)
+
+PySentry checks package maintenance status via the [PyPI Simple Index API](https://peps.python.org/pep-0792/). This helps identify packages that may pose supply chain risks beyond known vulnerabilities.
+
+### Status Types
+
+| Status | Description | Risk Level |
+|--------|-------------|------------|
+| **Active** | Under active development (default) | Normal |
+| **Archived** | No longer maintained, won't receive security updates | Medium |
+| **Deprecated** | Obsolete, possibly superseded by another package | Medium |
+| **Quarantined** | Identified as malware, compromised, or dangerous | Critical |
+
+### Usage
+
+```bash
+# Check and report maintenance issues (enabled by default)
+pysentry /path/to/project
+
+# Fail on any unmaintained packages
+pysentry --forbid-unmaintained
+
+# Fail only on quarantined packages (recommended for CI)
+pysentry --forbid-quarantined
+
+# Disable maintenance checks entirely
+pysentry --no-maintenance-check
+```
+
+### Configuration
+
+```toml
+# .pysentry.toml
+[maintenance]
+enabled = true              # Enable PEP 792 checks
+forbid_archived = false     # Fail on archived packages
+forbid_deprecated = false   # Fail on deprecated packages
+forbid_quarantined = true   # Fail on quarantined packages (recommended)
+forbid_unmaintained = false # Fail on any of the above
+check_direct_only = false   # Only check direct dependencies
+cache_ttl = 1               # Cache TTL in hours
+```
+
+Maintenance issues appear in all output formats alongside vulnerabilities. In SARIF output, they use dedicated rule IDs (`PEP792-ARCHIVED`, `PEP792-DEPRECATED`, `PEP792-QUARANTINED`) for integration with security tooling.
+
 ## Output Formats
 
 ### Human-Readable (Default)
@@ -673,7 +758,17 @@ GitHub-friendly format with structured sections and severity indicators. Perfect
       "low": 0
     }
   },
-  "vulnerabilities": [...]
+  "vulnerabilities": [...],
+  "maintenance_issues": [
+    {
+      "package_name": "abandoned-pkg",
+      "installed_version": "1.0.0",
+      "issue_type": "archived",
+      "reason": "Package is no longer maintained",
+      "is_direct": true,
+      "source_file": "pyproject.toml"
+    }
+  ]
 }
 ```
 
