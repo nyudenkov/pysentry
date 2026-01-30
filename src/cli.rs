@@ -168,10 +168,6 @@ pub struct AuditArgs {
     #[arg(long)]
     pub clear_resolution_cache: bool,
 
-    /// Vulnerability data source [DEPRECATED: use --sources instead]
-    #[arg(long, value_enum, default_value = "pypa", hide = true)]
-    pub source: VulnerabilitySourceType,
-
     /// Vulnerability data sources (can be specified multiple times or comma-separated)
     #[arg(long = "sources", value_name = "SOURCE")]
     pub sources: Vec<String>,
@@ -295,52 +291,38 @@ impl AuditArgs {
     }
 
     pub fn resolve_sources(&self) -> Result<Vec<VulnerabilitySourceType>, String> {
-        use std::sync::Once;
-        static DEPRECATION_WARNING_SHOWN: Once = Once::new();
+        if self.sources.is_empty() {
+            return Ok(vec![
+                VulnerabilitySourceType::Pypa,
+                VulnerabilitySourceType::Pypi,
+                VulnerabilitySourceType::Osv,
+            ]);
+        }
 
         let mut resolved_sources = Vec::new();
-
-        if !self.sources.is_empty() {
-            for source_arg in &self.sources {
-                for source_str in source_arg.split(',') {
-                    let source_str = source_str.trim();
-                    if source_str.is_empty() {
-                        continue;
-                    }
-                    let source_type = match source_str {
-                        "pypa" => VulnerabilitySourceType::Pypa,
-                        "pypi" => VulnerabilitySourceType::Pypi,
-                        "osv" => VulnerabilitySourceType::Osv,
-                        _ => {
-                            return Err(format!(
+        for source_arg in &self.sources {
+            for source_str in source_arg.split(',') {
+                let source_str = source_str.trim();
+                if source_str.is_empty() {
+                    continue;
+                }
+                let source_type = match source_str {
+                    "pypa" => VulnerabilitySourceType::Pypa,
+                    "pypi" => VulnerabilitySourceType::Pypi,
+                    "osv" => VulnerabilitySourceType::Osv,
+                    _ => {
+                        return Err(format!(
                             "Invalid vulnerability source: '{source_str}'. Valid sources: pypa, pypi, osv"
                         ))
-                        }
-                    };
+                    }
+                };
+                if !resolved_sources.contains(&source_type) {
                     resolved_sources.push(source_type);
                 }
             }
         }
 
-        if resolved_sources.is_empty() {
-            if self.source != VulnerabilitySourceType::Pypa {
-                DEPRECATION_WARNING_SHOWN.call_once(|| {
-                    eprintln!("Warning: --source flag is deprecated and will be removed in a future version. Use --sources instead.");
-                });
-                resolved_sources.push(self.source.clone());
-            } else {
-                resolved_sources.push(VulnerabilitySourceType::Pypa);
-            }
-        }
-
-        let mut unique_sources = Vec::new();
-        for source in resolved_sources {
-            if !unique_sources.contains(&source) {
-                unique_sources.push(source);
-            }
-        }
-
-        Ok(unique_sources)
+        Ok(resolved_sources)
     }
 
     pub fn load_and_merge_config(&self) -> Result<(Self, Option<Config>)> {
@@ -850,6 +832,15 @@ pub async fn audit(
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
 ) -> Result<i32> {
+    // Resolve sources early to avoid duplicate resolution and ensure errors are surfaced
+    let source_types = match audit_args.resolve_sources() {
+        Ok(sources) => sources,
+        Err(e) => {
+            eprintln!("Error: Invalid vulnerability sources: {e}");
+            return Ok(1);
+        }
+    };
+
     if audit_args.is_verbose() {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
@@ -859,11 +850,11 @@ pub async fn audit(
 
     if audit_args.is_verbose() {
         eprintln!(
-            "Configuration: format={:?}, severity={:?}, fail_on={:?}, source={:?}, scope='{}', direct_only={}",
+            "Configuration: format={:?}, severity={:?}, fail_on={:?}, sources={:?}, scope='{}', direct_only={}",
             audit_args.format,
             audit_args.severity,
             audit_args.fail_on,
-            audit_args.source,
+            source_types,
             audit_args.scope_description(),
             audit_args.direct_only
         );
@@ -884,7 +875,7 @@ pub async fn audit(
         }
     }
 
-    let audit_result = perform_audit(audit_args, cache_dir, http_config).await;
+    let audit_result = perform_audit(audit_args, cache_dir, http_config, &source_types).await;
 
     let report = match audit_result {
         Ok(report) => report,
@@ -954,16 +945,10 @@ async fn perform_audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
+    source_types: &[VulnerabilitySourceType],
 ) -> Result<AuditReport> {
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
-
-    let source_types = match audit_args.resolve_sources() {
-        Ok(sources) => sources,
-        Err(e) => {
-            return Err(anyhow::anyhow!("Invalid vulnerability sources: {}", e));
-        }
-    };
 
     let vuln_sources: Vec<_> = source_types
         .iter()
