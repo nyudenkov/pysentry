@@ -1,6 +1,6 @@
 - id: pysentry
-  name: pysentry (DEPRECATED - moved to nyudenkov/pysentry-pre-commit)
-  description: "⚠️ DEPRECATED - See github.com/nyudenkov/pysentry-pre-commit"
+  name: pysentry (DEPRECATED - moved to pysentry/pysentry-pre-commit)
+  description: "⚠️ DEPRECATED - See github.com/pysentry/pysentry-pre-commit"
   entry: pysentry-rs
   language: python
   always_run: true

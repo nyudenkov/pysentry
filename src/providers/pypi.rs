@@ -24,11 +24,17 @@ pub struct PypiSource {
     no_cache: bool,
     client: reqwest::Client,
     http_config: crate::config::HttpConfig,
+    vulnerability_ttl: u64,
 }
 
 impl PypiSource {
     /// Create a new PyPI source with HTTP configuration
-    pub fn new(cache: AuditCache, no_cache: bool, http_config: crate::config::HttpConfig) -> Self {
+    pub fn new(
+        cache: AuditCache,
+        no_cache: bool,
+        http_config: crate::config::HttpConfig,
+        vulnerability_ttl: u64,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(http_config.timeout))
             .connect_timeout(std::time::Duration::from_secs(http_config.connect_timeout))
@@ -40,6 +46,7 @@ impl PypiSource {
             no_cache,
             client,
             http_config,
+            vulnerability_ttl,
         }
     }
 
@@ -54,13 +61,26 @@ impl PypiSource {
         name: &str,
         version: &str,
     ) -> Result<Vec<Vulnerability>> {
-        let cache_entry = self.cache_entry(name, version);
+        use crate::cache::Freshness;
+        use std::time::Duration;
 
-        // Check cache first unless no_cache is set
-        if !self.no_cache && cache_entry.path().exists() {
+        let cache_entry = self.cache_entry(name, version);
+        let ttl = Duration::from_secs(self.vulnerability_ttl * 3600);
+
+        // Check cache freshness first unless no_cache is set
+        let cache_is_fresh = if self.no_cache {
+            false
+        } else {
+            matches!(cache_entry.freshness(ttl), Ok(Freshness::Fresh))
+        };
+
+        if cache_is_fresh {
             if let Ok(content) = fs_err::read(cache_entry.path()) {
                 if let Ok(vulns) = serde_json::from_slice::<Vec<Vulnerability>>(&content) {
-                    debug!("Using cached PyPI vulnerabilities for {} {}", name, version);
+                    debug!(
+                        "Using cached PyPI vulnerabilities for {} {} (TTL: {} hours)",
+                        name, version, self.vulnerability_ttl
+                    );
                     return Ok(vulns);
                 }
             }

@@ -2,8 +2,8 @@
 
 pub use cache::{AuditCache, Cache, CacheBucket, CacheEntry, DatabaseMetadata, Freshness};
 pub use config::{
-    CacheConfig, CiConfig, Config, ConfigLoader, DefaultConfig, IgnoreConfig, MaintenanceConfig,
-    OutputConfig, PackageIgnoreRule, ProjectConfig, ResolverConfig, SourcesConfig,
+    CacheConfig, Config, ConfigLoader, DefaultConfig, IgnoreConfig, MaintenanceConfig,
+    ResolverConfig, SourcesConfig,
 };
 pub use dependency::scanner::{DependencyScanner, DependencyStats};
 pub use maintenance::{
@@ -25,6 +25,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod dependency;
+pub mod logging;
 pub mod maintenance;
 pub mod output;
 pub mod parsers;
@@ -105,6 +106,7 @@ impl AuditEngine {
             cache,
             false,
             crate::config::HttpConfig::default(),
+            48, // default vulnerability TTL in hours
         );
 
         // 3. Fetch vulnerabilities
