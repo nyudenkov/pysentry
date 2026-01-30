@@ -831,6 +831,7 @@ pub async fn audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
+    vulnerability_ttl: u64,
 ) -> Result<i32> {
     // Resolve sources early to avoid duplicate resolution and ensure errors are surfaced
     let source_types = match audit_args.resolve_sources() {
@@ -875,7 +876,8 @@ pub async fn audit(
         }
     }
 
-    let audit_result = perform_audit(audit_args, cache_dir, http_config, &source_types).await;
+    let audit_result =
+        perform_audit(audit_args, cache_dir, http_config, vulnerability_ttl, &source_types).await;
 
     let report = match audit_result {
         Ok(report) => report,
@@ -945,6 +947,7 @@ async fn perform_audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
+    vulnerability_ttl: u64,
     source_types: &[VulnerabilitySourceType],
 ) -> Result<AuditReport> {
     std::fs::create_dir_all(cache_dir)?;
@@ -958,6 +961,7 @@ async fn perform_audit(
                 audit_cache.clone(),
                 audit_args.no_cache,
                 http_config.clone(),
+                vulnerability_ttl,
             )
         })
         .collect();
@@ -1389,8 +1393,8 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
         );
         println!();
         println!(
-            "  Resolver: {} (fallback: {})",
-            config_loader.config.resolver.resolver_type, config_loader.config.resolver.fallback
+            "  Resolver: {}",
+            config_loader.config.resolver.resolver_type
         );
         println!();
         println!("  Cache enabled: {}", config_loader.config.cache.enabled);
@@ -1406,33 +1410,12 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
             config_loader.config.cache.vulnerability_ttl
         );
         println!();
-        println!("  Output quiet: {}", config_loader.config.output.quiet);
-        println!("  Output verbose: {}", config_loader.config.output.verbose);
-        println!("  Output color: {}", config_loader.config.output.color);
-        println!();
         if !config_loader.config.ignore.ids.is_empty() {
             println!(
                 "  Ignored IDs: {}",
                 config_loader.config.ignore.ids.join(", ")
             );
         }
-        if !config_loader.config.ignore.patterns.is_empty() {
-            println!(
-                "  Ignored patterns: {}",
-                config_loader.config.ignore.patterns.join(", ")
-            );
-        }
-        if !config_loader.config.projects.is_empty() {
-            println!(
-                "  Project overrides: {} configured",
-                config_loader.config.projects.len()
-            );
-        }
-        println!();
-        println!("  CI enabled: {}", config_loader.config.ci.enabled);
-        println!("  CI format: {}", config_loader.config.ci.format);
-        println!("  CI fail on: {}", config_loader.config.ci.fail_on);
-        println!("  CI annotations: {}", config_loader.config.ci.annotations);
         println!();
         println!("  HTTP timeout: {}s", config_loader.config.http.timeout);
         println!(

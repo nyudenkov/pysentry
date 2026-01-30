@@ -25,6 +25,10 @@ async fn main() -> Result<()> {
             };
 
             let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+            let vulnerability_ttl = config
+                .as_ref()
+                .map(|c| c.cache.vulnerability_ttl)
+                .unwrap_or(48);
 
             logging::init_tracing(&merged_audit_args.verbosity)?;
 
@@ -34,7 +38,8 @@ async fn main() -> Result<()> {
                     .join("pysentry")
             });
 
-            let exit_code = audit(&merged_audit_args, &cache_dir, http_config).await?;
+            let exit_code =
+                audit(&merged_audit_args, &cache_dir, http_config, vulnerability_ttl).await?;
 
             std::process::exit(exit_code);
         }

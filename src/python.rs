@@ -59,6 +59,10 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                     };
 
                     let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+                    let vulnerability_ttl = config
+                        .as_ref()
+                        .map(|c| c.cache.vulnerability_ttl)
+                        .unwrap_or(48);
 
                     if let Err(e) = logging::init_tracing(&merged_audit_args.verbosity) {
                         eprintln!("Warning: Failed to initialize tracing: {e}");
@@ -70,7 +74,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                             .join("pysentry")
                     });
 
-                    match audit(&merged_audit_args, &cache_dir, http_config).await {
+                    match audit(&merged_audit_args, &cache_dir, http_config, vulnerability_ttl).await {
                         Ok(exit_code) => Ok(exit_code),
                         Err(e) => {
                             eprintln!("Error: Audit failed: {e}");

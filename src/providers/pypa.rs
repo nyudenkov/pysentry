@@ -259,15 +259,22 @@ pub struct PypaSource {
     cache: AuditCache,
     client: PypaClient,
     no_cache: bool,
+    vulnerability_ttl: u64,
 }
 
 impl PypaSource {
     /// Create a new `PyPA` source with HTTP configuration
-    pub fn new(cache: AuditCache, no_cache: bool, http_config: crate::config::HttpConfig) -> Self {
+    pub fn new(
+        cache: AuditCache,
+        no_cache: bool,
+        http_config: crate::config::HttpConfig,
+        vulnerability_ttl: u64,
+    ) -> Self {
         Self {
             cache,
             client: PypaClient::new(http_config),
             no_cache,
+            vulnerability_ttl,
         }
     }
 
@@ -278,14 +285,27 @@ impl PypaSource {
 
     /// Download and parse `PyPA` advisory database
     async fn download_and_parse_database(&self) -> Result<Vec<PypaAdvisory>> {
-        let cache_entry = self.cache_entry();
+        use crate::cache::Freshness;
+        use std::time::Duration;
 
-        // Check cache first unless no_cache is set
-        let zip_data = if !self.no_cache && cache_entry.path().exists() {
-            debug!("Using cached PyPA database");
+        let cache_entry = self.cache_entry();
+        let ttl = Duration::from_secs(self.vulnerability_ttl * 3600);
+
+        // Check cache freshness first unless no_cache is set
+        let cache_is_fresh = if self.no_cache {
+            false
+        } else {
+            matches!(cache_entry.freshness(ttl), Ok(Freshness::Fresh))
+        };
+
+        let zip_data = if cache_is_fresh {
+            debug!(
+                "Using cached PyPA database (TTL: {} hours)",
+                self.vulnerability_ttl
+            );
             fs_err::read(cache_entry.path())?
         } else {
-            debug!("Downloading PyPA advisory database");
+            debug!("Downloading PyPA advisory database (cache stale or missing)");
             let data = self.client.download_advisory_database().await?;
 
             // Cache the downloaded data
@@ -726,7 +746,7 @@ modified: "2021-07-15T02:22:07.728618Z"
 published: "2007-10-30T19:46:00Z"
 "#;
 
-        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config(), 48);
 
         let advisory = PypaSource::parse_advisory(yaml).unwrap();
         assert_eq!(advisory.id, "PYSEC-2007-1");
@@ -754,7 +774,7 @@ affected:
 references: []
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config(), 48);
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_names = PypaSource::extract_package_names(&pypa_advisory);
@@ -782,7 +802,7 @@ affected:
 references: []
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config(), 48);
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_names = PypaSource::extract_package_names(&pypa_advisory);
@@ -817,7 +837,7 @@ affected:
 references: []
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config(), 48);
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_names = PypaSource::extract_package_names(&pypa_advisory);
@@ -851,7 +871,7 @@ modified: \"2025-01-14T21:22:18.665005Z\"
 published: \"2025-01-14T19:15:32Z\"
 ";
 
-        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config(), 48);
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_name = PackageName::from_str("requests").unwrap();
@@ -891,7 +911,7 @@ published: "2022-12-07T00:00:00Z"
 withdrawn: "2023-11-08T00:54:24Z"
 "#;
 
-        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config());
+        let _source = PypaSource::new(create_test_cache(), true, create_test_http_config(), 48);
 
         let pypa_advisory = PypaSource::parse_advisory(yaml).unwrap();
         let package_name = PackageName::from_str("aiohttp").unwrap();

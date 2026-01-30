@@ -235,7 +235,7 @@ pysentry --verbose
 
 ```bash
 # Scan multiple requirements files
-pysentry --requirements requirements.txt --requirements requirements-dev.txt
+pysentry --requirements-files requirements.txt --requirements-files requirements-dev.txt
 
 # Check only direct dependencies from requirements.txt
 pysentry --direct-only --resolver uv
@@ -470,7 +470,7 @@ max_retries = 3
 | `-v`, `--verbose`          | Increase verbosity (can use -v, -vv, -vvv, -vvvv)         | error level       |
 | `-q`, `--quiet`            | Suppress all output                                       | `false`           |
 | `--resolver`               | Dependency resolver: `auto`, `uv`, `pip-tools`            | `auto`            |
-| `--requirements`           | Additional requirements files (repeatable)                | `[]`              |
+| `--requirements-files`           | Additional requirements files (repeatable)                | `[]`              |
 | `--no-maintenance-check`   | Disable PEP 792 project status checks                     | `false`           |
 | `--forbid-archived`        | Fail on archived packages                                 | `false`           |
 | `--forbid-deprecated`      | Fail on deprecated packages                               | `false`           |
@@ -1002,7 +1002,7 @@ ls requirements.txt
 pysentry /path/to/python/project
 
 # Include additional requirements files
-pysentry --requirements requirements-dev.txt --requirements requirements-test.txt
+pysentry --requirements-files requirements-dev.txt --requirements-files requirements-test.txt
 
 # Check if higher-priority files exist (they take precedence)
 ls uv.lock poetry.lock Pipfile.lock pyproject.toml Pipfile requirements.txt
