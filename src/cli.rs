@@ -10,6 +10,7 @@ use std::sync::Once;
 
 use crate::dependency::resolvers::ResolverRegistry;
 use crate::logging::AppVerbosity;
+use crate::notifications::NotificationClient;
 use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
 use crate::{
@@ -827,11 +828,35 @@ pub async fn check_for_update_silent() -> Result<Option<String>> {
     }
 }
 
+/// Fetch remote notifications silently, returning empty vec on any error
+async fn fetch_remote_notifications_silent(
+    cache: &AuditCache,
+) -> Vec<crate::notifications::RemoteNotification> {
+    let client = NotificationClient::new(cache.clone());
+    client.get_displayable_notifications().await
+}
+
+/// Display a notification to the user
+fn display_notification(notification: &crate::notifications::RemoteNotification) {
+    println!("\n\u{1f4e2} {}", notification.title);
+    println!("   {}", notification.message);
+    if let Some(url) = &notification.url {
+        println!("   \u{2192} {}", url);
+    }
+}
+
+/// Mark a notification as shown in the cache
+async fn mark_notification_shown(cache: &AuditCache, notification_id: &str) -> anyhow::Result<()> {
+    let client = NotificationClient::new(cache.clone());
+    client.mark_as_shown(notification_id).await
+}
+
 pub async fn audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
     vulnerability_ttl: u64,
+    notifications_enabled: bool,
 ) -> Result<i32> {
     // Resolve sources early to avoid duplicate resolution and ensure errors are surfaced
     let source_types = match audit_args.resolve_sources() {
@@ -931,6 +956,19 @@ pub async fn audit(
 
             if let Err(e) = audit_cache.record_update_check().await {
                 tracing::debug!("Failed to record update check: {}", e);
+            }
+        }
+
+        // Check for remote notifications
+        if notifications_enabled {
+            let notifications = fetch_remote_notifications_silent(&audit_cache).await;
+            for notification in notifications {
+                display_notification(&notification);
+                if notification.show_once {
+                    if let Err(e) = mark_notification_shown(&audit_cache, &notification.id).await {
+                        tracing::debug!("Failed to mark notification as shown: {}", e);
+                    }
+                }
             }
         }
     }

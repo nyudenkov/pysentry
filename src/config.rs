@@ -37,6 +37,10 @@ pub struct Config {
     /// PEP 792 project status markers configuration
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
+
+    /// Remote notifications configuration
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +158,26 @@ pub struct MaintenanceConfig {
     /// Cache TTL in hours (default: 1)
     #[serde(default = "default_maintenance_cache_ttl")]
     pub cache_ttl: u64,
+}
+
+/// Remote notifications configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationsConfig {
+    /// Enable remote notifications (default: true)
+    #[serde(default = "default_notifications_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_notifications_enabled(),
+        }
+    }
+}
+
+fn default_notifications_enabled() -> bool {
+    true
 }
 
 /// Tracks where the configuration was loaded from
@@ -574,6 +598,7 @@ impl Default for Config {
             ignore: IgnoreConfig::default(),
             http: HttpConfig::default(),
             maintenance: MaintenanceConfig::default(),
+            notifications: NotificationsConfig::default(),
         }
     }
 }

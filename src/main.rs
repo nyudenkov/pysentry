@@ -29,6 +29,10 @@ async fn main() -> Result<()> {
                 .as_ref()
                 .map(|c| c.cache.vulnerability_ttl)
                 .unwrap_or(48);
+            let notifications_enabled = config
+                .as_ref()
+                .map(|c| c.notifications.enabled)
+                .unwrap_or(true);
 
             logging::init_tracing(&merged_audit_args.verbosity)?;
 
@@ -43,6 +47,7 @@ async fn main() -> Result<()> {
                 &cache_dir,
                 http_config,
                 vulnerability_ttl,
+                notifications_enabled,
             )
             .await?;
 

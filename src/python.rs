@@ -63,6 +63,10 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         .as_ref()
                         .map(|c| c.cache.vulnerability_ttl)
                         .unwrap_or(48);
+                    let notifications_enabled = config
+                        .as_ref()
+                        .map(|c| c.notifications.enabled)
+                        .unwrap_or(true);
 
                     if let Err(e) = logging::init_tracing(&merged_audit_args.verbosity) {
                         eprintln!("Warning: Failed to initialize tracing: {e}");
@@ -79,6 +83,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         &cache_dir,
                         http_config,
                         vulnerability_ttl,
+                        notifications_enabled,
                     )
                     .await
                     {

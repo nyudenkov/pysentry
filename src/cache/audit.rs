@@ -324,6 +324,28 @@ impl AuditCache {
         entry.write(&timestamp).await?;
         Ok(())
     }
+
+    // Remote Notifications Cache Methods
+
+    /// Cache entry for remote notifications JSON
+    pub fn notifications_cache_entry(&self) -> CacheEntry {
+        self.cache
+            .entry(CacheBucket::UserMessages, "remote-notifications")
+    }
+
+    /// Cache entry for tracking shown notification IDs
+    pub fn shown_notifications_entry(&self) -> CacheEntry {
+        self.cache
+            .entry(CacheBucket::UserMessages, "shown-notifications")
+    }
+
+    /// Check if notifications cache should be refreshed (6 hour TTL)
+    pub fn should_refresh_notifications(&self) -> bool {
+        let entry = self.notifications_cache_entry();
+        let six_hours = Duration::from_secs(6 * 3600);
+
+        !matches!(entry.freshness(six_hours), Ok(Freshness::Fresh))
+    }
 }
 
 impl Clone for AuditCache {

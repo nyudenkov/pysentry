@@ -3,7 +3,7 @@
 pub use cache::{AuditCache, Cache, CacheBucket, CacheEntry, DatabaseMetadata, Freshness};
 pub use config::{
     CacheConfig, Config, ConfigLoader, DefaultConfig, IgnoreConfig, MaintenanceConfig,
-    ResolverConfig, SourcesConfig,
+    NotificationsConfig, ResolverConfig, SourcesConfig,
 };
 pub use dependency::scanner::{DependencyScanner, DependencyStats};
 pub use maintenance::{
@@ -27,6 +27,7 @@ pub mod config;
 pub mod dependency;
 pub mod logging;
 pub mod maintenance;
+pub mod notifications;
 pub mod output;
 pub mod parsers;
 pub mod providers;
