@@ -56,3 +56,8 @@ htmlcov/
 # Claude Code documentation (keep root, ignore subdirectories)
 **/CLAUDE.md
 !/CLAUDE.md
+
+# Docusaurus
+docs/node_modules/
+docs/.docusaurus/
+docs/build/
