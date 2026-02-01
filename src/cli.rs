@@ -876,8 +876,14 @@ pub async fn audit(
         }
     }
 
-    let audit_result =
-        perform_audit(audit_args, cache_dir, http_config, vulnerability_ttl, &source_types).await;
+    let audit_result = perform_audit(
+        audit_args,
+        cache_dir,
+        http_config,
+        vulnerability_ttl,
+        &source_types,
+    )
+    .await;
 
     let report = match audit_result {
         Ok(report) => report,

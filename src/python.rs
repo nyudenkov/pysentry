@@ -74,7 +74,14 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                             .join("pysentry")
                     });
 
-                    match audit(&merged_audit_args, &cache_dir, http_config, vulnerability_ttl).await {
+                    match audit(
+                        &merged_audit_args,
+                        &cache_dir,
+                        http_config,
+                        vulnerability_ttl,
+                    )
+                    .await
+                    {
                         Ok(exit_code) => Ok(exit_code),
                         Err(e) => {
                             eprintln!("Error: Audit failed: {e}");

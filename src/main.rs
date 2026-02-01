@@ -38,8 +38,13 @@ async fn main() -> Result<()> {
                     .join("pysentry")
             });
 
-            let exit_code =
-                audit(&merged_audit_args, &cache_dir, http_config, vulnerability_ttl).await?;
+            let exit_code = audit(
+                &merged_audit_args,
+                &cache_dir,
+                http_config,
+                vulnerability_ttl,
+            )
+            .await?;
 
             std::process::exit(exit_code);
         }
