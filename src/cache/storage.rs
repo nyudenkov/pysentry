@@ -153,6 +153,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(windows, ignore = "Windows file locking prevents concurrent rename operations")]
     async fn test_concurrent_writes_no_corruption() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cache = Arc::new(Cache::new(temp_dir.path().to_path_buf()));
@@ -274,6 +275,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(windows, ignore = "Windows file locking prevents concurrent rename operations")]
     async fn test_write_during_read_no_corruption() {
         let temp_dir = tempfile::tempdir().unwrap();
         let cache = Arc::new(Cache::new(temp_dir.path().to_path_buf()));
