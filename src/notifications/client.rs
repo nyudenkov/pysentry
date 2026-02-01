@@ -168,25 +168,24 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_notification_client_not_configured() {
+    async fn test_notification_client_configured_by_default() {
         let temp_dir = tempdir().unwrap();
         let cache = AuditCache::new(temp_dir.path().to_path_buf());
         let client = NotificationClient::new(cache);
+
+        assert!(client.is_configured());
+    }
+
+    #[tokio::test]
+    async fn test_notification_client_empty_url_not_configured() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+        let client = NotificationClient::with_url(cache, String::new());
 
         assert!(!client.is_configured());
 
         let notifications = client.get_displayable_notifications().await;
         assert!(notifications.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_notification_client_with_url() {
-        let temp_dir = tempdir().unwrap();
-        let cache = AuditCache::new(temp_dir.path().to_path_buf());
-        let client =
-            NotificationClient::with_url(cache, "https://example.com/notifications.json".into());
-
-        assert!(client.is_configured());
     }
 
     #[tokio::test]
