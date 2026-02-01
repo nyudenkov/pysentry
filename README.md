@@ -2,7 +2,7 @@
 
 [![PyPI Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
 
-[Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12)
+[Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12) · [Participate in pysentry usage survey](https://tally.so/r/mYNPNv)
 
 Please, send feedback to nikita@pysentry.com
 
