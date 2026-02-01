@@ -9,6 +9,8 @@ use std::path::Path;
 use std::sync::Once;
 
 use crate::dependency::resolvers::ResolverRegistry;
+use crate::logging::AppVerbosity;
+use crate::notifications::NotificationClient;
 use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
 use crate::{
@@ -167,10 +169,6 @@ pub struct AuditArgs {
     #[arg(long)]
     pub clear_resolution_cache: bool,
 
-    /// Vulnerability data source [DEPRECATED: use --sources instead]
-    #[arg(long, value_enum, default_value = "pypa", hide = true)]
-    pub source: VulnerabilitySourceType,
-
     /// Vulnerability data sources (can be specified multiple times or comma-separated)
     #[arg(long = "sources", value_name = "SOURCE")]
     pub sources: Vec<String>,
@@ -183,13 +181,9 @@ pub struct AuditArgs {
     #[arg(long = "requirements-files", value_name = "FILE", num_args = 1..)]
     pub requirements_files: Vec<std::path::PathBuf>,
 
-    /// Enable verbose output
-    #[arg(long, short)]
-    pub verbose: bool,
-
-    /// Suppress non-error output
-    #[arg(long, short)]
-    pub quiet: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
 
     /// Show detailed vulnerability descriptions (full text instead of truncated)
     #[arg(long)]
@@ -230,6 +224,16 @@ pub struct AuditArgs {
 }
 
 impl AuditArgs {
+    /// Check if quiet mode is enabled (either via -q flag or config).
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
+
+    /// Check if verbose mode is enabled (via -v flags or config).
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
     fn include_all_dependencies(&self) -> bool {
         static DEPRECATION_WARNING_SHOWN: Once = Once::new();
 
@@ -288,52 +292,38 @@ impl AuditArgs {
     }
 
     pub fn resolve_sources(&self) -> Result<Vec<VulnerabilitySourceType>, String> {
-        use std::sync::Once;
-        static DEPRECATION_WARNING_SHOWN: Once = Once::new();
+        if self.sources.is_empty() {
+            return Ok(vec![
+                VulnerabilitySourceType::Pypa,
+                VulnerabilitySourceType::Pypi,
+                VulnerabilitySourceType::Osv,
+            ]);
+        }
 
         let mut resolved_sources = Vec::new();
-
-        if !self.sources.is_empty() {
-            for source_arg in &self.sources {
-                for source_str in source_arg.split(',') {
-                    let source_str = source_str.trim();
-                    if source_str.is_empty() {
-                        continue;
-                    }
-                    let source_type = match source_str {
-                        "pypa" => VulnerabilitySourceType::Pypa,
-                        "pypi" => VulnerabilitySourceType::Pypi,
-                        "osv" => VulnerabilitySourceType::Osv,
-                        _ => {
-                            return Err(format!(
+        for source_arg in &self.sources {
+            for source_str in source_arg.split(',') {
+                let source_str = source_str.trim();
+                if source_str.is_empty() {
+                    continue;
+                }
+                let source_type = match source_str {
+                    "pypa" => VulnerabilitySourceType::Pypa,
+                    "pypi" => VulnerabilitySourceType::Pypi,
+                    "osv" => VulnerabilitySourceType::Osv,
+                    _ => {
+                        return Err(format!(
                             "Invalid vulnerability source: '{source_str}'. Valid sources: pypa, pypi, osv"
                         ))
-                        }
-                    };
+                    }
+                };
+                if !resolved_sources.contains(&source_type) {
                     resolved_sources.push(source_type);
                 }
             }
         }
 
-        if resolved_sources.is_empty() {
-            if self.source != VulnerabilitySourceType::Pypa {
-                DEPRECATION_WARNING_SHOWN.call_once(|| {
-                    eprintln!("Warning: --source flag is deprecated and will be removed in a future version. Use --sources instead.");
-                });
-                resolved_sources.push(self.source.clone());
-            } else {
-                resolved_sources.push(VulnerabilitySourceType::Pypa);
-            }
-        }
-
-        let mut unique_sources = Vec::new();
-        for source in resolved_sources {
-            if !unique_sources.contains(&source) {
-                unique_sources.push(source);
-            }
-        }
-
-        Ok(unique_sources)
+        Ok(resolved_sources)
     }
 
     pub fn load_and_merge_config(&self) -> Result<(Self, Option<Config>)> {
@@ -428,12 +418,9 @@ impl AuditArgs {
         ignore_while_no_fix.extend(config.ignore.while_no_fix.clone());
         merged.ignore_while_no_fix = ignore_while_no_fix;
 
-        if !self.quiet {
-            merged.quiet = config.output.quiet;
-        }
-        if !self.verbose {
-            merged.verbose = config.output.verbose;
-        }
+        // Note: verbosity is controlled via CLI flags (-v/-q) and RUST_LOG env var.
+        // Config file output.quiet and output.verbose are respected for backward compatibility
+        // but CLI flags always take precedence through the verbosity struct.
 
         // Merge maintenance (PEP 792) settings
         if !self.no_maintenance_check && !config.maintenance.enabled {
@@ -461,14 +448,36 @@ impl AuditArgs {
 
 #[derive(Debug, Parser)]
 pub struct ResolversArgs {
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ResolversArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
 pub struct CheckVersionArgs {
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl CheckVersionArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -481,6 +490,20 @@ pub struct ConfigInitArgs {
 
     #[arg(long)]
     pub minimal: bool,
+
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigInitArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -488,8 +511,19 @@ pub struct ConfigValidateArgs {
     #[arg(value_name = "FILE")]
     pub config: Option<std::path::PathBuf>,
 
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigValidateArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -499,12 +533,33 @@ pub struct ConfigShowArgs {
 
     #[arg(long)]
     pub toml: bool,
+
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigShowArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
+
+    pub fn is_quiet(&self) -> bool {
+        crate::logging::is_quiet(&self.verbosity)
+    }
 }
 
 #[derive(Debug, Parser)]
 pub struct ConfigPathArgs {
-    #[arg(long, short)]
-    pub verbose: bool,
+    /// Verbosity level: use -v, -vv, -vvv for more output, -q for quiet
+    #[command(flatten)]
+    pub verbosity: AppVerbosity,
+}
+
+impl ConfigPathArgs {
+    pub fn is_verbose(&self) -> bool {
+        crate::logging::is_verbose(&self.verbosity)
+    }
 }
 
 impl From<AuditFormat> for crate::AuditFormat {
@@ -548,8 +603,9 @@ impl From<ResolverTypeArg> for ResolverType {
     }
 }
 
-pub async fn check_resolvers(verbose: bool) -> Result<()> {
-    if !verbose {
+pub async fn check_resolvers(args: &ResolversArgs) -> Result<()> {
+    // Info commands always show output - -q flag is accepted for CLI consistency but ignored
+    if !args.is_verbose() {
         println!("Checking available dependency resolvers...");
         println!();
     }
@@ -560,7 +616,7 @@ pub async fn check_resolvers(verbose: bool) -> Result<()> {
     let mut unavailable_resolvers = Vec::new();
 
     for resolver_type in all_resolvers {
-        if verbose {
+        if args.is_verbose() {
             println!("Checking {resolver_type}...");
         }
 
@@ -610,11 +666,12 @@ pub async fn check_resolvers(verbose: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn check_version(verbose: bool) -> Result<()> {
+pub async fn check_version(args: &CheckVersionArgs) -> Result<()> {
     const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
     const GITHUB_REPO: &str = "nyudenkov/pysentry";
 
-    if verbose {
+    // Info commands always show output - -q flag is accepted for CLI consistency but ignored
+    if args.is_verbose() {
         println!("Checking for updates...");
         println!("Current version: {CURRENT_VERSION}");
         println!("Repository: {GITHUB_REPO}");
@@ -625,7 +682,7 @@ pub async fn check_version(verbose: bool) -> Result<()> {
     let client = reqwest::Client::new();
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
 
-    if verbose {
+    if args.is_verbose() {
         println!("Fetching: {url}");
     }
 
@@ -666,7 +723,7 @@ pub async fn check_version(verbose: bool) -> Result<()> {
 
     let latest_version_str = latest_tag.strip_prefix('v').unwrap_or(latest_tag);
 
-    if verbose {
+    if args.is_verbose() {
         println!("Latest release tag: {latest_tag}");
     }
 
@@ -771,25 +828,59 @@ pub async fn check_for_update_silent() -> Result<Option<String>> {
     }
 }
 
+/// Fetch remote notifications silently, returning empty vec on any error
+async fn fetch_remote_notifications_silent(
+    cache: &AuditCache,
+) -> Vec<crate::notifications::RemoteNotification> {
+    let client = NotificationClient::new(cache.clone());
+    client.get_displayable_notifications().await
+}
+
+/// Display a notification to the user
+fn display_notification(notification: &crate::notifications::RemoteNotification) {
+    println!("\n\u{1f4e2} {}", notification.title);
+    println!("   {}", notification.message);
+    if let Some(url) = &notification.url {
+        println!("   \u{2192} {}", url);
+    }
+}
+
+/// Mark a notification as shown in the cache
+async fn mark_notification_shown(cache: &AuditCache, notification_id: &str) -> anyhow::Result<()> {
+    let client = NotificationClient::new(cache.clone());
+    client.mark_as_shown(notification_id).await
+}
+
 pub async fn audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
+    vulnerability_ttl: u64,
+    notifications_enabled: bool,
 ) -> Result<i32> {
-    if audit_args.verbose {
+    // Resolve sources early to avoid duplicate resolution and ensure errors are surfaced
+    let source_types = match audit_args.resolve_sources() {
+        Ok(sources) => sources,
+        Err(e) => {
+            eprintln!("Error: Invalid vulnerability sources: {e}");
+            return Ok(1);
+        }
+    };
+
+    if audit_args.is_verbose() {
         eprintln!(
             "Auditing dependencies for vulnerabilities in {}...",
             audit_args.path.display()
         );
     }
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!(
-            "Configuration: format={:?}, severity={:?}, fail_on={:?}, source={:?}, scope='{}', direct_only={}",
+            "Configuration: format={:?}, severity={:?}, fail_on={:?}, sources={:?}, scope='{}', direct_only={}",
             audit_args.format,
             audit_args.severity,
             audit_args.fail_on,
-            audit_args.source,
+            source_types,
             audit_args.scope_description(),
             audit_args.direct_only
         );
@@ -810,7 +901,14 @@ pub async fn audit(
         }
     }
 
-    let audit_result = perform_audit(audit_args, cache_dir, http_config).await;
+    let audit_result = perform_audit(
+        audit_args,
+        cache_dir,
+        http_config,
+        vulnerability_ttl,
+        &source_types,
+    )
+    .await;
 
     let report = match audit_result {
         Ok(report) => report,
@@ -830,7 +928,7 @@ pub async fn audit(
 
     if let Some(output_path) = &audit_args.output {
         fs_err::write(output_path, &report_output)?;
-        if !audit_args.quiet {
+        if !audit_args.is_quiet() {
             eprintln!("Audit results written to: {}", output_path.display());
         }
     } else {
@@ -838,7 +936,7 @@ pub async fn audit(
     }
 
     // Show feedback message (once per day)
-    if !audit_args.quiet {
+    if !audit_args.is_quiet() {
         let audit_cache = AuditCache::new(cache_dir.to_path_buf());
         if audit_cache.should_show_feedback().await {
             println!("\n💬 Found a bug? Have ideas for improvements? Or maybe PySentry saved you some time?");
@@ -858,6 +956,19 @@ pub async fn audit(
 
             if let Err(e) = audit_cache.record_update_check().await {
                 tracing::debug!("Failed to record update check: {}", e);
+            }
+        }
+
+        // Check for remote notifications
+        if notifications_enabled {
+            let notifications = fetch_remote_notifications_silent(&audit_cache).await;
+            for notification in notifications {
+                display_notification(&notification);
+                if notification.show_once {
+                    if let Err(e) = mark_notification_shown(&audit_cache, &notification.id).await {
+                        tracing::debug!("Failed to mark notification as shown: {}", e);
+                    }
+                }
             }
         }
     }
@@ -880,16 +991,11 @@ async fn perform_audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
     http_config: crate::config::HttpConfig,
+    vulnerability_ttl: u64,
+    source_types: &[VulnerabilitySourceType],
 ) -> Result<AuditReport> {
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
-
-    let source_types = match audit_args.resolve_sources() {
-        Ok(sources) => sources,
-        Err(e) => {
-            return Err(anyhow::anyhow!("Invalid vulnerability sources: {}", e));
-        }
-    };
 
     let vuln_sources: Vec<_> = source_types
         .iter()
@@ -899,12 +1005,13 @@ async fn perform_audit(
                 audit_cache.clone(),
                 audit_args.no_cache,
                 http_config.clone(),
+                vulnerability_ttl,
             )
         })
         .collect();
 
     let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         if source_names.len() == 1 {
             eprintln!("Fetching vulnerability data from {}...", source_names[0]);
         } else {
@@ -916,13 +1023,13 @@ async fn perform_audit(
         }
     }
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!("Scanning project dependencies...");
     }
 
     let (dependencies, skipped_packages, detected_parser_name) =
         if !audit_args.requirements_files.is_empty() {
-            if !audit_args.quiet {
+            if !audit_args.is_quiet() {
                 eprintln!(
                     "Using explicit requirements files: {}",
                     audit_args
@@ -962,7 +1069,7 @@ async fn perform_audit(
                 )
                 .await?;
 
-            if audit_args.verbose {
+            if audit_args.is_verbose() {
                 eprintln!(
                     "Raw parsed dependencies before filtering: {} (from {})",
                     raw_parsed_deps.len(),
@@ -980,7 +1087,7 @@ async fn perform_audit(
 
             let filtered_parsed_deps = audit_args.filter_dependencies(raw_parsed_deps);
 
-            if audit_args.verbose {
+            if audit_args.is_verbose() {
                 eprintln!(
                     "Filtered dependencies after scope filtering: {}",
                     filtered_parsed_deps.len()
@@ -1017,7 +1124,7 @@ async fn perform_audit(
         scanner.get_stats(&dependencies)
     };
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!("{dependency_stats}");
     }
 
@@ -1038,7 +1145,7 @@ async fn perform_audit(
     };
 
     for warning in &warnings {
-        if !audit_args.quiet {
+        if !audit_args.is_quiet() {
             eprintln!("Warning: {warning}");
         }
     }
@@ -1048,7 +1155,7 @@ async fn perform_audit(
         .map(|dep| (dep.name.to_string(), dep.version.to_string()))
         .collect();
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         if source_names.len() == 1 {
             eprintln!(
                 "Fetching vulnerabilities for {} packages from {}...",
@@ -1072,7 +1179,7 @@ async fn perform_audit(
     // Fetch maintenance status (PEP 792) in parallel if enabled
     let maintenance_future = async {
         if audit_args.maintenance_enabled() {
-            if audit_args.verbose {
+            if audit_args.is_verbose() {
                 eprintln!("Checking PEP 792 project status markers...");
             }
             let maintenance_client = crate::maintenance::SimpleIndexClient::new(
@@ -1086,7 +1193,7 @@ async fn perform_audit(
                 .unwrap_or_else(|e| {
                     // Always log failures - quiet mode only affects stdout, not diagnostics
                     tracing::warn!("Failed to check maintenance status: {}", e);
-                    if !audit_args.quiet {
+                    if !audit_args.is_quiet() {
                         eprintln!("Warning: Failed to check maintenance status: {}", e);
                     }
                     Vec::new()
@@ -1105,7 +1212,7 @@ async fn perform_audit(
     let database = if databases.len() == 1 {
         databases.into_iter().next().unwrap()
     } else {
-        if !audit_args.quiet {
+        if !audit_args.is_quiet() {
             eprintln!(
                 "Merging vulnerability data from {} sources...",
                 databases.len()
@@ -1114,7 +1221,7 @@ async fn perform_audit(
         VulnerabilityDatabase::merge(databases)
     };
 
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!("Matching against vulnerability database...");
     }
     let matcher_config = MatcherConfig::new(
@@ -1143,7 +1250,7 @@ async fn perform_audit(
 
     let summary = report.summary();
     let maint_summary = report.maintenance_summary();
-    if audit_args.verbose {
+    if audit_args.is_verbose() {
         eprintln!(
             "Audit complete: {} vulnerabilities found in {} packages",
             summary.total_vulnerabilities, summary.vulnerable_packages
@@ -1257,7 +1364,7 @@ pub async fn config_validate(args: &ConfigValidateArgs) -> Result<()> {
 
     let config_path = config_loader.config_path_display();
 
-    if args.verbose {
+    if args.is_verbose() {
         println!("Validating configuration file: {config_path}");
     }
 
@@ -1267,7 +1374,7 @@ pub async fn config_validate(args: &ConfigValidateArgs) -> Result<()> {
     if config_loader.config_path.is_some() {
         println!("✅ Configuration is valid: {config_path}");
 
-        if args.verbose {
+        if args.is_verbose() {
             println!("Configuration details:");
             println!("  Version: {}", config_loader.config.version);
             println!("  Format: {}", config_loader.config.defaults.format);
@@ -1330,8 +1437,8 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
         );
         println!();
         println!(
-            "  Resolver: {} (fallback: {})",
-            config_loader.config.resolver.resolver_type, config_loader.config.resolver.fallback
+            "  Resolver: {}",
+            config_loader.config.resolver.resolver_type
         );
         println!();
         println!("  Cache enabled: {}", config_loader.config.cache.enabled);
@@ -1347,33 +1454,12 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
             config_loader.config.cache.vulnerability_ttl
         );
         println!();
-        println!("  Output quiet: {}", config_loader.config.output.quiet);
-        println!("  Output verbose: {}", config_loader.config.output.verbose);
-        println!("  Output color: {}", config_loader.config.output.color);
-        println!();
         if !config_loader.config.ignore.ids.is_empty() {
             println!(
                 "  Ignored IDs: {}",
                 config_loader.config.ignore.ids.join(", ")
             );
         }
-        if !config_loader.config.ignore.patterns.is_empty() {
-            println!(
-                "  Ignored patterns: {}",
-                config_loader.config.ignore.patterns.join(", ")
-            );
-        }
-        if !config_loader.config.projects.is_empty() {
-            println!(
-                "  Project overrides: {} configured",
-                config_loader.config.projects.len()
-            );
-        }
-        println!();
-        println!("  CI enabled: {}", config_loader.config.ci.enabled);
-        println!("  CI format: {}", config_loader.config.ci.format);
-        println!("  CI fail on: {}", config_loader.config.ci.fail_on);
-        println!("  CI annotations: {}", config_loader.config.ci.annotations);
         println!();
         println!("  HTTP timeout: {}s", config_loader.config.http.timeout);
         println!(
@@ -1404,7 +1490,7 @@ pub async fn config_path(args: &ConfigPathArgs) -> Result<()> {
     if let Some(config_path) = config_loader.config_path {
         println!("{}", config_path.display());
 
-        if args.verbose {
+        if args.is_verbose() {
             println!();
             println!("Configuration file found and loaded successfully.");
 
@@ -1416,7 +1502,7 @@ pub async fn config_path(args: &ConfigPathArgs) -> Result<()> {
                 }
             }
         }
-    } else if args.verbose {
+    } else if args.is_verbose() {
         println!("No configuration file found.");
         println!("Using built-in defaults.");
         println!();

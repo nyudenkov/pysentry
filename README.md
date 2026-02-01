@@ -235,7 +235,7 @@ pysentry --verbose
 
 ```bash
 # Scan multiple requirements files
-pysentry --requirements requirements.txt --requirements requirements-dev.txt
+pysentry --requirements-files requirements.txt --requirements-files requirements-dev.txt
 
 # Check only direct dependencies from requirements.txt
 pysentry --direct-only --resolver uv
@@ -296,7 +296,7 @@ Add PySentry to your `.pre-commit-config.yaml`:
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.3.16
+    rev: v0.4.0
     hooks:
       - id: pysentry # default pysentry settings
 ```
@@ -306,7 +306,7 @@ repos:
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.3.16
+    rev: v0.4.0
     hooks:
       - id: pysentry
         args: ["--sources", "pypa,osv", "--fail-on", "high"]
@@ -467,10 +467,10 @@ max_retries = 3
 | `--resolution-cache-ttl`   | Resolution cache TTL in hours                             | `24`              |
 | `--no-resolution-cache`    | Disable resolution caching only                           | `false`           |
 | `--clear-resolution-cache` | Clear resolution cache on startup                         | `false`           |
-| `--verbose`                | Enable verbose output                                     | `false`           |
-| `--quiet`                  | Suppress non-error output                                 | `false`           |
+| `-v`, `--verbose`          | Increase verbosity (can use -v, -vv, -vvv, -vvvv)         | error level       |
+| `-q`, `--quiet`            | Suppress all output                                       | `false`           |
 | `--resolver`               | Dependency resolver: `auto`, `uv`, `pip-tools`            | `auto`            |
-| `--requirements`           | Additional requirements files (repeatable)                | `[]`              |
+| `--requirements-files`           | Additional requirements files (repeatable)                | `[]`              |
 | `--no-maintenance-check`   | Disable PEP 792 project status checks                     | `false`           |
 | `--forbid-archived`        | Fail on archived packages                                 | `false`           |
 | `--forbid-deprecated`      | Fail on deprecated packages                               | `false`           |
@@ -556,6 +556,55 @@ rm -rf ~/Library/Caches/pysentry/dependency-resolution/
 # Windows (PowerShell)
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\pysentry\dependency-resolution"
 ```
+
+### Verbosity Levels
+
+PySentry supports multi-level verbosity control using `-v` flags:
+
+| Flag | Level | Description |
+|------|-------|-------------|
+| `-q` | off | Silent - no log output |
+| (none) | error | Default - errors only |
+| `-v` | warn | Warnings |
+| `-vv` | info | Informational messages |
+| `-vvv` | debug | Debug output |
+| `-vvvv` | trace | Maximum verbosity |
+
+Example usage:
+
+```bash
+# Quiet mode - minimal output
+pysentry -q /path/to/project
+
+# Warning level
+pysentry -v /path/to/project
+
+# Info level (shows progress)
+pysentry -vv /path/to/project
+
+# Debug level (useful for troubleshooting)
+pysentry -vvv /path/to/project
+```
+
+### RUST_LOG Environment Variable
+
+For fine-grained logging control, you can use the `RUST_LOG` environment variable. When set, it takes precedence over `-v` flags:
+
+```bash
+# Enable debug logging for all pysentry modules
+RUST_LOG=pysentry=debug pysentry /path/to/project
+
+# Enable trace logging for specific modules
+RUST_LOG=pysentry::parsers=trace pysentry /path/to/project
+
+# Combine multiple module filters
+RUST_LOG=pysentry=info,pysentry::dependency=debug pysentry /path/to/project
+```
+
+This is useful for:
+- Debugging specific components without verbose output from others
+- CI/CD environments where you want consistent log levels
+- Troubleshooting issues with detailed module-specific logs
 
 ## Supported Project Formats
 
@@ -953,7 +1002,7 @@ ls requirements.txt
 pysentry /path/to/python/project
 
 # Include additional requirements files
-pysentry --requirements requirements-dev.txt --requirements requirements-test.txt
+pysentry --requirements-files requirements-dev.txt --requirements-files requirements-test.txt
 
 # Check if higher-priority files exist (they take precedence)
 ls uv.lock poetry.lock Pipfile.lock pyproject.toml Pipfile requirements.txt

@@ -29,16 +29,7 @@ pub struct Config {
     pub cache: CacheConfig,
 
     #[serde(default)]
-    pub output: OutputConfig,
-
-    #[serde(default)]
     pub ignore: IgnoreConfig,
-
-    #[serde(default)]
-    pub projects: Vec<ProjectConfig>,
-
-    #[serde(default)]
-    pub ci: CiConfig,
 
     #[serde(default)]
     pub http: HttpConfig,
@@ -46,6 +37,10 @@ pub struct Config {
     /// PEP 792 project status markers configuration
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
+
+    /// Remote notifications configuration
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,9 +77,6 @@ pub struct SourcesConfig {
 pub struct ResolverConfig {
     #[serde(default = "default_resolver_type", rename = "type")]
     pub resolver_type: String,
-
-    #[serde(default = "default_fallback_resolver")]
-    pub fallback: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,18 +93,6 @@ pub struct CacheConfig {
     pub vulnerability_ttl: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputConfig {
-    #[serde(default)]
-    pub quiet: bool,
-
-    #[serde(default)]
-    pub verbose: bool,
-
-    #[serde(default = "default_color")]
-    pub color: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IgnoreConfig {
     #[serde(default)]
@@ -120,53 +100,6 @@ pub struct IgnoreConfig {
 
     #[serde(default)]
     pub while_no_fix: Vec<String>,
-
-    #[serde(default)]
-    pub patterns: Vec<String>,
-
-    #[serde(default)]
-    pub packages: Vec<PackageIgnoreRule>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageIgnoreRule {
-    pub name: String,
-
-    pub versions: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub ids: Vec<String>,
-
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectConfig {
-    pub path: String,
-
-    pub severity: Option<String>,
-
-    pub fail_on: Option<String>,
-
-    pub sources: Option<Vec<String>>,
-
-    #[serde(default)]
-    pub ignore_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CiConfig {
-    #[serde(default = "default_ci_enabled")]
-    pub enabled: String,
-
-    #[serde(default = "default_ci_format")]
-    pub format: String,
-
-    #[serde(default = "default_ci_fail_on")]
-    pub fail_on: String,
-
-    #[serde(default = "default_ci_annotations")]
-    pub annotations: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +158,26 @@ pub struct MaintenanceConfig {
     /// Cache TTL in hours (default: 1)
     #[serde(default = "default_maintenance_cache_ttl")]
     pub cache_ttl: u64,
+}
+
+/// Remote notifications configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationsConfig {
+    /// Enable remote notifications (default: true)
+    #[serde(default = "default_notifications_enabled")]
+    pub enabled: bool,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_notifications_enabled(),
+        }
+    }
+}
+
+fn default_notifications_enabled() -> bool {
+    true
 }
 
 /// Tracks where the configuration was loaded from
@@ -589,46 +542,12 @@ impl Config {
             ),
         }
 
-        match self.resolver.fallback.as_str() {
-            "uv" | "pip-tools" => {}
-            _ => anyhow::bail!(
-                "Invalid fallback resolver '{}'. Valid types: uv, pip-tools",
-                self.resolver.fallback
-            ),
-        }
-
         if self.cache.resolution_ttl == 0 {
             anyhow::bail!("Resolution cache TTL must be greater than 0 hours");
         }
         if self.cache.vulnerability_ttl == 0 {
             anyhow::bail!("Vulnerability cache TTL must be greater than 0 hours");
         }
-
-        match self.output.color.as_str() {
-            "auto" | "always" | "never" => {}
-            _ => anyhow::bail!(
-                "Invalid color setting '{}'. Valid settings: auto, always, never",
-                self.output.color
-            ),
-        }
-
-        match self.ci.enabled.as_str() {
-            "auto" | "enabled" | "disabled" => {}
-            _ => anyhow::bail!(
-                "Invalid CI enabled setting '{}'. Valid settings: auto, enabled, disabled",
-                self.ci.enabled
-            ),
-        }
-
-        match self.ci.format.as_str() {
-            "human" | "json" | "sarif" | "markdown" => {}
-            _ => anyhow::bail!(
-                "Invalid CI format '{}'. Valid formats: human, json, sarif, markdown",
-                self.ci.format
-            ),
-        }
-
-        self.validate_severity(&self.ci.fail_on, "ci.fail_on")?;
 
         if self.http.timeout == 0 {
             anyhow::bail!("HTTP timeout must be greater than 0 seconds");
@@ -645,43 +564,6 @@ impl Config {
                 self.http.retry_max_backoff,
                 self.http.retry_initial_backoff
             );
-        }
-
-        for (i, pattern) in self.ignore.patterns.iter().enumerate() {
-            if let Err(e) = regex::Regex::new(pattern) {
-                anyhow::bail!(
-                    "Invalid regex pattern in ignore.patterns[{}]: '{}' - {}",
-                    i,
-                    pattern,
-                    e
-                );
-            }
-        }
-
-        for (i, project) in self.projects.iter().enumerate() {
-            if project.path.is_empty() {
-                anyhow::bail!("Project path cannot be empty in projects[{}]", i);
-            }
-
-            if let Some(ref severity) = project.severity {
-                self.validate_severity(severity, &format!("projects[{i}].severity"))?;
-            }
-
-            if let Some(ref fail_on) = project.fail_on {
-                self.validate_severity(fail_on, &format!("projects[{i}].fail_on"))?;
-            }
-
-            if let Some(ref sources) = project.sources {
-                if sources.is_empty() {
-                    anyhow::bail!("Project sources cannot be empty in projects[{}]. Remove the field or provide at least one source.", i);
-                }
-                for source in sources {
-                    match source.as_str() {
-                        "pypa" | "pypi" | "osv" => {},
-                        _ => anyhow::bail!("Invalid vulnerability source '{}' in projects[{}].sources. Valid sources: pypa, pypi, osv", source, i),
-                    }
-                }
-            }
         }
 
         Ok(())
@@ -713,12 +595,10 @@ impl Default for Config {
             sources: SourcesConfig::default(),
             resolver: ResolverConfig::default(),
             cache: CacheConfig::default(),
-            output: OutputConfig::default(),
             ignore: IgnoreConfig::default(),
-            projects: Vec::new(),
-            ci: CiConfig::default(),
             http: HttpConfig::default(),
             maintenance: MaintenanceConfig::default(),
+            notifications: NotificationsConfig::default(),
         }
     }
 }
@@ -749,7 +629,6 @@ impl Default for ResolverConfig {
     fn default() -> Self {
         Self {
             resolver_type: default_resolver_type(),
-            fallback: default_fallback_resolver(),
         }
     }
 }
@@ -761,27 +640,6 @@ impl Default for CacheConfig {
             directory: None,
             resolution_ttl: default_resolution_ttl(),
             vulnerability_ttl: default_vulnerability_ttl(),
-        }
-    }
-}
-
-impl Default for OutputConfig {
-    fn default() -> Self {
-        Self {
-            quiet: false,
-            verbose: false,
-            color: default_color(),
-        }
-    }
-}
-
-impl Default for CiConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_ci_enabled(),
-            format: default_ci_format(),
-            fail_on: default_ci_fail_on(),
-            annotations: default_ci_annotations(),
         }
     }
 }
@@ -834,9 +692,6 @@ fn default_sources() -> Vec<String> {
 fn default_resolver_type() -> String {
     "uv".to_string()
 }
-fn default_fallback_resolver() -> String {
-    "pip-tools".to_string()
-}
 fn default_cache_enabled() -> bool {
     true
 }
@@ -845,21 +700,6 @@ fn default_resolution_ttl() -> u64 {
 }
 fn default_vulnerability_ttl() -> u64 {
     48
-}
-fn default_color() -> String {
-    "auto".to_string()
-}
-fn default_ci_enabled() -> String {
-    "auto".to_string()
-}
-fn default_ci_format() -> String {
-    "sarif".to_string()
-}
-fn default_ci_fail_on() -> String {
-    "high".to_string()
-}
-fn default_ci_annotations() -> bool {
-    true
 }
 fn default_http_timeout() -> u64 {
     120
@@ -1167,7 +1007,6 @@ enabled = ["pypa"]
 
 [tool.pysentry.resolver]
 type = "pip-tools"
-fallback = "uv"
 
 [tool.pysentry.cache]
 enabled = false
@@ -1191,7 +1030,6 @@ while_no_fix = ["GHSA-abc123"]
         assert!(loader.config.defaults.detailed);
         assert_eq!(loader.config.sources.enabled, vec!["pypa"]);
         assert_eq!(loader.config.resolver.resolver_type, "pip-tools");
-        assert_eq!(loader.config.resolver.fallback, "uv");
         assert!(!loader.config.cache.enabled);
         assert_eq!(loader.config.cache.resolution_ttl, 48);
         assert_eq!(loader.config.cache.vulnerability_ttl, 72);

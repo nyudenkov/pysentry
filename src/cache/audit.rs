@@ -151,17 +151,13 @@ impl AuditCache {
 
     pub async fn clear_resolution_cache_entry(&self, cache_key: &str) -> Result<()> {
         let entry = self.resolution_entry(cache_key);
-        let cache_file = entry.path();
 
-        if cache_file.exists() {
-            if let Err(e) = tokio::fs::remove_file(&cache_file).await {
-                tracing::warn!("Failed to remove cache entry {:?}: {}", cache_file, e);
-                return Err(anyhow::anyhow!("Failed to remove cache entry: {}", e));
-            } else {
-                tracing::debug!("Cleared resolution cache entry: {:?}", cache_file);
-            }
+        if let Err(error) = entry.delete().await {
+            tracing::warn!("Failed to remove cache entry {:?}: {}", entry.path(), error);
+            return Err(anyhow::anyhow!("Failed to remove cache entry: {}", error));
         }
 
+        tracing::debug!("Cleared resolution cache entry: {:?}", entry.path());
         Ok(())
     }
 
@@ -191,10 +187,16 @@ impl AuditCache {
                         }
                     }
 
-                    if let Err(e) = fs::remove_file(&path) {
-                        tracing::warn!("Failed to remove cache file {:?}: {}", path, e);
-                    } else {
-                        tracing::debug!("Cleared resolution cache file: {:?}", path);
+                    match fs::remove_file(&path) {
+                        Ok(()) => {
+                            tracing::debug!("Cleared resolution cache file: {:?}", path);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                            tracing::debug!("Cache file already deleted: {:?}", path);
+                        }
+                        Err(error) => {
+                            tracing::warn!("Failed to remove cache file {:?}: {}", path, error);
+                        }
                     }
                 }
             }
@@ -321,6 +323,28 @@ impl AuditCache {
         let timestamp = serde_json::to_vec(&now)?;
         entry.write(&timestamp).await?;
         Ok(())
+    }
+
+    // Remote Notifications Cache Methods
+
+    /// Cache entry for remote notifications JSON
+    pub fn notifications_cache_entry(&self) -> CacheEntry {
+        self.cache
+            .entry(CacheBucket::UserMessages, "remote-notifications")
+    }
+
+    /// Cache entry for tracking shown notification IDs
+    pub fn shown_notifications_entry(&self) -> CacheEntry {
+        self.cache
+            .entry(CacheBucket::UserMessages, "shown-notifications")
+    }
+
+    /// Check if notifications cache should be refreshed (6 hour TTL)
+    pub fn should_refresh_notifications(&self) -> bool {
+        let entry = self.notifications_cache_entry();
+        let six_hours = Duration::from_secs(6 * 3600);
+
+        !matches!(entry.freshness(six_hours), Ok(Freshness::Fresh))
     }
 }
 

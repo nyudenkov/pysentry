@@ -1,35 +1,34 @@
 // SPDX-License-Identifier: MIT
 
 use crate::cli::{config_init, config_path, config_show, config_validate, ConfigCommands};
+use crate::logging;
 use anyhow::Result;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::sync::Once;
-
-static TRACING_INIT: Once = Once::new();
-
-fn ensure_tracing_initialized() {
-    TRACING_INIT.call_once(|| {
-        use tracing_subscriber::EnvFilter;
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .init();
-    });
-}
 
 async fn handle_config_command(config_command: ConfigCommands) -> Result<()> {
     match config_command {
-        ConfigCommands::Init(init_args) => config_init(&init_args).await,
-        ConfigCommands::Validate(validate_args) => config_validate(&validate_args).await,
-        ConfigCommands::Show(show_args) => config_show(&show_args).await,
-        ConfigCommands::Path(path_args) => config_path(&path_args).await,
+        ConfigCommands::Init(init_args) => {
+            logging::init_tracing(&init_args.verbosity)?;
+            config_init(&init_args).await
+        }
+        ConfigCommands::Validate(validate_args) => {
+            logging::init_tracing(&validate_args.verbosity)?;
+            config_validate(&validate_args).await
+        }
+        ConfigCommands::Show(show_args) => {
+            logging::init_tracing(&show_args.verbosity)?;
+            config_show(&show_args).await
+        }
+        ConfigCommands::Path(path_args) => {
+            logging::init_tracing(&path_args.verbosity)?;
+            config_path(&path_args).await
+        }
     }
 }
 
 #[pyfunction]
 fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
-    ensure_tracing_initialized();
-
     // Release GIL during Rust execution - allows Python to handle signals
     py.detach(|| {
         let rt = tokio::runtime::Runtime::new()
@@ -60,6 +59,18 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                     };
 
                     let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+                    let vulnerability_ttl = config
+                        .as_ref()
+                        .map(|c| c.cache.vulnerability_ttl)
+                        .unwrap_or(48);
+                    let notifications_enabled = config
+                        .as_ref()
+                        .map(|c| c.notifications.enabled)
+                        .unwrap_or(true);
+
+                    if let Err(e) = logging::init_tracing(&merged_audit_args.verbosity) {
+                        eprintln!("Warning: Failed to initialize tracing: {e}");
+                    }
 
                     let cache_dir = merged_audit_args.cache_dir.clone().unwrap_or_else(|| {
                         dirs::cache_dir()
@@ -67,7 +78,15 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                             .join("pysentry")
                     });
 
-                    match audit(&merged_audit_args, &cache_dir, http_config).await {
+                    match audit(
+                        &merged_audit_args,
+                        &cache_dir,
+                        http_config,
+                        vulnerability_ttl,
+                        notifications_enabled,
+                    )
+                    .await
+                    {
                         Ok(exit_code) => Ok(exit_code),
                         Err(e) => {
                             eprintln!("Error: Audit failed: {e}");
@@ -76,7 +95,11 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                     }
                 }
                 Some(Commands::Resolvers(resolvers_args)) => {
-                    match check_resolvers(resolvers_args.verbose).await {
+                    if let Err(e) = logging::init_tracing(&resolvers_args.verbosity) {
+                        eprintln!("Warning: Failed to initialize tracing: {e}");
+                    }
+
+                    match check_resolvers(&resolvers_args).await {
                         Ok(()) => Ok(0),
                         Err(e) => {
                             eprintln!("Error: {e}");
@@ -85,7 +108,11 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                     }
                 }
                 Some(Commands::CheckVersion(check_version_args)) => {
-                    match check_version(check_version_args.verbose).await {
+                    if let Err(e) = logging::init_tracing(&check_version_args.verbosity) {
+                        eprintln!("Warning: Failed to initialize tracing: {e}");
+                    }
+
+                    match check_version(&check_version_args).await {
                         Ok(()) => Ok(0),
                         Err(e) => {
                             eprintln!("Error: {e}");

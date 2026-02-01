@@ -115,10 +115,14 @@ gh issue view <number>
 - Virtual packages and editable installs are excluded from vulnerability scans
 
 **Cache Safety:**
-- NO concurrent access protection - avoid parallel scans on same cache directory
+- Atomic writes via temp-file + rename pattern (see `CacheEntry::write_atomic_sync`)
+- Idempotent deletes - `NotFound` errors treated as success
 - Write failures only logged at WARN level, never retried
 - Resolution cache: 24h TTL, content-based keys (requirements + resolver + Python version)
-- Vuln DB cache: 24h TTL, atomic updates
+- Vuln DB cache: 24h TTL
+
+**CLI consistency:**
+- When changing CLI keep it consistent with Python src/python.rs
 
 ## Rust Guidelines (PySentry-Specific)
 

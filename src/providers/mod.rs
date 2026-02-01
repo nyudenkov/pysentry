@@ -53,17 +53,24 @@ impl VulnerabilitySource {
         cache: crate::AuditCache,
         no_cache: bool,
         http_config: crate::config::HttpConfig,
+        vulnerability_ttl: u64,
     ) -> Self {
         match source {
-            crate::types::VulnerabilitySource::Pypa => {
-                VulnerabilitySource::PypaZip(PypaSource::new(cache, no_cache, http_config))
-            }
-            crate::types::VulnerabilitySource::Pypi => {
-                VulnerabilitySource::Pypi(PypiSource::new(cache, no_cache, http_config))
-            }
-            crate::types::VulnerabilitySource::Osv => {
-                VulnerabilitySource::Osv(OsvSource::new(cache, no_cache, http_config))
-            }
+            crate::types::VulnerabilitySource::Pypa => VulnerabilitySource::PypaZip(
+                PypaSource::new(cache, no_cache, http_config, vulnerability_ttl),
+            ),
+            crate::types::VulnerabilitySource::Pypi => VulnerabilitySource::Pypi(PypiSource::new(
+                cache,
+                no_cache,
+                http_config,
+                vulnerability_ttl,
+            )),
+            crate::types::VulnerabilitySource::Osv => VulnerabilitySource::Osv(OsvSource::new(
+                cache,
+                no_cache,
+                http_config,
+                vulnerability_ttl,
+            )),
         }
     }
 
