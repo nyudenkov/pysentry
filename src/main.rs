@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use std::process::ExitCode;
 
 use pysentry::cli::{
     audit, check_resolvers, check_version, config_init, config_path, config_show, config_validate,
@@ -10,17 +11,27 @@ use pysentry::cli::{
 use pysentry::logging;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+#[cfg_attr(feature = "hotpath", hotpath::main)]
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(code) => ExitCode::from(code),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<u8> {
     let args = Cli::parse();
 
     match args.command {
-        // No subcommand provided - run audit with flattened args
         None => {
             let (merged_audit_args, config) = match args.audit_args.load_and_merge_config() {
                 Ok(result) => result,
                 Err(e) => {
                     eprintln!("Configuration error: {e}");
-                    std::process::exit(1);
+                    return Ok(1);
                 }
             };
 
@@ -51,19 +62,17 @@ async fn main() -> Result<()> {
             )
             .await?;
 
-            std::process::exit(exit_code);
+            Ok(exit_code as u8)
         }
         Some(Commands::Resolvers(resolvers_args)) => {
             logging::init_tracing(&resolvers_args.verbosity)?;
-
             check_resolvers(&resolvers_args).await?;
-            std::process::exit(0);
+            Ok(0)
         }
         Some(Commands::CheckVersion(check_version_args)) => {
             logging::init_tracing(&check_version_args.verbosity)?;
-
             check_version(&check_version_args).await?;
-            std::process::exit(0);
+            Ok(0)
         }
         Some(Commands::Config(config_command)) => {
             match config_command {
@@ -84,7 +93,7 @@ async fn main() -> Result<()> {
                     config_path(&path_args).await?;
                 }
             }
-            std::process::exit(0);
+            Ok(0)
         }
     }
 }

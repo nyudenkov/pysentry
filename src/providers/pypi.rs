@@ -156,32 +156,20 @@ impl PypiSource {
                 .link
                 .unwrap_or_else(|| format!("https://pypi.org/project/{package}/"))],
             cvss_score: None,
+            cvss_version: None,
             published: None,
             modified: None,
             source: Some("pypi".to_string()),
             withdrawn: None,
+            aliases: vuln.aliases.unwrap_or_default(),
         }
     }
 
     /// Map PyPI severity to internal severity
-    fn map_severity(vuln: &PypiVulnerability) -> Severity {
-        // PyPI doesn't provide severity directly, try to infer from aliases (CVE, GHSA)
-        if let Some(aliases) = &vuln.aliases {
-            for alias in aliases {
-                if alias.starts_with("GHSA-") || alias.contains("CRITICAL") {
-                    return Severity::Critical;
-                }
-                if alias.contains("HIGH") {
-                    return Severity::High;
-                }
-                if alias.contains("MEDIUM") || alias.contains("MODERATE") {
-                    return Severity::Medium;
-                }
-            }
-        }
-
-        // Default to medium if we can't determine
-        Severity::Medium
+    fn map_severity(_vuln: &PypiVulnerability) -> Severity {
+        // PyPI provides no CVSS data. The merge logic picks up real severity
+        // from PyPA/OSV sources for the same vulnerability ID.
+        Severity::Unknown
     }
 
     /// Extract affected version ranges from vulnerability details

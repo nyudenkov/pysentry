@@ -106,6 +106,7 @@ impl ProjectParser for UvLockParser {
         1 // Highest priority - lock files have exact versions
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

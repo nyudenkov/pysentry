@@ -149,6 +149,7 @@ impl ProjectParser for PipfileLockParser {
         1 // Same priority as other lock files with exact versions
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

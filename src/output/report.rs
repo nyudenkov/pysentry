@@ -74,7 +74,11 @@ impl AuditReport {
     }
 
     /// Check if the audit should fail based on the given severity threshold
-    pub fn should_fail_on_severity(&self, fail_on_severity: &crate::types::SeverityLevel) -> bool {
+    pub fn should_fail_on_severity(
+        &self,
+        fail_on_severity: &crate::types::SeverityLevel,
+        fail_on_unknown: bool,
+    ) -> bool {
         let min_severity = match fail_on_severity {
             crate::types::SeverityLevel::Low => Severity::Low,
             crate::types::SeverityLevel::Medium => Severity::Medium,
@@ -82,9 +86,12 @@ impl AuditReport {
             crate::types::SeverityLevel::Critical => Severity::Critical,
         };
 
-        self.matches
-            .iter()
-            .any(|m| m.vulnerability.severity >= min_severity)
+        self.matches.iter().any(|m| {
+            if m.vulnerability.severity == Severity::Unknown {
+                return fail_on_unknown;
+            }
+            m.vulnerability.severity >= min_severity
+        })
     }
 
     /// Get summary statistics
@@ -128,6 +135,7 @@ impl ColoredOutput {
             Severity::High => "HIGH".red().bold().to_string(),
             Severity::Medium => "MEDIUM".yellow().bold().to_string(),
             Severity::Low => "LOW".green().bold().to_string(),
+            Severity::Unknown => "UNKNOWN".blue().dimmed().to_string(),
         }
     }
 
@@ -138,6 +146,7 @@ impl ColoredOutput {
             Severity::High => text.red().bold().to_string(),
             Severity::Medium => text.yellow().bold().to_string(),
             Severity::Low => text.green().bold().to_string(),
+            Severity::Unknown => text.blue().dimmed().to_string(),
         }
     }
 
@@ -210,6 +219,7 @@ impl ReportGenerator {
                 Severity::High,
                 Severity::Medium,
                 Severity::Low,
+                Severity::Unknown,
             ] {
                 if let Some(count) = summary.severity_counts.get(&severity) {
                     if !first {
@@ -461,6 +471,7 @@ impl ReportGenerator {
                 Severity::High,
                 Severity::Medium,
                 Severity::Low,
+                Severity::Unknown,
             ] {
                 if let Some(count) = summary.severity_counts.get(&severity) {
                     let icon = match severity {
@@ -468,6 +479,7 @@ impl ReportGenerator {
                         Severity::High => "🟠",
                         Severity::Medium => "🟡",
                         Severity::Low => "🟢",
+                        Severity::Unknown => "⚪",
                     };
                     writeln!(output, "- {icon} **{severity:?}:** {count}")?;
                 }
@@ -502,6 +514,7 @@ impl ReportGenerator {
                     Severity::High => "🟠",
                     Severity::Medium => "🟡",
                     Severity::Low => "🟢",
+                    Severity::Unknown => "⚪",
                 };
 
                 let source_tag = if let Some(source) = &m.vulnerability.source {
@@ -821,10 +834,12 @@ mod tests {
             fixed_versions: vec![Version::from_str("1.5.0").unwrap()],
             references: vec!["https://example.com/advisory".to_string()],
             cvss_score: Some(7.5),
+            cvss_version: None,
             published: None,
             modified: None,
             source: Some("test".to_string()),
             withdrawn: None,
+            aliases: vec![],
         };
 
         let matches = vec![VulnerabilityMatch {
@@ -994,11 +1009,11 @@ mod tests {
 
         let report = create_test_report();
 
-        assert!(report.should_fail_on_severity(&SeverityLevel::Low));
-        assert!(report.should_fail_on_severity(&SeverityLevel::Medium));
-        assert!(report.should_fail_on_severity(&SeverityLevel::High));
+        assert!(report.should_fail_on_severity(&SeverityLevel::Low, true));
+        assert!(report.should_fail_on_severity(&SeverityLevel::Medium, true));
+        assert!(report.should_fail_on_severity(&SeverityLevel::High, true));
 
-        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical, true));
     }
 
     #[test]
@@ -1008,10 +1023,26 @@ mod tests {
         let mut report = create_test_report();
         report.matches[0].vulnerability.severity = Severity::Low;
 
-        assert!(report.should_fail_on_severity(&SeverityLevel::Low));
-        assert!(!report.should_fail_on_severity(&SeverityLevel::Medium));
-        assert!(!report.should_fail_on_severity(&SeverityLevel::High));
-        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical));
+        assert!(report.should_fail_on_severity(&SeverityLevel::Low, true));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Medium, true));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::High, true));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical, true));
+    }
+
+    #[test]
+    fn test_should_fail_on_unknown_severity() {
+        use crate::types::SeverityLevel;
+
+        let mut report = create_test_report();
+        report.matches[0].vulnerability.severity = Severity::Unknown;
+
+        // fail_on_unknown = true: Unknown causes failure regardless of threshold
+        assert!(report.should_fail_on_severity(&SeverityLevel::Low, true));
+        assert!(report.should_fail_on_severity(&SeverityLevel::Critical, true));
+
+        // fail_on_unknown = false: Unknown never causes failure
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Low, false));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical, false));
     }
 
     #[test]
@@ -1049,9 +1080,9 @@ mod tests {
             Vec::new(),
         );
 
-        assert!(!report.should_fail_on_severity(&SeverityLevel::Low));
-        assert!(!report.should_fail_on_severity(&SeverityLevel::Medium));
-        assert!(!report.should_fail_on_severity(&SeverityLevel::High));
-        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Low, true));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Medium, true));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::High, true));
+        assert!(!report.should_fail_on_severity(&SeverityLevel::Critical, true));
     }
 }

@@ -532,6 +532,7 @@ impl SarifGenerator {
             Severity::High => "error",
             Severity::Medium => "warning",
             Severity::Low => "note",
+            Severity::Unknown => "warning",
         }
     }
 
@@ -542,6 +543,7 @@ impl SarifGenerator {
             Severity::High => "8.0",
             Severity::Medium => "5.0",
             Severity::Low => "2.0",
+            Severity::Unknown => "5.0",
         }
     }
 
@@ -784,10 +786,12 @@ mod tests {
                 "https://nvd.nist.gov/vuln/detail/CVE-2023-12345".to_string(),
             ],
             cvss_score: Some(8.5),
+            cvss_version: None,
             published: None,
             modified: None,
             source: Some("test".to_string()),
             withdrawn: None,
+            aliases: vec![],
         }
     }
 
@@ -831,6 +835,10 @@ mod tests {
             SarifGenerator::severity_to_sarif_level(Severity::Low),
             "note"
         );
+        assert_eq!(
+            SarifGenerator::severity_to_sarif_level(Severity::Unknown),
+            "warning"
+        );
     }
 
     #[test]
@@ -853,6 +861,10 @@ mod tests {
         assert_eq!(
             SarifGenerator::get_security_severity_score(Severity::Low),
             "2.0"
+        );
+        assert_eq!(
+            SarifGenerator::get_security_severity_score(Severity::Unknown),
+            "5.0"
         );
     }
 

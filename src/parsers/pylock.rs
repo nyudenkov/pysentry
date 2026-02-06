@@ -286,6 +286,7 @@ impl ProjectParser for PyLockParser {
         1
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

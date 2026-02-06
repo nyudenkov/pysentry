@@ -221,6 +221,10 @@ pub struct AuditArgs {
     /// Only check direct dependencies for maintenance status (skip transitive)
     #[arg(long)]
     pub maintenance_direct_only: bool,
+
+    /// Don't fail on vulnerabilities with unknown severity
+    #[arg(long)]
+    pub no_fail_on_unknown: bool,
 }
 
 impl AuditArgs {
@@ -851,6 +855,7 @@ async fn mark_notification_shown(cache: &AuditCache, notification_id: &str) -> a
     client.mark_as_shown(notification_id).await
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
@@ -974,7 +979,10 @@ pub async fn audit(
     }
 
     // Check if we should fail due to vulnerabilities
-    let fail_vulns = report.should_fail_on_severity(&audit_args.fail_on.clone().into());
+    let fail_vulns = report.should_fail_on_severity(
+        &audit_args.fail_on.clone().into(),
+        !audit_args.no_fail_on_unknown,
+    );
 
     // Check if we should fail due to maintenance issues (PEP 792)
     let maintenance_config = audit_args.maintenance_check_config();
