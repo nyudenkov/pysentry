@@ -223,6 +223,7 @@ impl ProjectParser for PipfileParser {
         4 // Between pyproject.toml (2) and requirements.txt (5)
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

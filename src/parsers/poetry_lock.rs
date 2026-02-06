@@ -159,6 +159,7 @@ impl ProjectParser for PoetryLockParser {
         1 // Same priority as lock files with exact versions, but will be after uv.lock in registry order
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

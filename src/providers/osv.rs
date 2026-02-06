@@ -53,6 +53,10 @@ pub struct OsvAdvisory {
 
     /// Database-specific fields
     pub database_specific: Option<serde_json::Value>,
+
+    /// Aliases for this vulnerability (e.g., CVE-*, GHSA-*, PYSEC-*)
+    #[serde(default)]
+    pub aliases: Vec<String>,
 }
 
 /// Affected package information in an OSV advisory
@@ -198,7 +202,7 @@ impl OsvSource {
             return None;
         }
 
-        let severity = Self::map_osv_severity(&advisory);
+        let (severity, cvss_score, cvss_version) = Self::map_osv_severity(&advisory);
 
         let mut affected_versions = Vec::new();
         let mut fixed_versions = Vec::new();
@@ -215,6 +219,8 @@ impl OsvSource {
         }
         // Add OSV URL as a reference
         references.push(format!("https://osv.dev/vulnerability/{}", advisory.id));
+
+        let aliases = advisory.aliases.clone();
 
         Some(Vulnerability {
             id: advisory.id,
@@ -237,7 +243,8 @@ impl OsvSource {
             affected_versions,
             fixed_versions,
             references,
-            cvss_score: None,
+            cvss_score,
+            cvss_version,
             published: advisory.published.and_then(|s| {
                 DateTime::parse_from_rfc3339(&s)
                     .ok()
@@ -250,50 +257,25 @@ impl OsvSource {
             }),
             source: Some("osv".to_string()),
             withdrawn: None,
+            aliases,
         })
     }
 
-    /// Map OSV severity to internal severity
-    fn map_osv_severity(advisory: &OsvAdvisory) -> Severity {
-        for severity in &advisory.severity {
-            let score = &severity.score;
-            // CVSS v3 scoring
-            if score.contains("CRITICAL") || score.contains("9.") || score.contains("10.") {
-                return Severity::Critical;
-            }
-            if score.contains("HIGH") || score.contains("7.") || score.contains("8.") {
-                return Severity::High;
-            }
-            if score.contains("MEDIUM")
-                || score.contains("4.")
-                || score.contains("5.")
-                || score.contains("6.")
-            {
-                return Severity::Medium;
-            }
-            if score.contains("LOW") {
-                return Severity::Low;
-            }
-        }
+    /// Map OSV severity to internal severity and extract CVSS score + version
+    fn map_osv_severity(advisory: &OsvAdvisory) -> (Severity, Option<f32>, Option<u8>) {
+        let best = super::extract_best_cvss_score(
+            advisory
+                .severity
+                .iter()
+                .map(|s| (s.severity_type.as_str(), s.score.as_str())),
+        );
 
-        // Check database_specific field for severity hints
-        if let Some(db_specific) = &advisory.database_specific {
-            let data_str = db_specific.to_string().to_uppercase();
-            if data_str.contains("CRITICAL") {
-                return Severity::Critical;
+        match best {
+            Some((score, version)) => {
+                (Severity::from_cvss_score(score), Some(score), Some(version))
             }
-            if data_str.contains("HIGH") {
-                return Severity::High;
-            }
-            if data_str.contains("MEDIUM") || data_str.contains("MODERATE") {
-                return Severity::Medium;
-            }
-            if data_str.contains("LOW") {
-                return Severity::Low;
-            }
+            None => (Severity::Unknown, None, None),
         }
-
-        Severity::Medium
     }
 
     /// Extract version ranges from OSV affected entry
@@ -537,6 +519,16 @@ impl OsvSource {
             })
             .unwrap_or_default();
 
+        let aliases = obj
+            .get("aliases")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Some(OsvAdvisory {
             id,
             summary,
@@ -553,6 +545,7 @@ impl OsvSource {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             database_specific: obj.get("database_specific").cloned(),
+            aliases,
         })
     }
 
@@ -693,6 +686,7 @@ impl VulnerabilityProvider for OsvSource {
         "osv"
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn fetch_vulnerabilities(
         &self,
         packages: &[(String, String)],
@@ -1028,5 +1022,241 @@ mod tests {
         assert_eq!(advisory.id, "GHSA-test-1234");
         assert_eq!(advisory.summary, Some("Test vulnerability".to_string()));
         assert_eq!(advisory.affected.len(), 1);
+    }
+
+    #[test]
+    fn test_cvss_v3_vector_parsing() {
+        let advisory = OsvAdvisory {
+            id: "TEST-001".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![OsvSeverity {
+                severity_type: "CVSS_V3".to_string(),
+                score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H".to_string(),
+            }],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::Critical);
+        assert!(cvss_score.is_some());
+        let score = cvss_score.unwrap();
+        assert!(
+            (9.0..=10.0).contains(&score),
+            "Expected critical score, got {}",
+            score
+        );
+    }
+
+    #[test]
+    fn test_cvss_v3_high_severity_parsing() {
+        let advisory = OsvAdvisory {
+            id: "TEST-002".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![OsvSeverity {
+                severity_type: "CVSS_V3".to_string(),
+                score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H".to_string(),
+            }],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::High);
+        assert!(cvss_score.is_some());
+        let score = cvss_score.unwrap();
+        assert!(
+            (7.0..9.0).contains(&score),
+            "Expected high severity score, got {}",
+            score
+        );
+    }
+
+    #[test]
+    fn test_cvss_severity_uses_max_score() {
+        let advisory = OsvAdvisory {
+            id: "TEST-002B".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![
+                OsvSeverity {
+                    severity_type: "CVSS_V2".to_string(),
+                    score: "4.0".to_string(),
+                },
+                OsvSeverity {
+                    severity_type: "CVSS_V3".to_string(),
+                    score: "9.5".to_string(),
+                },
+            ],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::Critical);
+        assert_eq!(cvss_score, Some(9.5));
+    }
+
+    #[test]
+    fn test_cvss_v4_vector_parsing() {
+        let advisory = OsvAdvisory {
+            id: "TEST-003".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![OsvSeverity {
+                severity_type: "CVSS_V4".to_string(),
+                score: "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+                    .to_string(),
+            }],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert!(
+            cvss_score.is_some(),
+            "CVSS v4 vector should parse to a score"
+        );
+        assert!(severity == Severity::Critical || severity == Severity::High);
+    }
+
+    #[test]
+    fn test_cvss_fallback_to_numeric_score() {
+        let advisory = OsvAdvisory {
+            id: "TEST-004".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![OsvSeverity {
+                severity_type: "CVSS_V3".to_string(),
+                score: "7.5".to_string(),
+            }],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::High);
+        assert_eq!(cvss_score, Some(7.5));
+    }
+
+    #[test]
+    fn test_severity_unknown_when_keywords_only() {
+        let advisory = OsvAdvisory {
+            id: "TEST-005".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![OsvSeverity {
+                severity_type: "UNKNOWN".to_string(),
+                score: "CRITICAL".to_string(),
+            }],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::Unknown);
+        assert!(cvss_score.is_none());
+    }
+
+    #[test]
+    fn test_severity_unknown_when_database_specific_only() {
+        let advisory = OsvAdvisory {
+            id: "TEST-006".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: Some(serde_json::json!({
+                "severity": "HIGH"
+            })),
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::Unknown);
+        assert!(cvss_score.is_none());
+    }
+
+    #[test]
+    fn test_severity_default_to_unknown() {
+        let advisory = OsvAdvisory {
+            id: "TEST-007".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let (severity, cvss_score, _cvss_version) = OsvSource::map_osv_severity(&advisory);
+        assert_eq!(severity, Severity::Unknown);
+        assert!(cvss_score.is_none());
+    }
+
+    #[test]
+    fn test_convert_osv_vulnerability_populates_cvss_score() {
+        let advisory = OsvAdvisory {
+            id: "TEST-008".to_string(),
+            summary: Some("Test vulnerability".to_string()),
+            details: Some("Details".to_string()),
+            affected: vec![OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "test-package".to_string(),
+                    purl: None,
+                },
+                ranges: vec![],
+                versions: None,
+                database_specific: None,
+                ecosystem_specific: None,
+            }],
+            references: vec![],
+            severity: vec![OsvSeverity {
+                severity_type: "CVSS_V3".to_string(),
+                score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H".to_string(),
+            }],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let vuln = OsvSource::convert_osv_vulnerability(advisory).unwrap();
+        assert_eq!(vuln.severity, Severity::Critical);
+        assert!(vuln.cvss_score.is_some());
+        assert!(vuln.cvss_score.unwrap() >= 9.0);
     }
 }

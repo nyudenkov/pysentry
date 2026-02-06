@@ -66,6 +66,9 @@ pysentry --forbid-quarantined
 # Check maintenance status for direct dependencies only
 pysentry --forbid-unmaintained --maintenance-direct-only
 
+# Don't fail on vulnerabilities with unknown severity
+pysentry --no-fail-on-unknown
+
 # Disable caching for CI environments
 pysentry --no-cache
 
@@ -103,7 +106,7 @@ PySentry reports vulnerabilities with:
 
 - **Package name and version**: The affected dependency
 - **Vulnerability ID**: CVE, GHSA, or PYSEC identifier
-- **Severity**: Critical, High, Medium, or Low
+- **Severity**: Critical, High, Medium, Low, or Unknown
 - **Description**: Brief explanation of the vulnerability
 - **Fix version**: Recommended version to upgrade to (when available)
 - **Source file**: Which dependency file contains the vulnerable package

@@ -416,8 +416,13 @@ impl PypaSource {
         pypa: &PypaAdvisory,
         package_name: &PackageName,
     ) -> Result<Vulnerability> {
-        // Determine severity from CVSS score or other indicators
-        let severity = Self::determine_severity(pypa);
+        let cvss_info = Self::extract_cvss_info(pypa);
+        let severity = match cvss_info {
+            Some((score, _)) => Severity::from_cvss_score(score),
+            None => Severity::Unknown,
+        };
+        let cvss_score = cvss_info.map(|(score, _)| score);
+        let cvss_version = cvss_info.map(|(_, version)| version);
 
         // Extract affected version ranges for the specific package
         let affected_versions = Self::extract_version_ranges(pypa, package_name)?;
@@ -447,9 +452,6 @@ impl PypaSource {
                 .map(|dt| dt.with_timezone(&Utc))
         });
 
-        // Get CVSS score from severity info
-        let cvss_score = Self::extract_cvss_score(pypa);
-
         Ok(Vulnerability {
             id: pypa.id.clone(),
             summary: pypa.summary.clone().unwrap_or_else(|| {
@@ -468,64 +470,23 @@ impl PypaSource {
             fixed_versions,
             references,
             cvss_score,
+            cvss_version,
             published,
             modified,
             source: Some("pypa".to_string()),
             withdrawn,
+            aliases: pypa.aliases.clone(),
         })
     }
 
-    /// Determine severity level from `PyPA` advisory
-    fn determine_severity(pypa: &PypaAdvisory) -> Severity {
-        // Check for CVSS score first
-        if let Some(cvss_score) = Self::extract_cvss_score(pypa) {
-            return match cvss_score {
-                score if score >= 9.0 => Severity::Critical,
-                score if score >= 7.0 => Severity::High,
-                score if score >= 4.0 => Severity::Medium,
-                _ => Severity::Low,
-            };
-        }
-
-        // Fallback to keyword-based severity detection
-        let text = format!("{} {}", pypa.summary.as_deref().unwrap_or(""), pypa.details);
-        let text_lower = text.to_lowercase();
-
-        if text_lower.contains("critical")
-            || text_lower.contains("rce")
-            || text_lower.contains("remote code execution")
-        {
-            Severity::Critical
-        } else if text_lower.contains("high")
-            || text_lower.contains("sql injection")
-            || text_lower.contains("xss")
-        {
-            Severity::High
-        } else if text_lower.contains("medium")
-            || text_lower.contains("csrf")
-            || text_lower.contains("privilege escalation")
-        {
-            Severity::Medium
-        } else {
-            Severity::Low
-        }
-    }
-
-    /// Extract CVSS score from `PyPA` advisory
-    fn extract_cvss_score(pypa: &PypaAdvisory) -> Option<f32> {
-        pypa.severity
-            .iter()
-            .filter_map(|sev| {
-                if sev.severity_type.contains("CVSS") {
-                    sev.score.parse::<f32>().ok()
-                } else {
-                    None
-                }
-            })
-            .fold(None, |max_score, score| match max_score {
-                None => Some(score),
-                Some(max) => Some(score.max(max)),
-            })
+    /// Extract CVSS score and version from `PyPA` advisory
+    fn extract_cvss_info(pypa: &PypaAdvisory) -> Option<(f32, u8)> {
+        super::extract_best_cvss_score(
+            pypa.severity
+                .iter()
+                .filter(|sev| sev.severity_type.contains("CVSS"))
+                .map(|sev| (sev.severity_type.as_str(), sev.score.as_str())),
+        )
     }
 
     /// Extract version ranges from `PyPA` advisory for a specific package

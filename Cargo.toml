@@ -1,6 +1,6 @@
 [package]
 name = "pysentry"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
@@ -19,6 +19,8 @@ path = "src/main.rs"
 
 [features]
 python = ["pyo3"]
+hotpath = ["dep:hotpath", "hotpath/hotpath"]
+hotpath-alloc = ["dep:hotpath", "hotpath/hotpath-alloc"]
 
 [dependencies]
 anyhow = "1.0.100"
@@ -31,6 +33,7 @@ futures = "0.3.31"
 indicatif = "0.18.3"
 owo-colors = "4.2.3"
 pep440_rs = "0.7.3"
+polycvss = "0.3"
 pyo3 = { version = "0.26.0", features = ["extension-module"], optional = true }
 regex = "1.12.2"
 reqwest = { version = "0.12.28", features = ["json", "stream", "rustls-tls-native-roots"], default-features = false }
@@ -47,3 +50,4 @@ clap-verbosity-flag = { version = "3.0", default-features = false, features = ["
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 zip = { version = "5.1.1", default-features = false, features = ["deflate"] }
+hotpath = { version = "0.9", optional = true }

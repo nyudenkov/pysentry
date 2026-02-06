@@ -433,6 +433,7 @@ impl ProjectParser for RequirementsParser {
         7 // Medium priority - after lock files and pyproject.toml, before simple parsers
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

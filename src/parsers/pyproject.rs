@@ -345,6 +345,7 @@ impl ProjectParser for PyProjectParser {
         2 // Lower priority than lock files - only used when lock file is not available
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,

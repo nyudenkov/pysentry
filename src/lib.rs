@@ -22,6 +22,7 @@ pub use vulnerability::{
 };
 
 pub mod cache;
+pub mod ci;
 pub mod cli;
 pub mod config;
 pub mod dependency;
