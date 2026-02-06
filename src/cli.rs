@@ -225,6 +225,10 @@ pub struct AuditArgs {
     /// Don't fail on vulnerabilities with unknown severity
     #[arg(long)]
     pub no_fail_on_unknown: bool,
+
+    /// Disable automatic CI environment detection
+    #[arg(long)]
+    pub no_ci_detect: bool,
 }
 
 impl AuditArgs {
@@ -270,6 +274,14 @@ impl AuditArgs {
             forbid_deprecated: self.forbid_deprecated || self.forbid_unmaintained,
             forbid_quarantined: self.forbid_quarantined || self.forbid_unmaintained,
             check_direct_only: self.maintenance_direct_only,
+        }
+    }
+
+    pub fn ci_environment(&self) -> crate::ci::CiEnvironment {
+        if self.no_ci_detect {
+            crate::ci::CiEnvironment::None
+        } else {
+            crate::ci::detect()
         }
     }
 
@@ -444,6 +456,10 @@ impl AuditArgs {
         }
         if !self.maintenance_direct_only && config.maintenance.check_direct_only {
             merged.maintenance_direct_only = true;
+        }
+
+        if !self.no_ci_detect && config.defaults.no_ci_detect {
+            merged.no_ci_detect = true;
         }
 
         merged
@@ -906,12 +922,15 @@ pub async fn audit(
         }
     }
 
+    let ci_env = audit_args.ci_environment();
+
     let audit_result = perform_audit(
         audit_args,
         cache_dir,
         http_config,
         vulnerability_ttl,
         &source_types,
+        &ci_env,
     )
     .await;
 
@@ -940,11 +959,49 @@ pub async fn audit(
         println!("{report_output}");
     }
 
-    // Show feedback message (once per day)
+    // Emit CI summary annotation
+    if ci_env.is_github_actions() {
+        let summary = report.summary();
+        let severity_counts = &summary.severity_counts;
+        let critical = severity_counts
+            .get(&crate::vulnerability::database::Severity::Critical)
+            .copied()
+            .unwrap_or(0);
+        let high = severity_counts
+            .get(&crate::vulnerability::database::Severity::High)
+            .copied()
+            .unwrap_or(0);
+        let medium = severity_counts
+            .get(&crate::vulnerability::database::Severity::Medium)
+            .copied()
+            .unwrap_or(0);
+        let low = severity_counts
+            .get(&crate::vulnerability::database::Severity::Low)
+            .copied()
+            .unwrap_or(0);
+        let unknown = severity_counts
+            .get(&crate::vulnerability::database::Severity::Unknown)
+            .copied()
+            .unwrap_or(0);
+
+        let annotation_message = format!(
+            "PySentry found {} vulnerabilities: {} critical, {} high, {} medium, {} low, {} unknown",
+            summary.total_vulnerabilities, critical, high, medium, low, unknown
+        );
+
+        if summary.total_vulnerabilities > 0 {
+            crate::ci::github_warning(&annotation_message);
+        } else {
+            crate::ci::github_notice(&annotation_message);
+        }
+    }
+
     if !audit_args.is_quiet() {
         let audit_cache = AuditCache::new(cache_dir.to_path_buf());
-        if audit_cache.should_show_feedback().await {
-            println!("\n💬 Found a bug? Have ideas for improvements? Or maybe PySentry saved you some time?");
+
+        // Show feedback message (once per day) — suppressed in CI
+        if !ci_env.is_ci() && audit_cache.should_show_feedback().await {
+            println!("\n\u{1f4ac} Found a bug? Have ideas for improvements? Or maybe PySentry saved you some time?");
             println!("   I welcome all feedback, suggestions, and collaboration ideas at nikita@pysentry.com");
 
             if let Err(e) = audit_cache.record_feedback_shown().await {
@@ -956,7 +1013,13 @@ pub async fn audit(
         if audit_cache.should_check_for_updates().await {
             if let Ok(Some(latest_version)) = check_for_update_silent().await {
                 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-                println!("\n✨ Update available! PySentry {latest_version} is now available (you're running {CURRENT_VERSION})");
+                if ci_env.is_github_actions() {
+                    crate::ci::github_notice(&format!(
+                        "Update available! PySentry {latest_version} is now available (you're running {CURRENT_VERSION})"
+                    ));
+                } else {
+                    println!("\n✨ Update available! PySentry {latest_version} is now available (you're running {CURRENT_VERSION})");
+                }
             }
 
             if let Err(e) = audit_cache.record_update_check().await {
@@ -968,7 +1031,13 @@ pub async fn audit(
         if notifications_enabled {
             let notifications = fetch_remote_notifications_silent(&audit_cache).await;
             for notification in notifications {
-                display_notification(&notification);
+                if ci_env.is_github_actions() {
+                    let title = &notification.title;
+                    let message = &notification.message;
+                    crate::ci::github_notice(&format!("{title}: {message}"));
+                } else {
+                    display_notification(&notification);
+                }
                 if notification.show_once {
                     if let Err(e) = mark_notification_shown(&audit_cache, &notification.id).await {
                         tracing::debug!("Failed to mark notification as shown: {}", e);
@@ -1001,6 +1070,7 @@ async fn perform_audit(
     http_config: crate::config::HttpConfig,
     vulnerability_ttl: u64,
     source_types: &[VulnerabilitySourceType],
+    ci_env: &crate::ci::CiEnvironment,
 ) -> Result<AuditReport> {
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
@@ -1153,7 +1223,9 @@ async fn perform_audit(
     };
 
     for warning in &warnings {
-        if !audit_args.is_quiet() {
+        if ci_env.is_github_actions() {
+            crate::ci::github_warning(warning);
+        } else if !audit_args.is_quiet() {
             eprintln!("Warning: {warning}");
         }
     }

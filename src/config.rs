@@ -65,6 +65,9 @@ pub struct DefaultConfig {
 
     #[serde(default)]
     pub include_withdrawn: bool,
+
+    #[serde(default)]
+    pub no_ci_detect: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -613,6 +616,7 @@ impl Default for DefaultConfig {
             direct_only: false,
             detailed: false,
             include_withdrawn: false,
+            no_ci_detect: false,
         }
     }
 }
