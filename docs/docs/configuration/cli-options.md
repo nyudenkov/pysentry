@@ -31,6 +31,7 @@ Complete reference for all PySentry command line options.
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
 | `--direct-only` | Check only direct dependencies | `false` |
 | `--detailed` | Show full vulnerability descriptions | `false` |
+| `--no-fail-on-unknown` | Don't fail on vulnerabilities with unknown severity | `false` |
 
 ## Ignore Options
 
@@ -66,6 +67,12 @@ Complete reference for all PySentry command line options.
 | `--forbid-quarantined` | Fail on quarantined packages (malware/compromised) | `false` |
 | `--forbid-unmaintained` | Fail on any unmaintained packages | `false` |
 | `--maintenance-direct-only` | Only check direct dependencies for maintenance status | `false` |
+
+## CI Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--no-ci-detect` | Disable automatic CI environment detection | `false` |
 
 ## Subcommands
 
@@ -186,6 +193,19 @@ pysentry --forbid-unmaintained
 
 # Check only direct dependencies
 pysentry --forbid-unmaintained --maintenance-direct-only
+```
+
+### CI/CD
+
+```bash
+# PySentry auto-detects GitHub Actions and emits native annotations
+# No extra flags needed — just run pysentry
+
+# Disable CI detection (run as if locally)
+pysentry --no-ci-detect
+
+# Don't fail on unknown severity vulnerabilities
+pysentry --no-fail-on-unknown
 ```
 
 ### Debugging

@@ -20,16 +20,16 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
   - PyPI JSON API
   - OSV.dev (Open Source Vulnerabilities)
 - **PEP 792 Project Status Markers**: Detects archived, deprecated, and quarantined packages
-- **Flexible Output for different workflows**: Human-readable, JSON, and Markdown formats
+- **Flexible Output for different workflows**: Human-readable, JSON, SARIF, and Markdown formats
 - **Performance Focused**:
   - Written in Rust for speed
   - Async/concurrent processing
   - Multi-tier intelligent caching (vulnerability data + resolved dependencies)
 - **Comprehensive Filtering**:
-  - Severity levels (low, medium, high, critical)
+  - Severity levels (low, medium, high, critical, unknown)
   - Dependency scopes (main only vs all dependencies)
   - Direct vs. transitive dependencies
-- **CI/CD Ready**: Exit codes and JSON output for pipeline integration
+- **CI/CD Ready**: Exit codes, JSON output, and GitHub Actions annotations for pipeline integration
 
 ## Why PySentry?
 

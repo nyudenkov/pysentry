@@ -29,6 +29,7 @@ severity = "medium"
 fail_on = "high"
 scope = "all"
 direct_only = false
+no_ci_detect = false
 
 [sources]
 enabled = ["pypa", "osv"]
@@ -81,6 +82,7 @@ severity = "medium"
 fail_on = "high"
 scope = "main"
 direct_only = false
+no_ci_detect = false
 
 [tool.pysentry.sources]
 enabled = ["pypa", "osv"]
@@ -132,6 +134,7 @@ max_retries = 3
 | `direct_only` | bool | Only check direct dependencies | `false` |
 | `detailed` | bool | Enable detailed output with full descriptions | `false` |
 | `include_withdrawn` | bool | Include withdrawn vulnerabilities in results | `false` |
+| `no_ci_detect` | bool | Disable automatic CI environment detection | `false` |
 
 ### `[sources]`
 

@@ -249,6 +249,64 @@ pysentry config validate
 cat .pysentry.toml
 ```
 
+## Unknown Severity Vulnerabilities
+
+### What does "UNKNOWN" severity mean?
+
+Some vulnerability advisories don't include CVSS scoring data, so PySentry can't determine their severity level. These are reported as `UNKNOWN`.
+
+By default, unknown severity vulnerabilities cause a non-zero exit code (same as any other severity). To change this:
+
+```bash
+# Don't fail on unknown severity vulnerabilities
+pysentry --no-fail-on-unknown
+
+# Combine with fail-on to only fail on high+ but still report unknowns
+pysentry --fail-on high --no-fail-on-unknown
+```
+
+### Why are some vulnerabilities showing UNKNOWN?
+
+This typically happens with:
+
+- Newly published advisories that haven't been scored yet
+- Advisories from sources that don't provide CVSS data (e.g., PyPI JSON API)
+- Withdrawn or partially retracted advisories
+
+Use `--detailed` to see more information about the vulnerability, including its source and any available references.
+
+## CI/CD Issues
+
+### GitHub Actions annotations not appearing
+
+PySentry auto-detects GitHub Actions via the `GITHUB_ACTIONS` environment variable. If annotations aren't showing:
+
+```bash
+# Verify CI detection is not disabled
+# Check your .pysentry.toml for no_ci_detect = true
+
+# Run with verbose output to see CI detection
+pysentry -vv
+```
+
+### Disabling CI behavior
+
+If CI auto-detection interferes with your workflow:
+
+```bash
+# Disable via CLI flag
+pysentry --no-ci-detect
+
+# Or via configuration
+# .pysentry.toml
+# [defaults]
+# no_ci_detect = true
+```
+
+### Feedback messages appearing in CI
+
+PySentry automatically suppresses feedback and survey messages in detected CI environments. If they still appear, ensure the CI environment variable is set (e.g., `GITHUB_ACTIONS`, `GITLAB_CI`, `CI`).
+
 ## Output Issues
 
 ### No output displayed
@@ -277,7 +335,7 @@ pysentry --format json --output results.json
 # Use faster resolver and limit sources
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.4.0
+    rev: v0.4.1
     hooks:
       - id: pysentry
         args: ["--resolver", "uv", "--sources", "pypa"]
