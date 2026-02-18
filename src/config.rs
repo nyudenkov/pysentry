@@ -449,8 +449,9 @@ impl ConfigLoader {
         let content = fs_err::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.as_ref().display()))?;
 
-        // Quick check before full parsing
-        if !content.contains("[tool.pysentry]") {
+        // Quick check before full parsing — matches both bare [tool.pysentry] and
+        // sub-table-only patterns like [tool.pysentry.defaults]
+        if !content.contains("[tool.pysentry]") && !content.contains("[tool.pysentry.") {
             return Ok(None);
         }
 
@@ -1142,6 +1143,83 @@ format = "sarif"
         std::env::set_current_dir(original_dir).unwrap();
 
         // Verify pyproject.toml is chosen
+        let (path, source) = result.unwrap().unwrap();
+        assert_eq!(source, ConfigSource::PyProjectToml);
+        assert!(path.ends_with("pyproject.toml"));
+    }
+
+    #[test]
+    fn test_pyproject_subtables_without_bare_header() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        // Valid TOML: sub-tables implicitly define [tool.pysentry] without a bare header
+        let content = r#"
+[project]
+name = "test-project"
+
+[tool.pysentry.defaults]
+severity = "high"
+fail_on = "high"
+
+[tool.pysentry.sources]
+enabled = ["pypa", "osv"]
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
+
+        assert_eq!(loader.config.defaults.severity, "high");
+        assert_eq!(loader.config.defaults.fail_on, "high");
+        assert_eq!(loader.config.sources.enabled, vec!["pypa", "osv"]);
+        // Unspecified fields should use defaults
+        assert_eq!(loader.config.defaults.format, "human");
+        assert_eq!(loader.config_source, ConfigSource::PyProjectToml);
+    }
+
+    #[test]
+    fn test_pyproject_no_pysentry_subtables_returns_none() {
+        let temp_dir = TempDir::new().unwrap();
+        let pyproject_path = temp_dir.path().join("pyproject.toml");
+
+        let content = r#"
+[project]
+name = "test-project"
+
+[tool.black.defaults]
+line-length = 100
+"#;
+
+        fs::write(&pyproject_path, content).unwrap();
+
+        let result = ConfigLoader::try_load_from_pyproject(&pyproject_path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_discover_pyproject_with_subtables_only() {
+        let temp_dir = TempDir::new().unwrap();
+
+        fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            r#"
+[project]
+name = "test-project"
+
+[tool.pysentry.defaults]
+format = "json"
+"#,
+        )
+        .unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let result = ConfigLoader::discover_config_file();
+
+        std::env::set_current_dir(original_dir).unwrap();
+
         let (path, source) = result.unwrap().unwrap();
         assert_eq!(source, ConfigSource::PyProjectToml);
         assert!(path.ends_with("pyproject.toml"));
