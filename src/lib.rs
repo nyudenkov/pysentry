@@ -10,7 +10,7 @@ pub use maintenance::{
     MaintenanceCheckConfig, MaintenanceIssue, MaintenanceIssueType, MaintenanceSummary,
     ProjectState, ProjectStatus, SimpleIndexClient,
 };
-pub use output::report::{AuditReport, AuditSummary, ReportGenerator};
+pub use output::report::{AuditReport, AuditSummary, DetailLevel, ReportGenerator};
 pub use providers::{VulnerabilityProvider, VulnerabilitySource};
 pub use types::{
     AuditFormat, PackageName, ResolutionCacheEntry, ResolvedDependency, ResolverType,

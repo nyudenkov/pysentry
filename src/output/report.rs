@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 
 use super::sarif::SarifGenerator;
-use crate::maintenance::{MaintenanceCheckConfig, MaintenanceIssue, MaintenanceSummary};
+use crate::maintenance::{
+    MaintenanceCheckConfig, MaintenanceIssue, MaintenanceIssueType, MaintenanceSummary,
+};
 use crate::parsers::DependencyStats;
 use crate::types::AuditFormat;
 use crate::vulnerability::database::{Severity, VulnerabilityMatch};
@@ -12,6 +14,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
+
+/// Controls how much detail is included in the human-readable report
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailLevel {
+    /// Summary + one-liner per vulnerability, no descriptions
+    Compact,
+    /// Standard output (default)
+    Normal,
+    /// Full vulnerability descriptions
+    Detailed,
+}
 
 /// A complete audit report containing all findings
 #[derive(Debug, Clone)]
@@ -165,6 +178,22 @@ impl ColoredOutput {
     fn fix_suggestion(text: &str) -> String {
         text.blue().to_string()
     }
+
+    fn withdrawn_tag(withdrawn: Option<&DateTime<Utc>>) -> String {
+        if withdrawn.is_some() {
+            format!(" {}", "(WITHDRAWN)".yellow().bold())
+        } else {
+            String::new()
+        }
+    }
+
+    fn maintenance_status(issue_type: &MaintenanceIssueType) -> String {
+        match issue_type {
+            MaintenanceIssueType::Quarantined => "QUARANTINED".on_red().white().bold().to_string(),
+            MaintenanceIssueType::Archived => "ARCHIVED".yellow().bold().to_string(),
+            MaintenanceIssueType::Deprecated => "DEPRECATED".blue().bold().to_string(),
+        }
+    }
 }
 
 /// Report generator for different output formats
@@ -176,10 +205,10 @@ impl ReportGenerator {
         report: &AuditReport,
         format: AuditFormat,
         project_root: Option<&Path>,
-        detailed: bool,
+        detail_level: DetailLevel,
     ) -> Result<String, Box<dyn std::error::Error>> {
         match format {
-            AuditFormat::Human => Self::generate_human_report(report, detailed),
+            AuditFormat::Human => Self::generate_human_report(report, detail_level),
             AuditFormat::Json => Self::generate_json_report(report),
             AuditFormat::Sarif => Self::generate_sarif_report(report, project_root),
             AuditFormat::Markdown => Self::generate_markdown_report(report),
@@ -188,18 +217,22 @@ impl ReportGenerator {
 
     fn generate_human_report(
         report: &AuditReport,
-        detailed: bool,
+        detail_level: DetailLevel,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut output = String::new();
         let summary = report.summary();
+        let is_compact = detail_level == DetailLevel::Compact;
+        let is_detailed = detail_level == DetailLevel::Detailed;
 
-        writeln!(
-            output,
-            "{}",
-            ColoredOutput::header("PYSENTRY SECURITY AUDIT")
-        )?;
-        writeln!(output, "=======================")?;
-        writeln!(output)?;
+        if !is_compact {
+            writeln!(
+                output,
+                "{}",
+                ColoredOutput::header("PYSENTRY SECURITY AUDIT")
+            )?;
+            writeln!(output, "=======================")?;
+            writeln!(output)?;
+        }
 
         writeln!(
             output,
@@ -267,67 +300,82 @@ impl ReportGenerator {
 
         if !report.matches.is_empty() {
             writeln!(output, "{}", ColoredOutput::header("VULNERABILITIES"))?;
-            writeln!(output, "---------------")?;
-            writeln!(output)?;
 
-            for (i, m) in report.matches.iter().enumerate() {
-                let source_tag = if let Some(source) = &m.vulnerability.source {
-                    format!(" [source: {source}]")
-                } else {
-                    String::new()
-                };
-
-                let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
-                    format!(" {}", "(WITHDRAWN)".yellow().bold())
-                } else {
-                    String::new()
-                };
-
-                writeln!(
-                    output,
-                    " {}. {}{}  {} v{}  [{}]{}",
-                    i + 1,
-                    ColoredOutput::vulnerability_id(&m.vulnerability.id),
-                    withdrawn_tag,
-                    ColoredOutput::package_name(&m.package_name.to_string()),
-                    m.installed_version,
-                    ColoredOutput::severity(&m.vulnerability.severity),
-                    source_tag
-                )?;
-
-                if detailed {
-                    writeln!(output, "    {}", m.vulnerability.summary)?;
-                    if let Some(description) = &m.vulnerability.description {
-                        if description != &m.vulnerability.summary {
-                            writeln!(output, "    {description}")?;
-                        }
-                    }
-                } else if !m.vulnerability.summary.is_empty() {
-                    writeln!(output, "    {}", m.vulnerability.summary)?;
-                } else if let Some(description) = &m.vulnerability.description {
-                    let truncated = description.chars().take(117).collect::<String>();
-                    writeln!(output, "    {truncated}...")?;
-                }
-
-                if !m.vulnerability.fixed_versions.is_empty() {
-                    let fixed_version = m.vulnerability.fixed_versions.first().unwrap();
+            if is_compact {
+                writeln!(output)?;
+                for m in &report.matches {
+                    let withdrawn_tag =
+                        ColoredOutput::withdrawn_tag(m.vulnerability.withdrawn.as_ref());
                     writeln!(
                         output,
-                        "    {} {}",
-                        "→ Fix:".cyan(),
-                        ColoredOutput::fix_suggestion(&format!("Upgrade to {fixed_version}+"))
+                        "  {}{}  {} v{}  [{}]",
+                        ColoredOutput::vulnerability_id(&m.vulnerability.id),
+                        withdrawn_tag,
+                        ColoredOutput::package_name(&m.package_name.to_string()),
+                        m.installed_version,
+                        ColoredOutput::severity(&m.vulnerability.severity),
                     )?;
                 }
                 writeln!(output)?;
+            } else {
+                writeln!(output, "---------------")?;
+                writeln!(output)?;
+
+                for (i, m) in report.matches.iter().enumerate() {
+                    let source_tag = if let Some(source) = &m.vulnerability.source {
+                        format!(" [source: {source}]")
+                    } else {
+                        String::new()
+                    };
+
+                    let withdrawn_tag =
+                        ColoredOutput::withdrawn_tag(m.vulnerability.withdrawn.as_ref());
+
+                    writeln!(
+                        output,
+                        " {}. {}{}  {} v{}  [{}]{}",
+                        i + 1,
+                        ColoredOutput::vulnerability_id(&m.vulnerability.id),
+                        withdrawn_tag,
+                        ColoredOutput::package_name(&m.package_name.to_string()),
+                        m.installed_version,
+                        ColoredOutput::severity(&m.vulnerability.severity),
+                        source_tag
+                    )?;
+
+                    if is_detailed {
+                        writeln!(output, "    {}", m.vulnerability.summary)?;
+                        if let Some(description) = &m.vulnerability.description {
+                            if description != &m.vulnerability.summary {
+                                writeln!(output, "    {description}")?;
+                            }
+                        }
+                    } else if !m.vulnerability.summary.is_empty() {
+                        writeln!(output, "    {}", m.vulnerability.summary)?;
+                    } else if let Some(description) = &m.vulnerability.description {
+                        let truncated = description.chars().take(117).collect::<String>();
+                        writeln!(output, "    {truncated}...")?;
+                    }
+
+                    if !m.vulnerability.fixed_versions.is_empty() {
+                        let Some(fixed_version) = m.vulnerability.fixed_versions.first() else {
+                            continue;
+                        };
+                        writeln!(
+                            output,
+                            "    {} {}",
+                            "→ Fix:".cyan(),
+                            ColoredOutput::fix_suggestion(&format!("Upgrade to {fixed_version}+"))
+                        )?;
+                    }
+                    writeln!(output)?;
+                }
             }
         } else {
             writeln!(output, "{} No vulnerabilities found!", "✓".green().bold())?;
         }
 
         if !report.fix_analysis.fix_suggestions.is_empty() {
-            writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
-            writeln!(output, "---------------")?;
-
             let mut package_fixes: HashMap<String, Vec<String>> = HashMap::new();
             for suggestion in &report.fix_analysis.fix_suggestions {
                 let package = suggestion.package_name.to_string();
@@ -338,99 +386,131 @@ impl ReportGenerator {
                 package_fixes.entry(package).or_default().push(version_info);
             }
 
-            for (package, fixes) in package_fixes {
+            if is_compact {
+                writeln!(output)?;
+                writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+            } else {
+                writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+                writeln!(output, "---------------")?;
+            }
+
+            let indent = if is_compact { "  " } else { "" };
+
+            for (package, fixes) in &package_fixes {
                 if fixes.len() == 1 {
+                    let Some(fix) = fixes.first() else {
+                        continue;
+                    };
                     writeln!(
                         output,
-                        "{}: {}",
-                        ColoredOutput::package_name(&package),
-                        ColoredOutput::fix_suggestion(&fixes[0])
+                        "{}{}: {}",
+                        indent,
+                        ColoredOutput::package_name(package),
+                        ColoredOutput::fix_suggestion(fix)
                     )?;
                 } else {
-                    let best_fix = fixes.first().unwrap();
+                    let Some(best_fix) = fixes.first() else {
+                        continue;
+                    };
                     writeln!(
                         output,
-                        "{}: {} (fixes {} vulnerabilities)",
-                        ColoredOutput::package_name(&package),
+                        "{}{}: {} (fixes {} vulnerabilities)",
+                        indent,
+                        ColoredOutput::package_name(package),
                         ColoredOutput::fix_suggestion(best_fix),
                         fixes.len()
                     )?;
                 }
             }
-            writeln!(output)?;
+
+            if !is_compact {
+                writeln!(output)?;
+            }
         }
 
         // Maintenance issues section (PEP 792)
         if !report.maintenance_issues.is_empty() {
-            writeln!(output)?;
-            writeln!(
-                output,
-                "{}",
-                ColoredOutput::header("MAINTENANCE ISSUES (PEP 792)")
-            )?;
-            writeln!(output, "----------------------------")?;
-            writeln!(output)?;
-
-            let maint_summary = report.maintenance_summary();
-            writeln!(
-                output,
-                "{}: {} issues found ({} archived, {} deprecated, {} quarantined)",
-                ColoredOutput::header("SUMMARY"),
-                maint_summary.total_issues,
-                maint_summary.archived_count,
-                maint_summary.deprecated_count,
-                maint_summary.quarantined_count
-            )?;
-            writeln!(output)?;
-
-            for (i, issue) in report.maintenance_issues.iter().enumerate() {
-                let status_tag = match issue.issue_type {
-                    crate::maintenance::MaintenanceIssueType::Quarantined => {
-                        "QUARANTINED".on_red().white().bold().to_string()
-                    }
-                    crate::maintenance::MaintenanceIssueType::Archived => {
-                        "ARCHIVED".yellow().bold().to_string()
-                    }
-                    crate::maintenance::MaintenanceIssueType::Deprecated => {
-                        "DEPRECATED".blue().bold().to_string()
-                    }
-                };
-
-                let dep_type = if issue.is_direct {
-                    "[direct]"
-                } else {
-                    "[transitive]"
-                };
-
-                write!(
-                    output,
-                    " {}. {}  {} v{}  {}",
-                    i + 1,
-                    status_tag,
-                    ColoredOutput::package_name(&issue.package_name.to_string()),
-                    issue.installed_version,
-                    dep_type.dimmed()
-                )?;
-
-                if let Some(reason) = &issue.reason {
-                    writeln!(output, " - {}", reason)?;
-                } else {
-                    writeln!(output)?;
+            if is_compact {
+                writeln!(output)?;
+                writeln!(output, "{}", ColoredOutput::header("MAINTENANCE"))?;
+                for issue in &report.maintenance_issues {
+                    let status_tag = ColoredOutput::maintenance_status(&issue.issue_type);
+                    writeln!(
+                        output,
+                        "  {}  {} v{}",
+                        status_tag,
+                        ColoredOutput::package_name(&issue.package_name.to_string()),
+                        issue.installed_version,
+                    )?;
                 }
+            } else {
+                writeln!(output)?;
+                writeln!(
+                    output,
+                    "{}",
+                    ColoredOutput::header("MAINTENANCE ISSUES (PEP 792)")
+                )?;
+                writeln!(output, "----------------------------")?;
+                writeln!(output)?;
+
+                let maint_summary = report.maintenance_summary();
+                writeln!(
+                    output,
+                    "{}: {} issues found ({} archived, {} deprecated, {} quarantined)",
+                    ColoredOutput::header("SUMMARY"),
+                    maint_summary.total_issues,
+                    maint_summary.archived_count,
+                    maint_summary.deprecated_count,
+                    maint_summary.quarantined_count
+                )?;
+                writeln!(output)?;
+
+                for (i, issue) in report.maintenance_issues.iter().enumerate() {
+                    let status_tag = ColoredOutput::maintenance_status(&issue.issue_type);
+
+                    let dep_type = if issue.is_direct {
+                        "[direct]"
+                    } else {
+                        "[transitive]"
+                    };
+
+                    write!(
+                        output,
+                        " {}. {}  {} v{}  {}",
+                        i + 1,
+                        status_tag,
+                        ColoredOutput::package_name(&issue.package_name.to_string()),
+                        issue.installed_version,
+                        dep_type.dimmed()
+                    )?;
+
+                    if let Some(reason) = &issue.reason {
+                        writeln!(output, " - {}", reason)?;
+                    } else {
+                        writeln!(output)?;
+                    }
+                }
+                writeln!(output)?;
             }
-            writeln!(output)?;
         }
 
-        // Clean footer
-        writeln!(
-            output,
-            "Scan completed {}",
-            report
-                .scan_time
-                .format("%Y-%m-%d %H:%M:%S UTC")
-                .to_string()
-                .dimmed()
-        )?;
+        if is_compact {
+            let has_findings = !report.matches.is_empty() || !report.maintenance_issues.is_empty();
+            if has_findings {
+                writeln!(output, "Run pysentry --detailed for full descriptions")?;
+            }
+        } else {
+            // Clean footer
+            writeln!(
+                output,
+                "Scan completed {}",
+                report
+                    .scan_time
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string()
+                    .dimmed()
+            )?;
+        }
 
         Ok(output)
     }
@@ -881,7 +961,7 @@ mod tests {
     #[test]
     fn test_human_report_generation() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, false).unwrap();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Normal).unwrap();
 
         assert!(output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(output.contains("SUMMARY") && output.contains("10 packages scanned"));
@@ -940,26 +1020,46 @@ mod tests {
         let project_root = Some(std::path::Path::new("."));
 
         // Test Human format
-        let human_output =
-            ReportGenerator::generate(&report, AuditFormat::Human, project_root, false).unwrap();
+        let human_output = ReportGenerator::generate(
+            &report,
+            AuditFormat::Human,
+            project_root,
+            DetailLevel::Normal,
+        )
+        .unwrap();
         assert!(human_output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(human_output.contains("GHSA-test-1234"));
 
         // Test JSON format
-        let json_output =
-            ReportGenerator::generate(&report, AuditFormat::Json, project_root, false).unwrap();
+        let json_output = ReportGenerator::generate(
+            &report,
+            AuditFormat::Json,
+            project_root,
+            DetailLevel::Normal,
+        )
+        .unwrap();
         let json: serde_json::Value = serde_json::from_str(&json_output).unwrap();
         assert_eq!(json["total_packages"], 10);
 
         // Test SARIF format
-        let sarif_output =
-            ReportGenerator::generate(&report, AuditFormat::Sarif, project_root, false).unwrap();
+        let sarif_output = ReportGenerator::generate(
+            &report,
+            AuditFormat::Sarif,
+            project_root,
+            DetailLevel::Normal,
+        )
+        .unwrap();
         let sarif: serde_json::Value = serde_json::from_str(&sarif_output).unwrap();
         assert_eq!(sarif["version"], "2.1.0");
 
         // Test Markdown format
-        let markdown_output =
-            ReportGenerator::generate(&report, AuditFormat::Markdown, project_root, false).unwrap();
+        let markdown_output = ReportGenerator::generate(
+            &report,
+            AuditFormat::Markdown,
+            project_root,
+            DetailLevel::Normal,
+        )
+        .unwrap();
         assert!(markdown_output.contains("# 🛡️ pysentry report"));
         assert!(markdown_output.contains("### 1. 🟠 `GHSA-test-1234`"));
     }
@@ -999,7 +1099,7 @@ mod tests {
 
         assert!(!report.has_vulnerabilities());
 
-        let output = ReportGenerator::generate_human_report(&report, false).unwrap();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Normal).unwrap();
         assert!(output.contains("No vulnerabilities found"));
     }
 
@@ -1043,6 +1143,257 @@ mod tests {
         // fail_on_unknown = false: Unknown never causes failure
         assert!(!report.should_fail_on_severity(&SeverityLevel::Low, false));
         assert!(!report.should_fail_on_severity(&SeverityLevel::Critical, false));
+    }
+
+    #[test]
+    fn test_compact_report_no_header_no_footer() {
+        let report = create_test_report();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(!output.contains("PYSENTRY SECURITY AUDIT"));
+        assert!(!output.contains("Scan completed"));
+    }
+
+    #[test]
+    fn test_compact_report_contains_summary() {
+        let report = create_test_report();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(output.contains("SUMMARY"));
+        assert!(output.contains("10 packages scanned"));
+        assert!(output.contains("1 vulnerable"));
+    }
+
+    #[test]
+    fn test_compact_report_condensed_vulns() {
+        let report = create_test_report();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        // Vuln ID should be present
+        assert!(output.contains("GHSA-test-1234"));
+        // No description text
+        assert!(!output.contains("Test vulnerability"));
+        assert!(!output.contains("A test vulnerability"));
+        // No fix arrow
+        assert!(!output.contains("→ Fix:"));
+        // No numbering
+        assert!(!output.contains(" 1. "));
+    }
+
+    #[test]
+    fn test_compact_report_no_fix_suggestions_when_empty() {
+        let report = create_test_report();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(!output.contains("FIX SUGGESTIONS"));
+    }
+
+    #[test]
+    fn test_compact_report_fix_suggestions() {
+        use crate::vulnerability::matcher::FixSuggestion;
+
+        let mut report = create_test_report();
+        report.fix_analysis.fix_suggestions = vec![FixSuggestion {
+            package_name: PackageName::from_str("requests").unwrap(),
+            current_version: Version::from_str("2.28.0").unwrap(),
+            suggested_version: Version::from_str("2.31.0").unwrap(),
+            vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
+        }];
+
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(output.contains("FIX SUGGESTIONS"));
+        assert!(output.contains("requests"));
+        assert!(output.contains("2.28.0"));
+        assert!(output.contains("2.31.0"));
+        // Compact mode: no underline dashes
+        assert!(!output.contains("---------------"));
+    }
+
+    #[test]
+    fn test_compact_report_hint_line() {
+        let report = create_test_report();
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(output.contains("Run pysentry --detailed for full descriptions"));
+    }
+
+    #[test]
+    fn test_compact_report_no_hint_when_clean() {
+        let dependency_stats = DependencyStats {
+            total_packages: 5,
+            direct_packages: 5,
+            transitive_packages: 0,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 0,
+            total_packages: 0,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 0,
+            fixable: 0,
+            unfixable: 0,
+            fix_suggestions: vec![],
+        };
+
+        let clean_report = AuditReport::new(
+            dependency_stats,
+            database_stats,
+            vec![],
+            fix_analysis,
+            vec![],
+            Vec::new(),
+        );
+
+        let output =
+            ReportGenerator::generate_human_report(&clean_report, DetailLevel::Compact).unwrap();
+
+        assert!(!output.contains("Run pysentry --detailed"));
+    }
+
+    #[test]
+    fn test_compact_report_maintenance_summary() {
+        use crate::maintenance::MaintenanceIssueType;
+
+        let dependency_stats = DependencyStats {
+            total_packages: 5,
+            direct_packages: 3,
+            transitive_packages: 2,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 0,
+            total_packages: 0,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 0,
+            fixable: 0,
+            unfixable: 0,
+            fix_suggestions: vec![],
+        };
+
+        let maintenance_issue = MaintenanceIssue::new(
+            PackageName::from_str("old-package").unwrap(),
+            Version::from_str("1.2.3").unwrap(),
+            MaintenanceIssueType::Deprecated,
+            Some("Use new-package instead".to_string()),
+            true,
+            Some("requirements.txt".to_string()),
+        );
+
+        let report = AuditReport::new(
+            dependency_stats,
+            database_stats,
+            vec![],
+            fix_analysis,
+            vec![],
+            vec![maintenance_issue],
+        );
+
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        // Compact mode shows per-issue one-liners under MAINTENANCE header
+        assert!(output.contains("MAINTENANCE"));
+        assert!(output.contains("DEPRECATED"));
+        assert!(output.contains("old-package"));
+
+        // Full maintenance listing must NOT appear in compact mode
+        assert!(!output.contains("MAINTENANCE ISSUES (PEP 792)"));
+
+        // No numbered individual entries
+        assert!(!output.contains(" 1. "));
+
+        // Hint line appears because there are findings
+        assert!(output.contains("Run pysentry --detailed"));
+    }
+
+    #[test]
+    fn test_detailed_report_shows_full_description() {
+        let report = create_test_report();
+        let output =
+            ReportGenerator::generate_human_report(&report, DetailLevel::Detailed).unwrap();
+
+        // Both summary and the distinct description text must appear
+        assert!(output.contains("Test vulnerability"));
+        assert!(output.contains("A test vulnerability for unit testing"));
+
+        // Header and footer are not suppressed in detailed mode
+        assert!(output.contains("PYSENTRY SECURITY AUDIT"));
+        assert!(output.contains("Scan completed"));
+    }
+
+    #[test]
+    fn test_compact_report_withdrawn_tag() {
+        let dependency_stats = DependencyStats {
+            total_packages: 3,
+            direct_packages: 3,
+            transitive_packages: 0,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 0,
+            total_packages: 0,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let withdrawn_vuln = Vulnerability {
+            id: "GHSA-withdrawn-0001".to_string(),
+            summary: "Withdrawn advisory".to_string(),
+            description: None,
+            severity: Severity::Low,
+            affected_versions: vec![],
+            fixed_versions: vec![],
+            references: vec![],
+            cvss_score: None,
+            cvss_version: None,
+            published: None,
+            modified: None,
+            source: None,
+            withdrawn: Some(Utc::now()),
+            aliases: vec![],
+        };
+
+        let matches = vec![VulnerabilityMatch {
+            package_name: PackageName::from_str("some-pkg").unwrap(),
+            installed_version: Version::from_str("0.1.0").unwrap(),
+            vulnerability: withdrawn_vuln,
+            is_direct: true,
+        }];
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 1,
+            fixable: 0,
+            unfixable: 1,
+            fix_suggestions: vec![],
+        };
+
+        let report = AuditReport::new(
+            dependency_stats,
+            database_stats,
+            matches,
+            fix_analysis,
+            vec![],
+            vec![],
+        );
+
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(output.contains("GHSA-withdrawn-0001"));
+        assert!(output.contains("WITHDRAWN"));
     }
 
     #[test]
