@@ -1700,7 +1700,10 @@ mod tests {
         config.defaults.detailed = true;
         let merged = args.merge_with_config(&config);
         assert_eq!(merged.detail_level(), DetailLevel::Compact);
-        assert!(!merged.detailed, "detailed must be cleared when --compact is explicit");
+        assert!(
+            !merged.detailed,
+            "detailed must be cleared when --compact is explicit"
+        );
     }
 
     #[test]
@@ -1711,6 +1714,9 @@ mod tests {
         config.defaults.compact = true;
         let merged = args.merge_with_config(&config);
         assert_eq!(merged.detail_level(), DetailLevel::Detailed);
-        assert!(!merged.compact, "compact must be cleared when --detailed is explicit");
+        assert!(
+            !merged.compact,
+            "compact must be cleared when --detailed is explicit"
+        );
     }
 }
