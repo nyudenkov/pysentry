@@ -375,10 +375,7 @@ impl ReportGenerator {
             writeln!(output, "{} No vulnerabilities found!", "✓".green().bold())?;
         }
 
-        if !is_compact && !report.fix_analysis.fix_suggestions.is_empty() {
-            writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
-            writeln!(output, "---------------")?;
-
+        if !report.fix_analysis.fix_suggestions.is_empty() {
             let mut package_fixes: HashMap<String, Vec<String>> = HashMap::new();
             for suggestion in &report.fix_analysis.fix_suggestions {
                 let package = suggestion.package_name.to_string();
@@ -389,15 +386,26 @@ impl ReportGenerator {
                 package_fixes.entry(package).or_default().push(version_info);
             }
 
-            for (package, fixes) in package_fixes {
+            if is_compact {
+                writeln!(output)?;
+                writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+            } else {
+                writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+                writeln!(output, "---------------")?;
+            }
+
+            let indent = if is_compact { "  " } else { "" };
+
+            for (package, fixes) in &package_fixes {
                 if fixes.len() == 1 {
                     let Some(fix) = fixes.first() else {
                         continue;
                     };
                     writeln!(
                         output,
-                        "{}: {}",
-                        ColoredOutput::package_name(&package),
+                        "{}{}: {}",
+                        indent,
+                        ColoredOutput::package_name(package),
                         ColoredOutput::fix_suggestion(fix)
                     )?;
                 } else {
@@ -406,14 +414,18 @@ impl ReportGenerator {
                     };
                     writeln!(
                         output,
-                        "{}: {} (fixes {} vulnerabilities)",
-                        ColoredOutput::package_name(&package),
+                        "{}{}: {} (fixes {} vulnerabilities)",
+                        indent,
+                        ColoredOutput::package_name(package),
                         ColoredOutput::fix_suggestion(best_fix),
                         fixes.len()
                     )?;
                 }
             }
-            writeln!(output)?;
+
+            if !is_compact {
+                writeln!(output)?;
+            }
         }
 
         // Maintenance issues section (PEP 792)
@@ -1169,11 +1181,33 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_report_no_fix_suggestions() {
+    fn test_compact_report_no_fix_suggestions_when_empty() {
         let report = create_test_report();
         let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
 
         assert!(!output.contains("FIX SUGGESTIONS"));
+    }
+
+    #[test]
+    fn test_compact_report_fix_suggestions() {
+        use crate::vulnerability::matcher::FixSuggestion;
+
+        let mut report = create_test_report();
+        report.fix_analysis.fix_suggestions = vec![FixSuggestion {
+            package_name: PackageName::from_str("requests").unwrap(),
+            current_version: Version::from_str("2.28.0").unwrap(),
+            suggested_version: Version::from_str("2.31.0").unwrap(),
+            vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
+        }];
+
+        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+
+        assert!(output.contains("FIX SUGGESTIONS"));
+        assert!(output.contains("requests"));
+        assert!(output.contains("2.28.0"));
+        assert!(output.contains("2.31.0"));
+        // Compact mode: no underline dashes
+        assert!(!output.contains("---------------"));
     }
 
     #[test]
