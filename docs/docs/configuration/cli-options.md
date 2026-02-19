@@ -30,8 +30,13 @@ Complete reference for all PySentry command line options.
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
 | `--direct-only` | Check only direct dependencies | `false` |
-| `--detailed` | Show full vulnerability descriptions | `false` |
+| `--detailed` | Show full vulnerability descriptions (summary + full text) | `false` |
+| `--compact` | Compact output: summary line + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
 | `--no-fail-on-unknown` | Don't fail on vulnerabilities with unknown severity | `false` |
+
+::: note
+`--compact` and `--detailed` are mutually exclusive. Using both together will cause an error.
+:::
 
 ## Ignore Options
 
@@ -180,6 +185,19 @@ pysentry --requirements-files requirements-dev.txt requirements-test.txt
 
 # Force specific resolver
 pysentry --resolver uv
+```
+
+### Output Detail
+
+```bash
+# Default output: summary + one-liner per vulnerability + fix suggestions
+pysentry
+
+# Compact output: summary + vulnerability IDs only (ideal for pre-commit hooks)
+pysentry --compact
+
+# Detailed output: full vulnerability descriptions included
+pysentry --detailed
 ```
 
 ### Maintenance Checks

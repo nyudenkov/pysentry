@@ -64,6 +64,9 @@ pub struct DefaultConfig {
     pub detailed: bool,
 
     #[serde(default)]
+    pub compact: bool,
+
+    #[serde(default)]
     pub include_withdrawn: bool,
 
     #[serde(default)]
@@ -514,6 +517,12 @@ impl Config {
         self.validate_severity(&self.defaults.severity, "defaults.severity")?;
         self.validate_severity(&self.defaults.fail_on, "defaults.fail_on")?;
 
+        if self.defaults.compact && self.defaults.detailed {
+            anyhow::bail!(
+                "Cannot set both 'compact' and 'detailed' to true. These options are mutually exclusive."
+            );
+        }
+
         match self.defaults.scope.as_str() {
             "main" | "all" => {}
             _ => anyhow::bail!(
@@ -616,6 +625,7 @@ impl Default for DefaultConfig {
             scope: default_scope(),
             direct_only: false,
             detailed: false,
+            compact: false,
             include_withdrawn: false,
             no_ci_detect: false,
         }
@@ -823,6 +833,14 @@ enabled = false
         // Empty sources
         config.sources.enabled = vec![];
         assert!(config.validate().is_err());
+        config.sources.enabled = vec!["pypa".to_string()];
+
+        // Mutual exclusion: compact + detailed
+        config.defaults.compact = true;
+        config.defaults.detailed = true;
+        assert!(config.validate().is_err());
+        config.defaults.compact = false;
+        config.defaults.detailed = false;
     }
 
     #[test]

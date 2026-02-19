@@ -186,8 +186,12 @@ pub struct AuditArgs {
     pub verbosity: AppVerbosity,
 
     /// Show detailed vulnerability descriptions (full text instead of truncated)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "compact")]
     pub detailed: bool,
+
+    /// Compact output: summary + one-liner per vulnerability, no descriptions
+    #[arg(long, conflicts_with = "detailed")]
+    pub compact: bool,
 
     /// Custom configuration file path
     #[arg(long, value_name = "FILE")]
@@ -232,6 +236,17 @@ pub struct AuditArgs {
 }
 
 impl AuditArgs {
+    /// Resolve the effective detail level from --compact / --detailed flags.
+    pub fn detail_level(&self) -> crate::DetailLevel {
+        if self.compact {
+            crate::DetailLevel::Compact
+        } else if self.detailed {
+            crate::DetailLevel::Detailed
+        } else {
+            crate::DetailLevel::Normal
+        }
+    }
+
     /// Check if quiet mode is enabled (either via -q flag or config).
     pub fn is_quiet(&self) -> bool {
         crate::logging::is_quiet(&self.verbosity)
@@ -393,8 +408,18 @@ impl AuditArgs {
             merged.direct_only = config.defaults.direct_only;
         }
 
-        if !self.detailed {
+        if self.compact {
+            // --compact explicitly set on CLI: override any config-level detailed
+            merged.detailed = false;
+        } else if !self.detailed {
             merged.detailed = config.defaults.detailed;
+        }
+
+        if self.detailed {
+            // --detailed explicitly set on CLI: override any config-level compact
+            merged.compact = false;
+        } else if !self.compact {
+            merged.compact = config.defaults.compact;
         }
 
         if !self.include_withdrawn {
@@ -946,7 +971,7 @@ pub async fn audit(
         &report,
         audit_args.format.clone().into(),
         Some(&audit_args.path),
-        audit_args.detailed,
+        audit_args.detail_level(),
     )
     .map_err(|e| anyhow::anyhow!("Failed to generate report: {e}"))?;
 
@@ -1506,6 +1531,7 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
             config_loader.config.defaults.direct_only
         );
         println!("  Detailed: {}", config_loader.config.defaults.detailed);
+        println!("  Compact: {}", config_loader.config.defaults.compact);
         println!(
             "  Include withdrawn: {}",
             config_loader.config.defaults.include_withdrawn
@@ -1611,6 +1637,9 @@ fail_on = "high"
 # Uncomment to include withdrawn vulnerabilities by default
 # include_withdrawn = true
 
+# Uncomment for compact output (summary + one-liner per vuln)
+# compact = true
+
 [sources]
 # All vulnerability sources are enabled by default: PyPA, PyPI, and OSV
 # enabled = ["pypa", "pypi", "osv"]
@@ -1632,4 +1661,56 @@ while_no_fix = []
 # while_no_fix = ["CVE-2025-8869"]
 "#
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::DetailLevel;
+
+    fn parse_audit_args(args: &[&str]) -> AuditArgs {
+        let cli = Cli::try_parse_from(std::iter::once("pysentry").chain(args.iter().copied()))
+            .expect("valid CLI args");
+        cli.audit_args
+    }
+
+    #[test]
+    fn test_detail_level_defaults_to_normal() {
+        let args = parse_audit_args(&["."]);
+        assert_eq!(args.detail_level(), DetailLevel::Normal);
+    }
+
+    #[test]
+    fn test_detail_level_compact() {
+        let args = parse_audit_args(&["--compact", "."]);
+        assert_eq!(args.detail_level(), DetailLevel::Compact);
+    }
+
+    #[test]
+    fn test_detail_level_detailed() {
+        let args = parse_audit_args(&["--detailed", "."]);
+        assert_eq!(args.detail_level(), DetailLevel::Detailed);
+    }
+
+    #[test]
+    fn test_cli_compact_overrides_config_detailed() {
+        // Config says detailed, but --compact on CLI must win.
+        let args = parse_audit_args(&["--compact", "."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.detailed = true;
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.detail_level(), DetailLevel::Compact);
+        assert!(!merged.detailed, "detailed must be cleared when --compact is explicit");
+    }
+
+    #[test]
+    fn test_cli_detailed_overrides_config_compact() {
+        // Config says compact, but --detailed on CLI must win.
+        let args = parse_audit_args(&["--detailed", "."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.compact = true;
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.detail_level(), DetailLevel::Detailed);
+        assert!(!merged.compact, "compact must be cleared when --detailed is explicit");
+    }
 }

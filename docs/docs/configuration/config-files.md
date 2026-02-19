@@ -132,9 +132,14 @@ max_retries = 3
 | `fail_on` | string | Minimum severity to cause non-zero exit | `medium` |
 | `scope` | string | Dependency scope: `all` or `main` | `all` |
 | `direct_only` | bool | Only check direct dependencies | `false` |
-| `detailed` | bool | Enable detailed output with full descriptions | `false` |
+| `detailed` | bool | Enable detailed output with full vulnerability descriptions | `false` |
+| `compact` | bool | Compact output: summary + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
 | `include_withdrawn` | bool | Include withdrawn vulnerabilities in results | `false` |
 | `no_ci_detect` | bool | Disable automatic CI environment detection | `false` |
+
+:::note
+`compact` and `detailed` are mutually exclusive. Setting both to `true` in your configuration file will cause a validation error.
+:::
 
 ### `[sources]`
 

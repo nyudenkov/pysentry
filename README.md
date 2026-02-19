@@ -69,6 +69,8 @@ repos:
     rev: v0.4.1
     hooks:
       - id: pysentry
+        # Use compact mode for minimal pre-commit output
+        # args: ['--compact']
 ```
 
 ## Configuration
