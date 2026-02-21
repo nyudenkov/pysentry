@@ -31,7 +31,8 @@ dirs = "6.0.0"
 fs-err = "3.2.2"
 futures = "0.3.31"
 indicatif = "0.18.3"
-owo-colors = "4.2.3"
+owo-colors = { version = "4.2.3", features = ["supports-colors"] }
+enable-ansi-support = "0.2.1"
 pep440_rs = "0.7.3"
 polycvss = "0.3"
 pyo3 = { version = "0.26.0", features = ["extension-module"], optional = true }

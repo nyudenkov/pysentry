@@ -61,6 +61,40 @@ pub enum ResolverTypeArg {
     PipTools,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum, Default)]
+pub enum ColorChoice {
+    /// Auto-detect: use colors when stdout is a terminal and NO_COLOR is unset
+    #[default]
+    Auto,
+    /// Always emit ANSI color codes
+    Always,
+    /// Never emit ANSI color codes
+    Never,
+}
+
+/// Resolve an `OutputStyles` instance from a `ColorChoice`.
+///
+/// `Always` → colorized (forces ANSI on); `Never` → plain (forces ANSI off);
+/// `Auto` delegates entirely to `supports-color`, which handles `NO_COLOR`
+/// (any value, including empty), `FORCE_COLOR`, `isatty`, CI environments,
+/// and `TERM=dumb` per the terminal standards specs.
+pub fn resolve_styles(color: ColorChoice) -> crate::OutputStyles {
+    match color {
+        ColorChoice::Always => {
+            owo_colors::set_override(true);
+            crate::OutputStyles::colorized()
+        }
+        ColorChoice::Never => {
+            owo_colors::set_override(false);
+            crate::OutputStyles::default()
+        }
+        ColorChoice::Auto => {
+            // supports-color handles NO_COLOR, FORCE_COLOR, isatty, CI, TERM=dumb
+            crate::OutputStyles::colorized()
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "pysentry",
@@ -70,6 +104,10 @@ pub enum ResolverTypeArg {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
+
+    /// Control color output
+    #[arg(long, value_enum, default_value = "auto", global = true)]
+    pub color: ColorChoice,
 
     /// Audit arguments (used when no subcommand specified)
     #[command(flatten)]
@@ -903,7 +941,10 @@ pub async fn audit(
     http_config: crate::config::HttpConfig,
     vulnerability_ttl: u64,
     notifications_enabled: bool,
+    color: ColorChoice,
 ) -> Result<i32> {
+    let styles = resolve_styles(color);
+
     // Resolve sources early to avoid duplicate resolution and ensure errors are surfaced
     let source_types = match audit_args.resolve_sources() {
         Ok(sources) => sources,
@@ -972,6 +1013,7 @@ pub async fn audit(
         audit_args.format.clone().into(),
         Some(&audit_args.path),
         audit_args.detail_level(),
+        &styles,
     )
     .map_err(|e| anyhow::anyhow!("Failed to generate report: {e}"))?;
 

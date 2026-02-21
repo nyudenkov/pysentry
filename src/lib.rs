@@ -11,6 +11,7 @@ pub use maintenance::{
     ProjectState, ProjectStatus, SimpleIndexClient,
 };
 pub use output::report::{AuditReport, AuditSummary, DetailLevel, ReportGenerator};
+pub use output::styles::OutputStyles;
 pub use providers::{VulnerabilityProvider, VulnerabilitySource};
 pub use types::{
     AuditFormat, PackageName, ResolutionCacheEntry, ResolvedDependency, ResolverType,

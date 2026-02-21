@@ -23,6 +23,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<u8> {
+    let _ = enable_ansi_support::enable_ansi_support();
     let args = Cli::parse();
 
     match args.command {
@@ -59,6 +60,7 @@ async fn run() -> Result<u8> {
                 http_config,
                 vulnerability_ttl,
                 notifications_enabled,
+                args.color,
             )
             .await?;
 

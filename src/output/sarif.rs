@@ -290,8 +290,8 @@ impl SarifGenerator {
                 "properties": {
                     "security-severity": Self::get_security_severity_score(m.vulnerability.severity),
                     "vulnerability_id": m.vulnerability.id,
-                    "severity": format!("{:?}", m.vulnerability.severity),
-                    "tags": ["security", "vulnerability", format!("{:?}", m.vulnerability.severity).to_lowercase()]
+                    "severity": m.vulnerability.severity.as_str_lowercase(),
+                    "tags": ["security", "vulnerability", m.vulnerability.severity.as_str_lowercase()]
                 }
             });
 
@@ -325,7 +325,7 @@ impl SarifGenerator {
                 rule["properties"]["tags"] = json!([
                     "security",
                     "vulnerability",
-                    format!("{:?}", m.vulnerability.severity).to_lowercase(),
+                    m.vulnerability.severity.as_str_lowercase(),
                     "withdrawn"
                 ]);
             }
@@ -580,7 +580,7 @@ impl SarifGenerator {
                     "package_name": m.package_name.to_string(),
                     "installed_version": m.installed_version.to_string(),
                     "is_direct_dependency": m.is_direct,
-                    "vulnerability_severity": format!("{:?}", m.vulnerability.severity)
+                    "vulnerability_severity": m.vulnerability.severity.as_str_lowercase()
                 }
             });
 

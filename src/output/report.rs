@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 use super::sarif::SarifGenerator;
-use crate::maintenance::{
-    MaintenanceCheckConfig, MaintenanceIssue, MaintenanceIssueType, MaintenanceSummary,
-};
+use super::styles::{maintenance_icon, severity_icon, OutputStyles};
+use crate::maintenance::{MaintenanceCheckConfig, MaintenanceIssue, MaintenanceSummary};
 use crate::parsers::DependencyStats;
 use crate::types::AuditFormat;
 use crate::vulnerability::database::{Severity, VulnerabilityMatch};
@@ -11,7 +10,7 @@ use crate::vulnerability::matcher::{DatabaseStats, FixAnalysis};
 use chrono::{DateTime, Utc};
 use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::path::Path;
 
@@ -109,7 +108,7 @@ impl AuditReport {
 
     /// Get summary statistics
     pub fn summary(&self) -> AuditSummary {
-        let mut severity_counts = HashMap::new();
+        let mut severity_counts = BTreeMap::new();
         let mut package_counts = HashMap::new();
 
         for m in &self.matches {
@@ -134,66 +133,9 @@ pub struct AuditSummary {
     pub total_packages_scanned: usize,
     pub vulnerable_packages: usize,
     pub total_vulnerabilities: usize,
-    pub severity_counts: HashMap<Severity, usize>,
+    pub severity_counts: BTreeMap<Severity, usize>,
     pub fixable_vulnerabilities: usize,
     pub unfixable_vulnerabilities: usize,
-}
-
-struct ColoredOutput;
-
-impl ColoredOutput {
-    fn severity(severity: &Severity) -> String {
-        match severity {
-            Severity::Critical => "CRITICAL".on_red().white().bold().to_string(),
-            Severity::High => "HIGH".red().bold().to_string(),
-            Severity::Medium => "MEDIUM".yellow().bold().to_string(),
-            Severity::Low => "LOW".green().bold().to_string(),
-            Severity::Unknown => "UNKNOWN".blue().dimmed().to_string(),
-        }
-    }
-
-    fn severity_count(count: usize, severity: &Severity) -> String {
-        let text = format!("{count} {severity:?}").to_uppercase();
-        match severity {
-            Severity::Critical => text.on_red().white().bold().to_string(),
-            Severity::High => text.red().bold().to_string(),
-            Severity::Medium => text.yellow().bold().to_string(),
-            Severity::Low => text.green().bold().to_string(),
-            Severity::Unknown => text.blue().dimmed().to_string(),
-        }
-    }
-
-    fn package_name(name: &str) -> String {
-        name.bold().to_string()
-    }
-
-    fn vulnerability_id(id: &str) -> String {
-        id.cyan().bold().to_string()
-    }
-
-    fn header(text: &str) -> String {
-        text.bold().to_string()
-    }
-
-    fn fix_suggestion(text: &str) -> String {
-        text.blue().to_string()
-    }
-
-    fn withdrawn_tag(withdrawn: Option<&DateTime<Utc>>) -> String {
-        if withdrawn.is_some() {
-            format!(" {}", "(WITHDRAWN)".yellow().bold())
-        } else {
-            String::new()
-        }
-    }
-
-    fn maintenance_status(issue_type: &MaintenanceIssueType) -> String {
-        match issue_type {
-            MaintenanceIssueType::Quarantined => "QUARANTINED".on_red().white().bold().to_string(),
-            MaintenanceIssueType::Archived => "ARCHIVED".yellow().bold().to_string(),
-            MaintenanceIssueType::Deprecated => "DEPRECATED".blue().bold().to_string(),
-        }
-    }
 }
 
 /// Report generator for different output formats
@@ -206,9 +148,10 @@ impl ReportGenerator {
         format: AuditFormat,
         project_root: Option<&Path>,
         detail_level: DetailLevel,
+        styles: &OutputStyles,
     ) -> Result<String, Box<dyn std::error::Error>> {
         match format {
-            AuditFormat::Human => Self::generate_human_report(report, detail_level),
+            AuditFormat::Human => Self::generate_human_report(report, detail_level, styles),
             AuditFormat::Json => Self::generate_json_report(report),
             AuditFormat::Sarif => Self::generate_sarif_report(report, project_root),
             AuditFormat::Markdown => Self::generate_markdown_report(report),
@@ -218,6 +161,7 @@ impl ReportGenerator {
     fn generate_human_report(
         report: &AuditReport,
         detail_level: DetailLevel,
+        styles: &OutputStyles,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut output = String::new();
         let summary = report.summary();
@@ -225,11 +169,7 @@ impl ReportGenerator {
         let is_detailed = detail_level == DetailLevel::Detailed;
 
         if !is_compact {
-            writeln!(
-                output,
-                "{}",
-                ColoredOutput::header("PYSENTRY SECURITY AUDIT")
-            )?;
+            writeln!(output, "{}", "PYSENTRY SECURITY AUDIT".style(styles.header))?;
             writeln!(output, "=======================")?;
             writeln!(output)?;
         }
@@ -237,7 +177,7 @@ impl ReportGenerator {
         writeln!(
             output,
             "{}: {} packages scanned • {} vulnerable • {} vulnerabilities found",
-            ColoredOutput::header("SUMMARY"),
+            "SUMMARY".style(styles.header),
             summary.total_packages_scanned,
             summary.vulnerable_packages,
             summary.total_vulnerabilities
@@ -245,7 +185,7 @@ impl ReportGenerator {
         writeln!(output)?;
 
         if !summary.severity_counts.is_empty() {
-            write!(output, "{}: ", ColoredOutput::header("SEVERITY"))?;
+            write!(output, "{}: ", "SEVERITY".style(styles.header))?;
             let mut first = true;
             for severity in [
                 Severity::Critical,
@@ -258,11 +198,8 @@ impl ReportGenerator {
                     if !first {
                         write!(output, "    ")?;
                     }
-                    write!(
-                        output,
-                        " {}",
-                        ColoredOutput::severity_count(*count, &severity)
-                    )?;
+                    let text = format!("{count} {severity}");
+                    write!(output, " {}", text.style(*styles.severity(&severity)))?;
                     first = false;
                 }
             }
@@ -275,15 +212,19 @@ impl ReportGenerator {
                 writeln!(
                     output,
                     "{}: {} vulnerabilities can be fixed by upgrading packages",
-                    ColoredOutput::header("FIXABLE"),
-                    ColoredOutput::fix_suggestion(&report.fix_analysis.fixable.to_string())
+                    "FIXABLE".style(styles.header),
+                    report
+                        .fix_analysis
+                        .fixable
+                        .to_string()
+                        .style(styles.fix_suggestion)
                 )?;
             }
             if report.fix_analysis.unfixable > 0 {
                 writeln!(
                     output,
                     "{}: {} vulnerabilities cannot be fixed",
-                    ColoredOutput::header("UNFIXABLE"),
+                    "UNFIXABLE".style(styles.header),
                     report.fix_analysis.unfixable
                 )?;
             }
@@ -291,7 +232,7 @@ impl ReportGenerator {
         }
 
         if !report.warnings.is_empty() {
-            writeln!(output, "{}", ColoredOutput::header("WARNINGS"))?;
+            writeln!(output, "{}", "WARNINGS".style(styles.header))?;
             for warning in &report.warnings {
                 writeln!(output, "  {warning}")?;
             }
@@ -299,21 +240,25 @@ impl ReportGenerator {
         }
 
         if !report.matches.is_empty() {
-            writeln!(output, "{}", ColoredOutput::header("VULNERABILITIES"))?;
+            writeln!(output, "{}", "VULNERABILITIES".style(styles.header))?;
 
             if is_compact {
                 writeln!(output)?;
                 for m in &report.matches {
-                    let withdrawn_tag =
-                        ColoredOutput::withdrawn_tag(m.vulnerability.withdrawn.as_ref());
+                    let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
+                        format!(" {}", "(WITHDRAWN)".style(styles.withdrawn_tag))
+                    } else {
+                        String::new()
+                    };
                     writeln!(
                         output,
                         "  {}{}  {} v{}  [{}]",
-                        ColoredOutput::vulnerability_id(&m.vulnerability.id),
+                        m.vulnerability.id.style(styles.vuln_id),
                         withdrawn_tag,
-                        ColoredOutput::package_name(&m.package_name.to_string()),
+                        m.package_name.to_string().style(styles.package),
                         m.installed_version,
-                        ColoredOutput::severity(&m.vulnerability.severity),
+                        format!("{}", m.vulnerability.severity)
+                            .style(*styles.severity(&m.vulnerability.severity)),
                     )?;
                 }
                 writeln!(output)?;
@@ -328,18 +273,22 @@ impl ReportGenerator {
                         String::new()
                     };
 
-                    let withdrawn_tag =
-                        ColoredOutput::withdrawn_tag(m.vulnerability.withdrawn.as_ref());
+                    let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
+                        format!(" {}", "(WITHDRAWN)".style(styles.withdrawn_tag))
+                    } else {
+                        String::new()
+                    };
 
                     writeln!(
                         output,
                         " {}. {}{}  {} v{}  [{}]{}",
                         i + 1,
-                        ColoredOutput::vulnerability_id(&m.vulnerability.id),
+                        m.vulnerability.id.style(styles.vuln_id),
                         withdrawn_tag,
-                        ColoredOutput::package_name(&m.package_name.to_string()),
+                        m.package_name.to_string().style(styles.package),
                         m.installed_version,
-                        ColoredOutput::severity(&m.vulnerability.severity),
+                        format!("{}", m.vulnerability.severity)
+                            .style(*styles.severity(&m.vulnerability.severity)),
                         source_tag
                     )?;
 
@@ -364,19 +313,23 @@ impl ReportGenerator {
                         writeln!(
                             output,
                             "    {} {}",
-                            "→ Fix:".cyan(),
-                            ColoredOutput::fix_suggestion(&format!("Upgrade to {fixed_version}+"))
+                            "→ Fix:".style(styles.fix_arrow),
+                            format!("Upgrade to {fixed_version}+").style(styles.fix_suggestion)
                         )?;
                     }
                     writeln!(output)?;
                 }
             }
         } else {
-            writeln!(output, "{} No vulnerabilities found!", "✓".green().bold())?;
+            writeln!(
+                output,
+                "{} No vulnerabilities found!",
+                "✓".style(styles.success_check)
+            )?;
         }
 
         if !report.fix_analysis.fix_suggestions.is_empty() {
-            let mut package_fixes: HashMap<String, Vec<String>> = HashMap::new();
+            let mut package_fixes: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for suggestion in &report.fix_analysis.fix_suggestions {
                 let package = suggestion.package_name.to_string();
                 let version_info = format!(
@@ -388,9 +341,9 @@ impl ReportGenerator {
 
             if is_compact {
                 writeln!(output)?;
-                writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+                writeln!(output, "{}", "FIX SUGGESTIONS".style(styles.header))?;
             } else {
-                writeln!(output, "{}", ColoredOutput::header("FIX SUGGESTIONS"))?;
+                writeln!(output, "{}", "FIX SUGGESTIONS".style(styles.header))?;
                 writeln!(output, "---------------")?;
             }
 
@@ -405,8 +358,8 @@ impl ReportGenerator {
                         output,
                         "{}{}: {}",
                         indent,
-                        ColoredOutput::package_name(package),
-                        ColoredOutput::fix_suggestion(fix)
+                        package.style(styles.package),
+                        fix.style(styles.fix_suggestion)
                     )?;
                 } else {
                     let Some(best_fix) = fixes.first() else {
@@ -416,8 +369,8 @@ impl ReportGenerator {
                         output,
                         "{}{}: {} (fixes {} vulnerabilities)",
                         indent,
-                        ColoredOutput::package_name(package),
-                        ColoredOutput::fix_suggestion(best_fix),
+                        package.style(styles.package),
+                        best_fix.style(styles.fix_suggestion),
                         fixes.len()
                     )?;
                 }
@@ -432,14 +385,15 @@ impl ReportGenerator {
         if !report.maintenance_issues.is_empty() {
             if is_compact {
                 writeln!(output)?;
-                writeln!(output, "{}", ColoredOutput::header("MAINTENANCE"))?;
+                writeln!(output, "{}", "MAINTENANCE".style(styles.header))?;
                 for issue in &report.maintenance_issues {
-                    let status_tag = ColoredOutput::maintenance_status(&issue.issue_type);
+                    let status_text = issue.issue_type.to_string();
+                    let status_tag = status_text.style(*styles.maintenance(&issue.issue_type));
                     writeln!(
                         output,
                         "  {}  {} v{}",
                         status_tag,
-                        ColoredOutput::package_name(&issue.package_name.to_string()),
+                        issue.package_name.to_string().style(styles.package),
                         issue.installed_version,
                     )?;
                 }
@@ -448,7 +402,7 @@ impl ReportGenerator {
                 writeln!(
                     output,
                     "{}",
-                    ColoredOutput::header("MAINTENANCE ISSUES (PEP 792)")
+                    "MAINTENANCE ISSUES (PEP 792)".style(styles.header)
                 )?;
                 writeln!(output, "----------------------------")?;
                 writeln!(output)?;
@@ -457,7 +411,7 @@ impl ReportGenerator {
                 writeln!(
                     output,
                     "{}: {} issues found ({} archived, {} deprecated, {} quarantined)",
-                    ColoredOutput::header("SUMMARY"),
+                    "SUMMARY".style(styles.header),
                     maint_summary.total_issues,
                     maint_summary.archived_count,
                     maint_summary.deprecated_count,
@@ -466,7 +420,8 @@ impl ReportGenerator {
                 writeln!(output)?;
 
                 for (i, issue) in report.maintenance_issues.iter().enumerate() {
-                    let status_tag = ColoredOutput::maintenance_status(&issue.issue_type);
+                    let status_text = issue.issue_type.to_string();
+                    let status_tag = status_text.style(*styles.maintenance(&issue.issue_type));
 
                     let dep_type = if issue.is_direct {
                         "[direct]"
@@ -479,9 +434,9 @@ impl ReportGenerator {
                         " {}. {}  {} v{}  {}",
                         i + 1,
                         status_tag,
-                        ColoredOutput::package_name(&issue.package_name.to_string()),
+                        issue.package_name.to_string().style(styles.package),
                         issue.installed_version,
-                        dep_type.dimmed()
+                        dep_type.style(styles.dimmed)
                     )?;
 
                     if let Some(reason) = &issue.reason {
@@ -508,7 +463,7 @@ impl ReportGenerator {
                     .scan_time
                     .format("%Y-%m-%d %H:%M:%S UTC")
                     .to_string()
-                    .dimmed()
+                    .style(styles.dimmed)
             )?;
         }
 
@@ -554,14 +509,8 @@ impl ReportGenerator {
                 Severity::Unknown,
             ] {
                 if let Some(count) = summary.severity_counts.get(&severity) {
-                    let icon = match severity {
-                        Severity::Critical => "🔴",
-                        Severity::High => "🟠",
-                        Severity::Medium => "🟡",
-                        Severity::Low => "🟢",
-                        Severity::Unknown => "⚪",
-                    };
-                    writeln!(output, "- {icon} **{severity:?}:** {count}")?;
+                    let icon = severity_icon(&severity);
+                    writeln!(output, "- {icon} **{severity}:** {count}")?;
                 }
             }
             writeln!(output)?;
@@ -589,13 +538,7 @@ impl ReportGenerator {
             writeln!(output)?;
 
             for (i, m) in report.matches.iter().enumerate() {
-                let severity_icon = match m.vulnerability.severity {
-                    Severity::Critical => "🔴",
-                    Severity::High => "🟠",
-                    Severity::Medium => "🟡",
-                    Severity::Low => "🟢",
-                    Severity::Unknown => "⚪",
-                };
+                let icon = severity_icon(&m.vulnerability.severity);
 
                 let source_tag = if let Some(source) = &m.vulnerability.source {
                     format!(" *[source: {source}]*")
@@ -613,7 +556,7 @@ impl ReportGenerator {
                     output,
                     "### {}. {} `{}`{}{}",
                     i + 1,
-                    severity_icon,
+                    icon,
                     m.vulnerability.id,
                     withdrawn_tag,
                     source_tag
@@ -625,7 +568,7 @@ impl ReportGenerator {
                     "- **Package:** `{}` v`{}`",
                     m.package_name, m.installed_version
                 )?;
-                writeln!(output, "- **Severity:** {:?}", m.vulnerability.severity)?;
+                writeln!(output, "- **Severity:** {}", m.vulnerability.severity)?;
 
                 if let Some(cvss) = m.vulnerability.cvss_score {
                     writeln!(output, "- **CVSS Score:** {cvss:.1}")?;
@@ -694,11 +637,8 @@ impl ReportGenerator {
             writeln!(output)?;
 
             for (i, issue) in report.maintenance_issues.iter().enumerate() {
-                let (icon, status) = match issue.issue_type {
-                    crate::maintenance::MaintenanceIssueType::Quarantined => ("🔴", "QUARANTINED"),
-                    crate::maintenance::MaintenanceIssueType::Archived => ("📦", "ARCHIVED"),
-                    crate::maintenance::MaintenanceIssueType::Deprecated => ("⚠️", "DEPRECATED"),
-                };
+                let icon = maintenance_icon(&issue.issue_type);
+                let status = issue.issue_type.to_string();
 
                 let dep_type = if issue.is_direct {
                     "direct"
@@ -764,7 +704,7 @@ impl ReportGenerator {
                     id: m.vulnerability.id.clone(),
                     package_name: m.package_name.to_string(),
                     installed_version: m.installed_version.to_string(),
-                    severity: format!("{:?}", m.vulnerability.severity),
+                    severity: m.vulnerability.severity.as_str_lowercase().to_string(),
                     summary: m.vulnerability.summary.clone(),
                     description: m.vulnerability.description.clone(),
                     cvss_score: m.vulnerability.cvss_score,
@@ -961,7 +901,12 @@ mod tests {
     #[test]
     fn test_human_report_generation() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Normal).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(output.contains("SUMMARY") && output.contains("10 packages scanned"));
@@ -982,7 +927,7 @@ mod tests {
         assert!(output.contains("- **Scanned:** 10 packages"));
         assert!(output.contains("### 1. 🟠 `GHSA-test-1234`"));
         assert!(output.contains("- **Package:** `test-package`"));
-        assert!(output.contains("- **Severity:** High"));
+        assert!(output.contains("- **Severity:** HIGH"));
         assert!(output.contains("- **Description:**"));
         assert!(output.contains("~~~"));
         assert!(output.contains("A test vulnerability for unit testing"));
@@ -1019,12 +964,15 @@ mod tests {
         let report = create_test_report();
         let project_root = Some(std::path::Path::new("."));
 
+        let styles = OutputStyles::default();
+
         // Test Human format
         let human_output = ReportGenerator::generate(
             &report,
             AuditFormat::Human,
             project_root,
             DetailLevel::Normal,
+            &styles,
         )
         .unwrap();
         assert!(human_output.contains("PYSENTRY SECURITY AUDIT"));
@@ -1036,6 +984,7 @@ mod tests {
             AuditFormat::Json,
             project_root,
             DetailLevel::Normal,
+            &styles,
         )
         .unwrap();
         let json: serde_json::Value = serde_json::from_str(&json_output).unwrap();
@@ -1047,6 +996,7 @@ mod tests {
             AuditFormat::Sarif,
             project_root,
             DetailLevel::Normal,
+            &styles,
         )
         .unwrap();
         let sarif: serde_json::Value = serde_json::from_str(&sarif_output).unwrap();
@@ -1058,6 +1008,7 @@ mod tests {
             AuditFormat::Markdown,
             project_root,
             DetailLevel::Normal,
+            &styles,
         )
         .unwrap();
         assert!(markdown_output.contains("# 🛡️ pysentry report"));
@@ -1099,7 +1050,12 @@ mod tests {
 
         assert!(!report.has_vulnerabilities());
 
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Normal).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            &OutputStyles::default(),
+        )
+        .unwrap();
         assert!(output.contains("No vulnerabilities found"));
     }
 
@@ -1148,7 +1104,12 @@ mod tests {
     #[test]
     fn test_compact_report_no_header_no_footer() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(!output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(!output.contains("Scan completed"));
@@ -1157,7 +1118,12 @@ mod tests {
     #[test]
     fn test_compact_report_contains_summary() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("SUMMARY"));
         assert!(output.contains("10 packages scanned"));
@@ -1167,7 +1133,12 @@ mod tests {
     #[test]
     fn test_compact_report_condensed_vulns() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Vuln ID should be present
         assert!(output.contains("GHSA-test-1234"));
@@ -1183,7 +1154,12 @@ mod tests {
     #[test]
     fn test_compact_report_no_fix_suggestions_when_empty() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(!output.contains("FIX SUGGESTIONS"));
     }
@@ -1200,7 +1176,12 @@ mod tests {
             vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
         }];
 
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("FIX SUGGESTIONS"));
         assert!(output.contains("requests"));
@@ -1213,7 +1194,12 @@ mod tests {
     #[test]
     fn test_compact_report_hint_line() {
         let report = create_test_report();
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("Run pysentry --detailed for full descriptions"));
     }
@@ -1251,8 +1237,12 @@ mod tests {
             Vec::new(),
         );
 
-        let output =
-            ReportGenerator::generate_human_report(&clean_report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &clean_report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(!output.contains("Run pysentry --detailed"));
     }
@@ -1301,7 +1291,12 @@ mod tests {
             vec![maintenance_issue],
         );
 
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Compact mode shows per-issue one-liners under MAINTENANCE header
         assert!(output.contains("MAINTENANCE"));
@@ -1321,8 +1316,12 @@ mod tests {
     #[test]
     fn test_detailed_report_shows_full_description() {
         let report = create_test_report();
-        let output =
-            ReportGenerator::generate_human_report(&report, DetailLevel::Detailed).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Detailed,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Both summary and the distinct description text must appear
         assert!(output.contains("Test vulnerability"));
@@ -1390,7 +1389,12 @@ mod tests {
             vec![],
         );
 
-        let output = ReportGenerator::generate_human_report(&report, DetailLevel::Compact).unwrap();
+        let output = ReportGenerator::generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("GHSA-withdrawn-0001"));
         assert!(output.contains("WITHDRAWN"));
