@@ -25,7 +25,6 @@ version = 1
 
 [defaults]
 format = "json"
-severity = "medium"
 fail_on = "high"
 scope = "all"
 direct_only = false
@@ -78,7 +77,6 @@ version = 1
 
 [tool.pysentry.defaults]
 format = "json"
-severity = "medium"
 fail_on = "high"
 scope = "main"
 direct_only = false
@@ -128,7 +126,7 @@ max_retries = 3
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
 | `format` | string | Output format: `human`, `json`, `sarif`, `markdown` | `human` |
-| `severity` | string | Minimum severity to report | `low` |
+| `severity` | string | **Deprecated** (will be removed in v0.5). Minimum severity to display in report | `low` |
 | `fail_on` | string | Minimum severity to cause non-zero exit | `medium` |
 | `scope` | string | Dependency scope: `all` or `main` | `all` |
 | `direct_only` | bool | Only check direct dependencies | `false` |

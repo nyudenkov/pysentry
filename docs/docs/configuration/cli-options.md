@@ -25,7 +25,7 @@ Complete reference for all PySentry command line options.
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--severity` | Minimum severity: `low`, `medium`, `high`, `critical` | `low` |
+| `--severity` | **Deprecated** (will be removed in v0.5). Minimum severity to display in report | `low` |
 | `--fail-on` | Fail (exit non-zero) on vulnerabilities >= severity | `medium` |
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
@@ -144,9 +144,6 @@ pysentry --format json --output results.json
 ### Filtering
 
 ```bash
-# Only show high and critical vulnerabilities
-pysentry --severity high
-
 # Only fail on critical vulnerabilities
 pysentry --fail-on critical
 

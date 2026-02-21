@@ -27,8 +27,8 @@ pysentry --resolver pip-tools /path/to/project
 # Exclude extra dependencies (only check main dependencies)
 pysentry --exclude-extra
 
-# Filter by severity (only show high and critical)
-pysentry --severity high
+# Only fail on high and critical vulnerabilities
+pysentry --fail-on high
 
 # Output to JSON file
 pysentry --format json --output audit-results.json

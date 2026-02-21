@@ -15,7 +15,8 @@ use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
 use crate::{
     AuditCache, AuditReport, Config, ConfigLoader, DependencyScanner, MatcherConfig,
-    ReportGenerator, VulnerabilityDatabase, VulnerabilityMatcher, VulnerabilitySource,
+    ReportGenerator, Severity, VulnerabilityDatabase, VulnerabilityMatch, VulnerabilityMatcher,
+    VulnerabilitySource,
 };
 use std::str::FromStr;
 
@@ -147,7 +148,7 @@ pub struct AuditArgs {
     #[arg(long, value_enum, default_value = "human")]
     pub format: AuditFormat,
 
-    /// Minimum severity level to report
+    /// Minimum severity level to report (deprecated, will be removed in v0.5)
     #[arg(long, value_enum, default_value = "low")]
     pub severity: SeverityLevel,
 
@@ -1000,8 +1001,8 @@ pub async fn audit(
     )
     .await;
 
-    let report = match audit_result {
-        Ok(report) => report,
+    let (report, fail_vulns) = match audit_result {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("Error: Audit failed: {e}");
             return Ok(1);
@@ -1114,12 +1115,6 @@ pub async fn audit(
         }
     }
 
-    // Check if we should fail due to vulnerabilities
-    let fail_vulns = report.should_fail_on_severity(
-        &audit_args.fail_on.clone().into(),
-        !audit_args.no_fail_on_unknown,
-    );
-
     // Check if we should fail due to maintenance issues (PEP 792)
     let maintenance_config = audit_args.maintenance_check_config();
     let fail_maintenance = report.should_fail_on_maintenance(&maintenance_config);
@@ -1131,6 +1126,57 @@ pub async fn audit(
     }
 }
 
+/// Evaluate fail_on against the full match set, then apply severity as a display filter.
+/// Returns (display_matches, should_fail).
+///
+/// When severity > fail_on, vulnerabilities between fail_on and severity would be discarded by
+/// the matcher before fail_on could evaluate them. By computing the effective matcher threshold
+/// as min(severity, fail_on) upstream, we ensure the full candidate set arrives here. Then this
+/// function evaluates the exit condition against every match and applies the display filter.
+fn evaluate_fail_and_filter(
+    matches: Vec<VulnerabilityMatch>,
+    severity: &crate::SeverityLevel,
+    fail_on: &crate::SeverityLevel,
+    fail_on_unknown: bool,
+) -> (Vec<VulnerabilityMatch>, bool) {
+    let fail_on_db = match fail_on {
+        crate::SeverityLevel::Low => Severity::Low,
+        crate::SeverityLevel::Medium => Severity::Medium,
+        crate::SeverityLevel::High => Severity::High,
+        crate::SeverityLevel::Critical => Severity::Critical,
+    };
+
+    let fail_vulns = matches.iter().any(|m| {
+        if m.vulnerability.severity == Severity::Unknown {
+            return fail_on_unknown;
+        }
+        m.vulnerability.severity >= fail_on_db
+    });
+
+    // When severity is stricter than fail_on, the report should only display vulnerabilities
+    // at or above the severity threshold. Unknown-severity vulnerabilities are always shown
+    // because their true impact is unknown.
+    let display_matches = if severity > fail_on {
+        let severity_db = match severity {
+            crate::SeverityLevel::Low => Severity::Low,
+            crate::SeverityLevel::Medium => Severity::Medium,
+            crate::SeverityLevel::High => Severity::High,
+            crate::SeverityLevel::Critical => Severity::Critical,
+        };
+        matches
+            .into_iter()
+            .filter(|m| {
+                m.vulnerability.severity == Severity::Unknown
+                    || m.vulnerability.severity >= severity_db
+            })
+            .collect()
+    } else {
+        matches
+    };
+
+    (display_matches, fail_vulns)
+}
+
 async fn perform_audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,
@@ -1138,7 +1184,7 @@ async fn perform_audit(
     vulnerability_ttl: u64,
     source_types: &[VulnerabilitySourceType],
     ci_env: &crate::ci::CiEnvironment,
-) -> Result<AuditReport> {
+) -> Result<(AuditReport, bool)> {
     std::fs::create_dir_all(cache_dir)?;
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
@@ -1371,8 +1417,14 @@ async fn perform_audit(
     if audit_args.is_verbose() {
         eprintln!("Matching against vulnerability database...");
     }
+    let severity_level: crate::SeverityLevel = audit_args.severity.clone().into();
+    let fail_on_level: crate::SeverityLevel = audit_args.fail_on.clone().into();
+    // Use min(severity, fail_on) so the matcher captures vulnerabilities needed by either flag.
+    // The display filter in evaluate_fail_and_filter will then apply severity as a post-hoc
+    // restriction on what appears in the report.
+    let effective_min = std::cmp::min(severity_level.clone(), fail_on_level.clone());
     let matcher_config = MatcherConfig::new(
-        audit_args.severity.clone().into(),
+        effective_min,
         audit_args.ignore_ids.to_vec(),
         audit_args.ignore_while_no_fix.to_vec(),
         audit_args.direct_only,
@@ -1383,13 +1435,20 @@ async fn perform_audit(
     let matches = matcher.find_vulnerabilities(&dependencies)?;
     let filtered_matches = matcher.filter_matches(matches);
 
+    let (display_matches, fail_vulns) = evaluate_fail_and_filter(
+        filtered_matches,
+        &severity_level,
+        &fail_on_level,
+        !audit_args.no_fail_on_unknown,
+    );
+
     let database_stats = matcher.get_database_stats();
-    let fix_analysis = matcher.analyze_fixes(&filtered_matches);
+    let fix_analysis = matcher.analyze_fixes(&display_matches);
 
     let report = AuditReport::new(
         dependency_stats,
         database_stats,
-        filtered_matches,
+        display_matches,
         fix_analysis,
         warnings,
         maintenance_issues,
@@ -1412,7 +1471,7 @@ async fn perform_audit(
         }
     }
 
-    Ok(report)
+    Ok((report, fail_vulns))
 }
 
 async fn scan_explicit_requirements(
@@ -1493,7 +1552,6 @@ pub async fn config_init(args: &ConfigInitArgs) -> Result<()> {
     println!("You can now customize your settings in this file.");
     println!("Configuration reference:");
     println!("- Format: human, json, sarif, markdown");
-    println!("- Severity: low, medium, high, critical");
     println!("- Sources: pypa, pypi, osv");
     println!("- Resolver: uv, pip-tools");
     println!("- HTTP: Configure timeouts, retries, and progress indication");
@@ -1669,8 +1727,6 @@ fn generate_minimal_config() -> String {
 version = 1
 
 [defaults]
-# Set your preferred severity level
-severity = "medium"
 fail_on = "high"
 
 # Uncomment to include dev/optional dependencies
@@ -1760,5 +1816,110 @@ mod tests {
             !merged.compact,
             "compact must be cleared when --detailed is explicit"
         );
+    }
+
+    // Helpers for evaluate_fail_and_filter tests
+
+    fn make_match(severity: Severity) -> VulnerabilityMatch {
+        VulnerabilityMatch {
+            package_name: crate::types::PackageName::from_str("test-pkg").unwrap(),
+            installed_version: crate::types::Version::from_str("1.0.0").unwrap(),
+            vulnerability: crate::vulnerability::database::Vulnerability {
+                id: "GHSA-test-0001".to_string(),
+                summary: "test".to_string(),
+                description: None,
+                severity,
+                affected_versions: vec![],
+                fixed_versions: vec![],
+                references: vec![],
+                cvss_score: None,
+                cvss_version: None,
+                published: None,
+                modified: None,
+                source: None,
+                withdrawn: None,
+                aliases: vec![],
+            },
+            is_direct: true,
+        }
+    }
+
+    // severity=Critical, fail_on=Medium, vuln=HIGH
+    // The vuln is between fail_on and severity thresholds.
+    // fail_on=Medium → HIGH meets it → should fail.
+    // display filter severity=Critical → HIGH is below → not shown.
+    #[test]
+    fn test_fail_on_below_severity_with_matching_vulns() {
+        let matches = vec![make_match(Severity::High)];
+        let (display, fail) = evaluate_fail_and_filter(
+            matches,
+            &crate::SeverityLevel::Critical,
+            &crate::SeverityLevel::Medium,
+            true,
+        );
+        assert!(fail, "HIGH meets fail_on=Medium threshold");
+        assert!(display.is_empty(), "HIGH is below display severity=Critical");
+    }
+
+    // severity=Critical, fail_on=High, vuln=LOW
+    // LOW is below both fail_on and severity → no failure, nothing displayed.
+    #[test]
+    fn test_fail_on_below_severity_no_matching_vulns() {
+        let matches = vec![make_match(Severity::Low)];
+        let (display, fail) = evaluate_fail_and_filter(
+            matches,
+            &crate::SeverityLevel::Critical,
+            &crate::SeverityLevel::High,
+            true,
+        );
+        assert!(!fail, "LOW does not meet fail_on=High threshold");
+        assert!(display.is_empty(), "LOW is below display severity=Critical");
+    }
+
+    // severity=Low, fail_on=High, vuln=MEDIUM
+    // MEDIUM is below fail_on=High → no failure.
+    // severity=Low (≤ fail_on), no extra filtering → MEDIUM is shown.
+    #[test]
+    fn test_fail_on_above_severity() {
+        let matches = vec![make_match(Severity::Medium)];
+        let (display, fail) = evaluate_fail_and_filter(
+            matches,
+            &crate::SeverityLevel::Low,
+            &crate::SeverityLevel::High,
+            true,
+        );
+        assert!(!fail, "MEDIUM does not meet fail_on=High threshold");
+        assert_eq!(display.len(), 1, "MEDIUM passes display filter severity=Low");
+    }
+
+    // severity=High, fail_on=High, vuln=HIGH
+    // Equal thresholds → failure, and HIGH is shown.
+    #[test]
+    fn test_fail_on_equals_severity() {
+        let matches = vec![make_match(Severity::High)];
+        let (display, fail) = evaluate_fail_and_filter(
+            matches,
+            &crate::SeverityLevel::High,
+            &crate::SeverityLevel::High,
+            true,
+        );
+        assert!(fail, "HIGH meets fail_on=High");
+        assert_eq!(display.len(), 1, "HIGH passes display filter severity=High");
+    }
+
+    // severity=Critical, fail_on=Medium, vuln=UNKNOWN, fail_on_unknown=true
+    // Unknown is always shown (display filter exception) and triggers failure when
+    // fail_on_unknown=true regardless of the configured threshold.
+    #[test]
+    fn test_fail_on_below_severity_unknown() {
+        let matches = vec![make_match(Severity::Unknown)];
+        let (display, fail) = evaluate_fail_and_filter(
+            matches,
+            &crate::SeverityLevel::Critical,
+            &crate::SeverityLevel::Medium,
+            true,
+        );
+        assert!(fail, "Unknown causes failure when fail_on_unknown=true");
+        assert_eq!(display.len(), 1, "Unknown always passes display filter");
     }
 }

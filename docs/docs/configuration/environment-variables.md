@@ -29,7 +29,7 @@ PYSENTRY_CONFIG=/path/to/pyproject.toml pysentry
 
 ```bash
 # Run with only CLI arguments, ignore all config files
-PYSENTRY_NO_CONFIG=1 pysentry --severity high
+PYSENTRY_NO_CONFIG=1 pysentry --fail-on high
 ```
 
 ## RUST_LOG for Debugging

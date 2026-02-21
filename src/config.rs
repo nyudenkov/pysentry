@@ -48,7 +48,8 @@ pub struct DefaultConfig {
     #[serde(default = "default_format")]
     pub format: String,
 
-    #[serde(default = "default_severity")]
+    /// Deprecated: will be removed in v0.5. Still parsed for backward compatibility.
+    #[serde(default = "default_severity", skip_serializing)]
     pub severity: String,
 
     #[serde(default = "default_fail_on")]
