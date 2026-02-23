@@ -41,6 +41,7 @@ reqwest = { version = "0.12.28", features = ["json", "stream", "rustls-tls-nativ
 rustc-hash = "2.1.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+serde-sarif = "0.8"
 serde_yaml = "0.9.34"
 sha2 = "0.10.9"
 tempfile = "3.24.0"
