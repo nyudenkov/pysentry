@@ -13,10 +13,10 @@ use crate::logging::AppVerbosity;
 use crate::notifications::NotificationClient;
 use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
+use crate::output::generate_report;
 use crate::{
-    AuditCache, AuditReport, Config, ConfigLoader, DependencyScanner, MatcherConfig,
-    ReportGenerator, Severity, VulnerabilityDatabase, VulnerabilityMatch, VulnerabilityMatcher,
-    VulnerabilitySource,
+    AuditCache, AuditReport, Config, ConfigLoader, DependencyScanner, MatcherConfig, Severity,
+    VulnerabilityDatabase, VulnerabilityMatch, VulnerabilityMatcher, VulnerabilitySource,
 };
 use std::str::FromStr;
 
@@ -79,19 +79,19 @@ pub enum ColorChoice {
 /// `Auto` delegates entirely to `supports-color`, which handles `NO_COLOR`
 /// (any value, including empty), `FORCE_COLOR`, `isatty`, CI environments,
 /// and `TERM=dumb` per the terminal standards specs.
-pub fn resolve_styles(color: ColorChoice) -> crate::OutputStyles {
+pub fn resolve_styles(color: ColorChoice) -> crate::output::OutputStyles {
     match color {
         ColorChoice::Always => {
             owo_colors::set_override(true);
-            crate::OutputStyles::colorized()
+            crate::output::OutputStyles::colorized()
         }
         ColorChoice::Never => {
             owo_colors::set_override(false);
-            crate::OutputStyles::default()
+            crate::output::OutputStyles::default()
         }
         ColorChoice::Auto => {
             // supports-color handles NO_COLOR, FORCE_COLOR, isatty, CI, TERM=dumb
-            crate::OutputStyles::colorized()
+            crate::output::OutputStyles::colorized()
         }
     }
 }
@@ -1009,7 +1009,7 @@ pub async fn audit(
         }
     };
 
-    let report_output = ReportGenerator::generate(
+    let report_output = generate_report(
         &report,
         audit_args.format.clone().into(),
         Some(&audit_args.path),

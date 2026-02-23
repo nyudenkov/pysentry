@@ -765,13 +765,42 @@ impl SarifGenerator {
     }
 }
 
+use super::model::AuditReport;
+
+pub(crate) fn generate_sarif_report(
+    report: &AuditReport,
+    project_root: Option<&Path>,
+) -> std::result::Result<String, Box<dyn std::error::Error>> {
+    let root = project_root.unwrap_or_else(|| Path::new("."));
+    let mut generator = SarifGenerator::new(root);
+    Ok(generator.generate_report(
+        &report.matches,
+        &report.dependency_stats,
+        &report.database_stats,
+        &report.fix_analysis.fix_suggestions,
+        &report.warnings,
+        &report.maintenance_issues,
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output::model::test_helpers::create_test_report;
     use crate::types::Version;
     use crate::vulnerability::database::Vulnerability;
     use std::str::FromStr;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_generate_sarif_report() {
+        let report = create_test_report();
+        let output = generate_sarif_report(&report, Some(std::path::Path::new("."))).unwrap();
+        let sarif: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(sarif["version"], "2.1.0");
+        assert_eq!(sarif["runs"][0]["tool"]["driver"]["name"], "pysentry");
+        assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "GHSA-test-1234");
+    }
 
     fn create_test_vulnerability() -> Vulnerability {
         Vulnerability {

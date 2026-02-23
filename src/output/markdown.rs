@@ -1,0 +1,247 @@
+// SPDX-License-Identifier: MIT
+
+use super::model::AuditReport;
+use super::styles::{maintenance_icon, severity_icon};
+use crate::vulnerability::database::Severity;
+use std::fmt::Write;
+
+pub(crate) fn generate_markdown_report(
+    report: &AuditReport,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut output = String::new();
+    let summary = report.summary();
+
+    writeln!(output, "# 🛡️ pysentry report")?;
+    writeln!(output)?;
+
+    writeln!(output, "## 📊 Scan Summary")?;
+    writeln!(output)?;
+    writeln!(
+        output,
+        "- **Scanned:** {} packages",
+        summary.total_packages_scanned
+    )?;
+    writeln!(
+        output,
+        "- **Vulnerable:** {} packages",
+        summary.vulnerable_packages
+    )?;
+    writeln!(
+        output,
+        "- **Vulnerabilities:** {}",
+        summary.total_vulnerabilities
+    )?;
+    writeln!(output)?;
+
+    if !summary.severity_counts.is_empty() {
+        writeln!(output, "## 🚨 Severity Breakdown")?;
+        writeln!(output)?;
+        for severity in [
+            Severity::Critical,
+            Severity::High,
+            Severity::Medium,
+            Severity::Low,
+            Severity::Unknown,
+        ] {
+            if let Some(count) = summary.severity_counts.get(&severity) {
+                let icon = severity_icon(&severity);
+                writeln!(output, "- {icon} **{severity}:** {count}")?;
+            }
+        }
+        writeln!(output)?;
+    }
+
+    if report.fix_analysis.total_matches > 0 {
+        writeln!(output, "## 🔧 Fix Analysis")?;
+        writeln!(output)?;
+        writeln!(output, "- **Fixable:** {}", report.fix_analysis.fixable)?;
+        writeln!(output, "- **Unfixable:** {}", report.fix_analysis.unfixable)?;
+        writeln!(output)?;
+    }
+
+    if !report.warnings.is_empty() {
+        writeln!(output, "## ⚠️ Warnings")?;
+        writeln!(output)?;
+        for warning in &report.warnings {
+            writeln!(output, "- {warning}")?;
+        }
+        writeln!(output)?;
+    }
+
+    if !report.matches.is_empty() {
+        writeln!(output, "## 🐛 Vulnerabilities Found")?;
+        writeln!(output)?;
+
+        for (i, m) in report.matches.iter().enumerate() {
+            let icon = severity_icon(&m.vulnerability.severity);
+
+            let source_tag = if let Some(source) = &m.vulnerability.source {
+                format!(" *[source: {source}]*")
+            } else {
+                String::new()
+            };
+
+            let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
+                " ⚠️ **WITHDRAWN**"
+            } else {
+                ""
+            };
+
+            writeln!(
+                output,
+                "### {}. {} `{}`{}{}",
+                i + 1,
+                icon,
+                m.vulnerability.id,
+                withdrawn_tag,
+                source_tag
+            )?;
+            writeln!(output)?;
+
+            writeln!(
+                output,
+                "- **Package:** `{}` v`{}`",
+                m.package_name, m.installed_version
+            )?;
+            writeln!(output, "- **Severity:** {}", m.vulnerability.severity)?;
+
+            if let Some(cvss) = m.vulnerability.cvss_score {
+                writeln!(output, "- **CVSS Score:** {cvss:.1}")?;
+            }
+
+            if let Some(withdrawn_date) = &m.vulnerability.withdrawn {
+                writeln!(
+                    output,
+                    "- **⚠️ Withdrawn:** {}",
+                    withdrawn_date.format("%Y-%m-%d")
+                )?;
+            }
+
+            writeln!(output, "- **Summary:** {}", m.vulnerability.summary)?;
+
+            if let Some(description) = &m.vulnerability.description {
+                writeln!(output, "- **Description:**")?;
+                writeln!(output, "~~~")?;
+                writeln!(output, "{description}")?;
+                writeln!(output, "~~~")?;
+            }
+
+            if !m.vulnerability.fixed_versions.is_empty() {
+                let fixed_versions = m
+                    .vulnerability
+                    .fixed_versions
+                    .iter()
+                    .map(|v| format!("`{v}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(output, "- **Fixed in:** {fixed_versions}")?;
+            }
+
+            if !m.vulnerability.references.is_empty() {
+                writeln!(output, "- **References:**")?;
+                for ref_url in &m.vulnerability.references {
+                    if ref_url.starts_with("http") {
+                        writeln!(output, "  - <{ref_url}>")?;
+                    } else {
+                        writeln!(output, "  - {ref_url}")?;
+                    }
+                }
+            }
+
+            writeln!(output)?;
+        }
+    } else {
+        writeln!(output, "## ✅ No vulnerabilities found!")?;
+        writeln!(output)?;
+    }
+
+    // Maintenance issues section (PEP 792)
+    if !report.maintenance_issues.is_empty() {
+        writeln!(output, "## 🔧 Maintenance Issues (PEP 792)")?;
+        writeln!(output)?;
+
+        let maint_summary = report.maintenance_summary();
+        writeln!(
+            output,
+            "**Summary:** {} issues found ({} archived, {} deprecated, {} quarantined)",
+            maint_summary.total_issues,
+            maint_summary.archived_count,
+            maint_summary.deprecated_count,
+            maint_summary.quarantined_count
+        )?;
+        writeln!(output)?;
+
+        for (i, issue) in report.maintenance_issues.iter().enumerate() {
+            let icon = maintenance_icon(&issue.issue_type);
+            let status = issue.issue_type.to_string();
+
+            let dep_type = if issue.is_direct {
+                "direct"
+            } else {
+                "transitive"
+            };
+
+            writeln!(
+                output,
+                "### {}. {} **{}** `{}`",
+                i + 1,
+                icon,
+                status,
+                issue.package_name
+            )?;
+            writeln!(output)?;
+            writeln!(
+                output,
+                "- **Package:** `{}` v`{}`",
+                issue.package_name, issue.installed_version
+            )?;
+            writeln!(output, "- **Type:** {}", dep_type)?;
+            if let Some(reason) = &issue.reason {
+                writeln!(output, "- **Reason:** {}", reason)?;
+            }
+            writeln!(output)?;
+        }
+    }
+
+    if !report.fix_analysis.fix_suggestions.is_empty() {
+        writeln!(output, "## 💡 Fix Suggestions")?;
+        writeln!(output)?;
+
+        for suggestion in &report.fix_analysis.fix_suggestions {
+            writeln!(output, "- {suggestion}")?;
+        }
+        writeln!(output)?;
+    }
+
+    writeln!(output, "---")?;
+    writeln!(
+        output,
+        "*Scan completed at {}*",
+        report.scan_time.format("%Y-%m-%d %H:%M:%S UTC")
+    )?;
+
+    Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::model::test_helpers::create_test_report;
+
+    #[test]
+    fn test_markdown_report_generation() {
+        let report = create_test_report();
+        let output = generate_markdown_report(&report).unwrap();
+
+        assert!(output.contains("# 🛡️ pysentry report"));
+        assert!(output.contains("## 📊 Scan Summary"));
+        assert!(output.contains("- **Scanned:** 10 packages"));
+        assert!(output.contains("### 1. 🟠 `GHSA-test-1234`"));
+        assert!(output.contains("- **Package:** `test-package`"));
+        assert!(output.contains("- **Severity:** HIGH"));
+        assert!(output.contains("- **Description:**"));
+        assert!(output.contains("~~~"));
+        assert!(output.contains("A test vulnerability for unit testing"));
+        assert!(output.contains("*Scan completed at"));
+    }
+}
