@@ -319,6 +319,16 @@ impl SarifGenerator {
                 rule["properties"]["cvss_score"] = json!(cvss);
             }
 
+            // Add CVSS version if available
+            if let Some(cvss_version) = m.vulnerability.cvss_version {
+                rule["properties"]["cvss_version"] = json!(cvss_version);
+            }
+
+            // Add source if available
+            if let Some(source) = &m.vulnerability.source {
+                rule["properties"]["source"] = json!(source);
+            }
+
             // Add withdrawal information if available
             if let Some(withdrawn_date) = &m.vulnerability.withdrawn {
                 rule["properties"]["withdrawn"] = json!(withdrawn_date.to_rfc3339());
@@ -336,6 +346,11 @@ impl SarifGenerator {
             }
             if let Some(modified) = &m.vulnerability.modified {
                 rule["properties"]["modified_date"] = json!(modified.to_string());
+            }
+
+            // Add aliases if available
+            if !m.vulnerability.aliases.is_empty() {
+                rule["properties"]["aliases"] = json!(&m.vulnerability.aliases);
             }
 
             self.rules.push(rule);
@@ -587,6 +602,16 @@ impl SarifGenerator {
             // Add CVSS score if available
             if let Some(cvss) = m.vulnerability.cvss_score {
                 result["properties"]["cvss_score"] = json!(cvss);
+            }
+
+            // Add CVSS version if available
+            if let Some(cvss_version) = m.vulnerability.cvss_version {
+                result["properties"]["cvss_version"] = json!(cvss_version);
+            }
+
+            // Add source if available
+            if let Some(source) = &m.vulnerability.source {
+                result["properties"]["source"] = json!(source);
             }
 
             // Add fixed versions if available

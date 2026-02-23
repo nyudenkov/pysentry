@@ -134,6 +134,7 @@ pub struct AuditSummary {
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::*;
+    use crate::maintenance::{MaintenanceIssue, MaintenanceIssueType};
     use crate::parsers::DependencyStats;
     use crate::types::{PackageName, Version};
     use crate::vulnerability::database::{Severity, Vulnerability, VulnerabilityMatch};
@@ -199,6 +200,107 @@ pub(crate) mod test_helpers {
             fix_analysis,
             vec!["Test warning".to_string()],
             Vec::new(),
+        )
+    }
+
+    /// Extended fixture with transitive deps, CVSS version data, and a maintenance issue.
+    ///
+    /// Used to test branches that `create_test_report` cannot reach:
+    /// - `[transitive]` dependency tag
+    /// - `cvss_version: Some(n)` version tag formatting
+    /// - maintenance issue serialization (including the lowercase serde path)
+    pub fn create_test_report_with_extras() -> AuditReport {
+        let dependency_stats = DependencyStats {
+            total_packages: 10,
+            direct_packages: 5,
+            transitive_packages: 5,
+            by_type: HashMap::new(),
+            by_source: {
+                let mut map = HashMap::new();
+                map.insert("Registry".to_string(), 10);
+                map
+            },
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 100,
+            total_packages: 50,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let direct_vulnerability = Vulnerability {
+            id: "GHSA-test-1234".to_string(),
+            summary: "Direct vulnerability".to_string(),
+            description: None,
+            severity: Severity::High,
+            affected_versions: vec![],
+            fixed_versions: vec![],
+            references: vec![],
+            cvss_score: Some(7.5),
+            cvss_version: None,
+            published: None,
+            modified: None,
+            source: None,
+            withdrawn: None,
+            aliases: vec![],
+        };
+
+        let transitive_vulnerability = Vulnerability {
+            id: "GHSA-trans-5678".to_string(),
+            summary: "Transitive vulnerability".to_string(),
+            description: None,
+            severity: Severity::Medium,
+            affected_versions: vec![],
+            fixed_versions: vec![],
+            references: vec![],
+            cvss_score: Some(5.5),
+            cvss_version: Some(3),
+            published: None,
+            modified: None,
+            source: None,
+            withdrawn: None,
+            aliases: vec![],
+        };
+
+        let matches = vec![
+            VulnerabilityMatch {
+                package_name: PackageName::from_str("test-package").unwrap(),
+                installed_version: Version::from_str("1.0.0").unwrap(),
+                vulnerability: direct_vulnerability,
+                is_direct: true,
+            },
+            VulnerabilityMatch {
+                package_name: PackageName::from_str("transitive-package").unwrap(),
+                installed_version: Version::from_str("0.9.0").unwrap(),
+                vulnerability: transitive_vulnerability,
+                is_direct: false,
+            },
+        ];
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 2,
+            fixable: 0,
+            unfixable: 2,
+            fix_suggestions: vec![],
+        };
+
+        let maintenance_issue = MaintenanceIssue::new(
+            PackageName::from_str("old-lib").unwrap(),
+            Version::from_str("2.0.0").unwrap(),
+            MaintenanceIssueType::Deprecated,
+            Some("Use new-lib instead".to_string()),
+            true,
+            Some("requirements.txt".to_string()),
+        );
+
+        AuditReport::new(
+            dependency_stats,
+            database_stats,
+            matches,
+            fix_analysis,
+            vec![],
+            vec![maintenance_issue],
         )
     }
 }

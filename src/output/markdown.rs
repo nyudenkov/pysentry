@@ -103,10 +103,17 @@ pub(crate) fn generate_markdown_report(
                 "- **Package:** `{}` v`{}`",
                 m.package_name, m.installed_version
             )?;
+            let dep_type = if m.is_direct { "direct" } else { "transitive" };
+            writeln!(output, "- **Dependency:** {dep_type}")?;
             writeln!(output, "- **Severity:** {}", m.vulnerability.severity)?;
 
             if let Some(cvss) = m.vulnerability.cvss_score {
-                writeln!(output, "- **CVSS Score:** {cvss:.1}")?;
+                let version_tag = m
+                    .vulnerability
+                    .cvss_version
+                    .map(|v| format!(" (v{v})"))
+                    .unwrap_or_default();
+                writeln!(output, "- **CVSS Score:** {cvss:.1}{version_tag}")?;
             }
 
             if let Some(withdrawn_date) = &m.vulnerability.withdrawn {
@@ -226,7 +233,7 @@ pub(crate) fn generate_markdown_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::model::test_helpers::create_test_report;
+    use crate::output::model::test_helpers::{create_test_report, create_test_report_with_extras};
 
     #[test]
     fn test_markdown_report_generation() {
@@ -238,10 +245,43 @@ mod tests {
         assert!(output.contains("- **Scanned:** 10 packages"));
         assert!(output.contains("### 1. 🟠 `GHSA-test-1234`"));
         assert!(output.contains("- **Package:** `test-package`"));
+        // Dependency type must appear (test data is_direct = true)
+        assert!(output.contains("- **Dependency:** direct"));
         assert!(output.contains("- **Severity:** HIGH"));
+        // CVSS score without version tag (test data cvss_version = None)
+        assert!(output.contains("- **CVSS Score:** 7.5"));
         assert!(output.contains("- **Description:**"));
         assert!(output.contains("~~~"));
         assert!(output.contains("A test vulnerability for unit testing"));
         assert!(output.contains("*Scan completed at"));
+    }
+
+    #[test]
+    fn test_markdown_transitive_and_cvss_version() {
+        let report = create_test_report_with_extras();
+        let output = generate_markdown_report(&report).unwrap();
+
+        // Both dependency type labels must appear
+        assert!(output.contains("- **Dependency:** direct"));
+        assert!(output.contains("- **Dependency:** transitive"));
+
+        // Transitive dep has cvss_version: Some(3) → version tag must appear
+        assert!(output.contains("- **CVSS Score:** 5.5 (v3)"));
+
+        // Direct dep has cvss_version: None → plain score, no version tag
+        assert!(output.contains("- **CVSS Score:** 7.5"));
+        assert!(!output.contains("- **CVSS Score:** 7.5 (v"));
+    }
+
+    #[test]
+    fn test_markdown_maintenance_section() {
+        let report = create_test_report_with_extras();
+        let output = generate_markdown_report(&report).unwrap();
+
+        assert!(output.contains("## 🔧 Maintenance Issues (PEP 792)"));
+        assert!(output.contains("old-lib"));
+        assert!(output.contains("Use new-lib instead"));
+        // Maintenance issue is_direct = true → "direct" label
+        assert!(output.contains("- **Type:** direct"));
     }
 }

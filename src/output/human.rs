@@ -99,15 +99,21 @@ pub(crate) fn generate_human_report(
                 } else {
                     String::new()
                 };
+                let dep_type = if m.is_direct {
+                    "[direct]"
+                } else {
+                    "[transitive]"
+                };
                 writeln!(
                     output,
-                    "  {}{}  {} v{}  [{}]",
+                    "  {}{}  {} v{}  [{}] {}",
                     m.vulnerability.id.style(styles.vuln_id),
                     withdrawn_tag,
                     m.package_name.to_string().style(styles.package),
                     m.installed_version,
                     format!("{}", m.vulnerability.severity)
                         .style(*styles.severity(&m.vulnerability.severity)),
+                    dep_type.style(styles.dimmed),
                 )?;
             }
             writeln!(output)?;
@@ -128,9 +134,15 @@ pub(crate) fn generate_human_report(
                     String::new()
                 };
 
+                let dep_type = if m.is_direct {
+                    "[direct]"
+                } else {
+                    "[transitive]"
+                };
+
                 writeln!(
                     output,
-                    " {}. {}{}  {} v{}  [{}]{}",
+                    " {}. {}{}  {} v{}  [{}] {}{}",
                     i + 1,
                     m.vulnerability.id.style(styles.vuln_id),
                     withdrawn_tag,
@@ -138,6 +150,7 @@ pub(crate) fn generate_human_report(
                     m.installed_version,
                     format!("{}", m.vulnerability.severity)
                         .style(*styles.severity(&m.vulnerability.severity)),
+                    dep_type.style(styles.dimmed),
                     source_tag
                 )?;
 
@@ -146,6 +159,20 @@ pub(crate) fn generate_human_report(
                     if let Some(description) = &m.vulnerability.description {
                         if description != &m.vulnerability.summary {
                             writeln!(output, "    {description}")?;
+                        }
+                    }
+                    if let Some(cvss) = m.vulnerability.cvss_score {
+                        let version_tag = m
+                            .vulnerability
+                            .cvss_version
+                            .map(|v| format!(" (v{v})"))
+                            .unwrap_or_default();
+                        writeln!(output, "    CVSS: {cvss:.1}{version_tag}")?;
+                    }
+                    if !m.vulnerability.references.is_empty() {
+                        writeln!(output, "    References:")?;
+                        for ref_url in &m.vulnerability.references {
+                            writeln!(output, "      {ref_url}")?;
                         }
                     }
                 } else if !m.vulnerability.summary.is_empty() {
@@ -323,7 +350,7 @@ pub(crate) fn generate_human_report(
 mod tests {
     use super::*;
     use crate::maintenance::{MaintenanceIssue, MaintenanceIssueType};
-    use crate::output::model::test_helpers::create_test_report;
+    use crate::output::model::test_helpers::{create_test_report, create_test_report_with_extras};
     use crate::parsers::DependencyStats;
     use crate::types::{PackageName, Version};
     use crate::vulnerability::matcher::{DatabaseStats, FixAnalysis, FixSuggestion};
@@ -333,8 +360,8 @@ mod tests {
     #[test]
     fn test_human_report_generation() {
         let report = create_test_report();
-        let output = generate_human_report(&report, DetailLevel::Normal, &OutputStyles::default())
-            .unwrap();
+        let output =
+            generate_human_report(&report, DetailLevel::Normal, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(output.contains("SUMMARY") && output.contains("10 packages scanned"));
@@ -343,6 +370,8 @@ mod tests {
         assert!(output.contains("test-package"));
         assert!(output.contains("VULNERABILITIES"));
         assert!(output.contains("HIGH"));
+        // Dependency type tag must appear on every vulnerability entry
+        assert!(output.contains("[direct]"));
     }
 
     #[test]
@@ -421,6 +450,8 @@ mod tests {
         assert!(!output.contains("→ Fix:"));
         // No numbering
         assert!(!output.contains(" 1. "));
+        // Dependency type tag must appear in compact mode
+        assert!(output.contains("[direct]"));
     }
 
     #[test]
@@ -495,9 +526,12 @@ mod tests {
             Vec::new(),
         );
 
-        let output =
-            generate_human_report(&clean_report, DetailLevel::Compact, &OutputStyles::default())
-                .unwrap();
+        let output = generate_human_report(
+            &clean_report,
+            DetailLevel::Compact,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(!output.contains("Run pysentry --detailed"));
     }
@@ -576,12 +610,56 @@ mod tests {
         // Header and footer are not suppressed in detailed mode
         assert!(output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(output.contains("Scan completed"));
+
+        // Dependency type tag must appear in detailed mode
+        assert!(output.contains("[direct]"));
+
+        // CVSS score must appear in detailed mode (test data has cvss_score: Some(7.5))
+        assert!(output.contains("CVSS: 7.5"));
+
+        // References must appear in detailed mode (test data has one reference)
+        assert!(output.contains("References:"));
+        assert!(output.contains("https://example.com/advisory"));
+    }
+
+    #[test]
+    fn test_detailed_report_cvss_version_tag() {
+        let report = create_test_report_with_extras();
+        let output =
+            generate_human_report(&report, DetailLevel::Detailed, &OutputStyles::default())
+                .unwrap();
+
+        // Transitive dep has cvss_version: Some(3) → version tag must appear
+        assert!(output.contains("CVSS: 5.5 (v3)"));
+        // Direct dep has cvss_version: None → plain score, no version tag
+        assert!(output.contains("CVSS: 7.5"));
+        assert!(!output.contains("CVSS: 7.5 (v"));
+    }
+
+    #[test]
+    fn test_normal_report_transitive_tag() {
+        let report = create_test_report_with_extras();
+        let output =
+            generate_human_report(&report, DetailLevel::Normal, &OutputStyles::default()).unwrap();
+
+        assert!(output.contains("[direct]"));
+        assert!(output.contains("[transitive]"));
+    }
+
+    #[test]
+    fn test_compact_report_transitive_tag() {
+        let report = create_test_report_with_extras();
+        let output =
+            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+
+        assert!(output.contains("[direct]"));
+        assert!(output.contains("[transitive]"));
     }
 
     #[test]
     fn test_compact_report_withdrawn_tag() {
-        use chrono::Utc;
         use crate::vulnerability::database::{Severity, Vulnerability, VulnerabilityMatch};
+        use chrono::Utc;
 
         let dependency_stats = DependencyStats {
             total_packages: 3,

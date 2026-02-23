@@ -11,9 +11,9 @@ use std::sync::Once;
 use crate::dependency::resolvers::ResolverRegistry;
 use crate::logging::AppVerbosity;
 use crate::notifications::NotificationClient;
+use crate::output::generate_report;
 use crate::parsers::{requirements::RequirementsParser, DependencyStats};
 use crate::types::{ResolverType, Version};
-use crate::output::generate_report;
 use crate::{
     AuditCache, AuditReport, Config, ConfigLoader, DependencyScanner, MatcherConfig, Severity,
     VulnerabilityDatabase, VulnerabilityMatch, VulnerabilityMatcher, VulnerabilitySource,
@@ -1858,7 +1858,10 @@ mod tests {
             true,
         );
         assert!(fail, "HIGH meets fail_on=Medium threshold");
-        assert!(display.is_empty(), "HIGH is below display severity=Critical");
+        assert!(
+            display.is_empty(),
+            "HIGH is below display severity=Critical"
+        );
     }
 
     // severity=Critical, fail_on=High, vuln=LOW
@@ -1889,7 +1892,11 @@ mod tests {
             true,
         );
         assert!(!fail, "MEDIUM does not meet fail_on=High threshold");
-        assert_eq!(display.len(), 1, "MEDIUM passes display filter severity=Low");
+        assert_eq!(
+            display.len(),
+            1,
+            "MEDIUM passes display filter severity=Low"
+        );
     }
 
     // severity=High, fail_on=High, vuln=HIGH
