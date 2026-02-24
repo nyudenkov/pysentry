@@ -236,13 +236,17 @@ pub(crate) fn generate_markdown_report(
         builder.push_record(["Package", "Fix", "Vulnerabilities"]);
         for (package, fixes) in &package_fixes {
             let (fix_str, count_str) = if fixes.len() == 1 {
-                let Some(fix) = fixes.first() else { continue; };
+                let Some(fix) = fixes.first() else {
+                    continue;
+                };
                 (
                     format!("{} → {}", fix.current_version, fix.suggested_version),
                     "1 vulnerability".to_string(),
                 )
             } else {
-                let Some(best) = fixes.last() else { continue; };
+                let Some(best) = fixes.last() else {
+                    continue;
+                };
                 (
                     format!("{} → {}", best.current_version, best.suggested_version),
                     format!("fixes {} vulnerabilities", fixes.len()),

@@ -312,7 +312,12 @@ pub(crate) fn generate_human_report(
                         count
                     )
                 };
-                writeln!(output, "  {}: {}", package.style(styles.package), version_info)?;
+                writeln!(
+                    output,
+                    "  {}: {}",
+                    package.style(styles.package),
+                    version_info
+                )?;
             }
         } else {
             writeln!(output, "{}", "FIX SUGGESTIONS".style(styles.header))?;
@@ -351,12 +356,20 @@ pub(crate) fn generate_human_report(
             builder.push_record(["Status", "Package", "Version", "Type"]);
             for issue in &report.maintenance_issues {
                 let status_text = issue.issue_type.to_string();
-                let dep_type = if issue.is_direct { "direct" } else { "transitive" };
+                let dep_type = if issue.is_direct {
+                    "direct"
+                } else {
+                    "transitive"
+                };
                 builder.push_record([
                     status_text
                         .style(*styles.maintenance(&issue.issue_type))
                         .to_string(),
-                    issue.package_name.to_string().style(styles.package).to_string(),
+                    issue
+                        .package_name
+                        .to_string()
+                        .style(styles.package)
+                        .to_string(),
                     format!("v{}", issue.installed_version),
                     dep_type.style(styles.dimmed).to_string(),
                 ]);
@@ -368,7 +381,11 @@ pub(crate) fn generate_human_report(
             writeln!(output, "{}", "MAINTENANCE".style(styles.header))?;
             for issue in &report.maintenance_issues {
                 let status_text = issue.issue_type.to_string();
-                let dep_type = if issue.is_direct { "direct" } else { "transitive" };
+                let dep_type = if issue.is_direct {
+                    "direct"
+                } else {
+                    "transitive"
+                };
                 writeln!(
                     output,
                     "  {}  {} v{}  {}",
@@ -465,8 +482,13 @@ mod tests {
     #[test]
     fn test_human_report_generation() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(output.contains("SUMMARY") && output.contains("10 packages scanned"));
@@ -514,16 +536,26 @@ mod tests {
 
         assert!(!report.has_vulnerabilities());
 
-        let output =
-            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
         assert!(output.contains("No vulnerabilities found"));
     }
 
     #[test]
     fn test_compact_report_no_header_no_footer() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(!output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(!output.contains("Scan completed"));
@@ -532,8 +564,13 @@ mod tests {
     #[test]
     fn test_compact_report_contains_summary() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("SUMMARY"));
         assert!(output.contains("10 packages scanned"));
@@ -543,8 +580,13 @@ mod tests {
     #[test]
     fn test_compact_report_condensed_vulns() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Vuln ID should be present
         assert!(output.contains("GHSA-test-1234"));
@@ -564,8 +606,13 @@ mod tests {
     #[test]
     fn test_compact_report_no_fix_suggestions_when_empty() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(!output.contains("FIX SUGGESTIONS"));
     }
@@ -580,8 +627,13 @@ mod tests {
             vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
         }];
 
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("FIX SUGGESTIONS"));
         assert!(output.contains("requests"));
@@ -594,8 +646,13 @@ mod tests {
     #[test]
     fn test_compact_report_hint_line() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("Run pysentry --detailed for full descriptions"));
     }
@@ -686,8 +743,13 @@ mod tests {
             vec![maintenance_issue],
         );
 
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Compact mode shows per-issue one-liners under MAINTENANCE header
         assert!(output.contains("MAINTENANCE"));
@@ -707,9 +769,13 @@ mod tests {
     #[test]
     fn test_detailed_report_shows_full_description() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Detailed, DisplayMode::Table, &OutputStyles::default())
-                .unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Detailed,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Both summary and the distinct description text must appear
         assert!(output.contains("Test vulnerability"));
@@ -733,9 +799,13 @@ mod tests {
     #[test]
     fn test_detailed_report_cvss_version_tag() {
         let report = create_test_report_with_extras();
-        let output =
-            generate_human_report(&report, DetailLevel::Detailed, DisplayMode::Table, &OutputStyles::default())
-                .unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Detailed,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Transitive dep has cvss_version: Some(3) → version tag must appear
         assert!(output.contains("CVSS: 5.5 (v3)"));
@@ -747,8 +817,13 @@ mod tests {
     #[test]
     fn test_normal_report_transitive_tag() {
         let report = create_test_report_with_extras();
-        let output =
-            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("[direct]"));
         assert!(output.contains("[transitive]"));
@@ -757,8 +832,13 @@ mod tests {
     #[test]
     fn test_compact_report_transitive_tag() {
         let report = create_test_report_with_extras();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // In compact tabled mode, values appear without brackets
         assert!(output.contains("direct"));
@@ -768,8 +848,13 @@ mod tests {
     #[test]
     fn test_compact_table_has_headers() {
         let report = create_test_report();
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("ID"));
         assert!(output.contains("Package"));
@@ -788,8 +873,13 @@ mod tests {
             vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
         }];
 
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("FIX SUGGESTIONS"));
         assert!(output.contains("Package"));
@@ -818,18 +908,34 @@ mod tests {
             },
         ];
 
-        let output1 =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
-        let output2 =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output1 = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+        let output2 = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Output must be identical across multiple calls (deterministic)
         assert_eq!(output1, output2);
         // Multi-CVE: the maximum fix version must be shown (covers all vulnerabilities)
         assert!(output1.contains("3.0.0"), "Maximum fix version must appear");
         // The lower version is not shown separately when a higher fix covers it
-        assert!(!output1.contains("2.4.0"), "Minimum version must not appear when a higher fix exists");
-        assert!(output1.contains("fixes 2 vulnerabilities"), "Count of addressed vulnerabilities must appear");
+        assert!(
+            !output1.contains("2.4.0"),
+            "Minimum version must not appear when a higher fix exists"
+        );
+        assert!(
+            output1.contains("fixes 2 vulnerabilities"),
+            "Count of addressed vulnerabilities must appear"
+        );
     }
 
     #[test]
@@ -875,8 +981,13 @@ mod tests {
             vec![maintenance_issue],
         );
 
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("MAINTENANCE"));
         assert!(output.contains("Status"));
@@ -950,8 +1061,13 @@ mod tests {
             vec![],
         );
 
-        let output =
-            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         // Description must be truncated with "..." suffix (not the full 200 chars)
         assert!(output.contains("..."));
@@ -1019,8 +1135,13 @@ mod tests {
             vec![],
         );
 
-        let output =
-            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
 
         assert!(output.contains("GHSA-withdrawn-0001"));
         assert!(output.contains("WITHDRAWN"));

@@ -897,7 +897,6 @@ impl SarifGenerator {
         warnings: &[String],
         start_time: DateTime<Utc>,
     ) -> Result<Sarif> {
-
         // originalUriBaseIds enables portable path resolution across CI environments.
         // SARIF Errata 01 §3.14.14 requires a file:// URI with trailing slash here.
         let project_root_uri = format!("file://{}/", self.project_root.to_string_lossy());
