@@ -36,7 +36,10 @@ async fn run() -> Result<u8> {
                 }
             };
 
-            let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+            let mut http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+            if merged_audit_args.is_quiet() {
+                http_config.show_progress = false;
+            }
             let vulnerability_ttl = config
                 .as_ref()
                 .map(|c| c.cache.vulnerability_ttl)

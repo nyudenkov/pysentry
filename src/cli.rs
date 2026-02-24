@@ -235,6 +235,10 @@ pub struct AuditArgs {
     #[command(flatten)]
     pub verbosity: AppVerbosity,
 
+    /// Set to true when `output.quiet = true` is read from config (not a CLI arg).
+    #[arg(skip)]
+    pub config_quiet: bool,
+
     /// Show detailed vulnerability descriptions (full text instead of truncated)
     #[arg(long, conflicts_with = "compact")]
     pub detailed: bool,
@@ -308,7 +312,7 @@ impl AuditArgs {
 
     /// Check if quiet mode is enabled (either via -q flag or config).
     pub fn is_quiet(&self) -> bool {
-        crate::logging::is_quiet(&self.verbosity)
+        self.config_quiet || crate::logging::is_quiet(&self.verbosity)
     }
 
     /// Check if verbose mode is enabled (via -v flags or config).
@@ -528,9 +532,10 @@ impl AuditArgs {
         ignore_while_no_fix.extend(config.ignore.while_no_fix.clone());
         merged.ignore_while_no_fix = ignore_while_no_fix;
 
-        // Note: verbosity is controlled via CLI flags (-v/-q) and RUST_LOG env var.
-        // Config file output.quiet and output.verbose are respected for backward compatibility
-        // but CLI flags always take precedence through the verbosity struct.
+        // CLI -v flag overrides config quiet. Only apply config quiet when not explicitly verbose.
+        if config.output.quiet && !crate::logging::is_verbose(&self.verbosity) {
+            merged.config_quiet = true;
+        }
 
         // Merge maintenance (PEP 792) settings
         if !self.no_maintenance_check && !config.maintenance.enabled {
@@ -2010,5 +2015,57 @@ mod tests {
         config.defaults.display = "text".to_string();
         let merged = args.merge_with_config(&config);
         assert_eq!(merged.display_mode(), crate::DisplayMode::Table);
+    }
+
+    #[test]
+    fn test_config_quiet_applied_when_no_cli_verbosity() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.output.quiet = true;
+        let merged = args.merge_with_config(&config);
+        assert!(merged.config_quiet);
+        assert!(merged.is_quiet());
+    }
+
+    #[test]
+    fn test_config_quiet_not_applied_by_default() {
+        let args = parse_audit_args(&["."]);
+        let config = crate::config::Config::default(); // output.quiet = false
+        let merged = args.merge_with_config(&config);
+        assert!(!merged.config_quiet);
+        assert!(!merged.is_quiet());
+    }
+
+    #[test]
+    fn test_verbose_flag_overrides_config_quiet() {
+        let args = parse_audit_args(&["-v", "."]);
+        let mut config = crate::config::Config::default();
+        config.output.quiet = true;
+        let merged = args.merge_with_config(&config);
+        assert!(!merged.config_quiet); // config_quiet not applied when -v is present
+        assert!(!merged.is_quiet()); // not quiet overall
+    }
+
+    #[test]
+    fn test_sources_merge_from_config() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.sources.enabled = vec!["pypa".to_string()];
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.sources, vec!["pypa".to_string()]);
+        let resolved = merged.resolve_sources().unwrap();
+        assert_eq!(resolved, vec![VulnerabilitySourceType::Pypa]);
+    }
+
+    #[test]
+    fn test_sources_cli_overrides_config() {
+        let args = parse_audit_args(&["--sources", "osv", "."]);
+        let mut config = crate::config::Config::default();
+        config.sources.enabled = vec!["pypa".to_string()];
+        let merged = args.merge_with_config(&config);
+        // CLI --sources takes precedence; config sources are not applied
+        assert_eq!(merged.sources, vec!["osv".to_string()]);
+        let resolved = merged.resolve_sources().unwrap();
+        assert_eq!(resolved, vec![VulnerabilitySourceType::Osv]);
     }
 }

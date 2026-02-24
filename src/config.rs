@@ -41,6 +41,9 @@ pub struct Config {
     /// Remote notifications configuration
     #[serde(default)]
     pub notifications: NotificationsConfig,
+
+    #[serde(default)]
+    pub output: OutputConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,6 +191,12 @@ impl Default for NotificationsConfig {
 
 fn default_notifications_enabled() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OutputConfig {
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 /// Tracks where the configuration was loaded from
@@ -624,6 +633,7 @@ impl Default for Config {
             http: HttpConfig::default(),
             maintenance: MaintenanceConfig::default(),
             notifications: NotificationsConfig::default(),
+            output: OutputConfig::default(),
         }
     }
 }
@@ -748,7 +758,7 @@ fn default_http_retry_max_backoff() -> u64 {
     60
 }
 fn default_http_show_progress() -> bool {
-    true
+    false
 }
 
 // Maintenance config defaults (PEP 792)
@@ -762,7 +772,7 @@ fn default_maintenance_forbid_deprecated() -> bool {
     false
 }
 fn default_maintenance_forbid_quarantined() -> bool {
-    false
+    true
 }
 fn default_maintenance_forbid_unmaintained() -> bool {
     false
