@@ -29,6 +29,7 @@ fail_on = "high"
 scope = "all"
 direct_only = false
 no_ci_detect = false
+display = "table"
 
 [sources]
 enabled = ["pypa", "osv"]
@@ -60,7 +61,10 @@ connect_timeout = 30
 max_retries = 3
 retry_initial_backoff = 1
 retry_max_backoff = 60
-show_progress = true
+show_progress = false
+
+[output]
+quiet = false
 ```
 
 ## pyproject.toml Configuration
@@ -81,6 +85,7 @@ fail_on = "high"
 scope = "main"
 direct_only = false
 no_ci_detect = false
+display = "table"
 
 [tool.pysentry.sources]
 enabled = ["pypa", "osv"]
@@ -110,6 +115,9 @@ cache_ttl = 1
 timeout = 120
 connect_timeout = 30
 max_retries = 3
+
+[tool.pysentry.output]
+quiet = false
 ```
 
 **Benefits of pyproject.toml configuration:**
@@ -132,6 +140,7 @@ max_retries = 3
 | `direct_only` | bool | Only check direct dependencies | `false` |
 | `detailed` | bool | Enable detailed output with full vulnerability descriptions | `false` |
 | `compact` | bool | Compact output: summary + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
+| `display` | string | Output display style for compact mode: `text` or `table` | `table` |
 | `include_withdrawn` | bool | Include withdrawn vulnerabilities in results | `false` |
 | `no_ci_detect` | bool | Disable automatic CI environment detection | `false` |
 
@@ -167,6 +176,12 @@ max_retries = 3
 | `ids` | array | Vulnerability IDs to always ignore | `[]` |
 | `while_no_fix` | array | Vulnerability IDs to ignore while no fix exists | `[]` |
 
+### `[output]`
+
+| Option | Type | Description | Default |
+|--------|------|-------------|---------|
+| `quiet` | bool | Suppress all output (equivalent to `--quiet`) | `false` |
+
 ### `[maintenance]`
 
 | Option | Type | Description | Default |
@@ -174,7 +189,7 @@ max_retries = 3
 | `enabled` | bool | Enable PEP 792 checks | `true` |
 | `forbid_archived` | bool | Fail on archived packages | `false` |
 | `forbid_deprecated` | bool | Fail on deprecated packages | `false` |
-| `forbid_quarantined` | bool | Fail on quarantined packages | `false` |
+| `forbid_quarantined` | bool | Fail on quarantined packages | `true` |
 | `forbid_unmaintained` | bool | Fail on any unmaintained packages | `false` |
 | `check_direct_only` | bool | Only check direct dependencies | `false` |
 | `cache_ttl` | int | Maintenance status cache TTL in hours | `1` |
@@ -188,7 +203,7 @@ max_retries = 3
 | `max_retries` | int | Maximum retry attempts | `3` |
 | `retry_initial_backoff` | int | Initial retry backoff in seconds | `1` |
 | `retry_max_backoff` | int | Maximum retry backoff in seconds | `60` |
-| `show_progress` | bool | Show download progress | `true` |
+| `show_progress` | bool | Show download progress | `false` |
 
 ## Creating a Configuration File
 
