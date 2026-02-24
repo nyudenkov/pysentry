@@ -29,8 +29,19 @@ PYSENTRY_CONFIG=/path/to/pyproject.toml pysentry
 
 ```bash
 # Run with only CLI arguments, ignore all config files
-PYSENTRY_NO_CONFIG=1 pysentry --severity high
+PYSENTRY_NO_CONFIG=1 pysentry --fail-on high
 ```
+
+## Color Control
+
+PySentry respects standard terminal color environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `NO_COLOR` | Disable color output. Any value (including empty string) disables ANSI colors. See [no-color.org](https://no-color.org) |
+| `FORCE_COLOR` | Force color output even when stdout is not a terminal |
+
+These variables are handled automatically when `--color auto` (the default). They have no effect when `--color always` or `--color never` is explicitly set.
 
 ## RUST_LOG for Debugging
 

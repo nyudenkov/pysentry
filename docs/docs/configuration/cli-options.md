@@ -15,6 +15,7 @@ Complete reference for all PySentry command line options.
 | `-o`, `--output` | Output file path | stdout |
 | `-v`, `--verbose` | Increase verbosity: `-v` (warn), `-vv` (info), `-vvv` (debug), `-vvvv` (trace) | error level |
 | `-q`, `--quiet` | Suppress all output | `false` |
+| `--color` | Color output: `auto`, `always`, `never`. `auto` respects `NO_COLOR`, `FORCE_COLOR`, CI, and terminal detection | `auto` |
 | `--config` | Custom configuration file path | Auto-discovered |
 | `--no-config` | Disable configuration file loading | `false` |
 | `--include-withdrawn` | Include withdrawn vulnerabilities | `false` |
@@ -25,17 +26,22 @@ Complete reference for all PySentry command line options.
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--severity` | Minimum severity: `low`, `medium`, `high`, `critical` | `low` |
+| `--severity` | **Deprecated** (will be removed in v0.5). Minimum severity to display in report | `low` |
 | `--fail-on` | Fail (exit non-zero) on vulnerabilities >= severity | `medium` |
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
 | `--direct-only` | Check only direct dependencies | `false` |
 | `--detailed` | Show full vulnerability descriptions (summary + full text) | `false` |
 | `--compact` | Compact output: summary line + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
+| `--display` | Output display style: `text` or `table`. Applies to compact mode only | `table` |
 | `--no-fail-on-unknown` | Don't fail on vulnerabilities with unknown severity | `false` |
 
 ::: note
 `--compact` and `--detailed` are mutually exclusive. Using both together will cause an error.
+:::
+
+:::note
+`--severity` is a post-hoc **display filter only**. It never affects which vulnerabilities are evaluated against `--fail-on`. For example, with `--severity high --fail-on medium`, medium+ vulnerabilities are still evaluated for exit-code purposes, but only high+ are shown in the report. Use `--fail-on` to control exit behavior; `--severity` will be removed in v0.5.
 :::
 
 ## Ignore Options
@@ -69,7 +75,7 @@ Complete reference for all PySentry command line options.
 | `--no-maintenance-check` | Disable PEP 792 project status checks | `false` |
 | `--forbid-archived` | Fail on archived packages | `false` |
 | `--forbid-deprecated` | Fail on deprecated packages | `false` |
-| `--forbid-quarantined` | Fail on quarantined packages (malware/compromised) | `false` |
+| `--forbid-quarantined` | Fail on quarantined packages (malware/compromised) | `true` |
 | `--forbid-unmaintained` | Fail on any unmaintained packages | `false` |
 | `--maintenance-direct-only` | Only check direct dependencies for maintenance status | `false` |
 
@@ -144,9 +150,6 @@ pysentry --format json --output results.json
 ### Filtering
 
 ```bash
-# Only show high and critical vulnerabilities
-pysentry --severity high
-
 # Only fail on critical vulnerabilities
 pysentry --fail-on critical
 
@@ -193,11 +196,27 @@ pysentry --resolver uv
 # Default output: summary + one-liner per vulnerability + fix suggestions
 pysentry
 
-# Compact output: summary + vulnerability IDs only (ideal for pre-commit hooks)
+# Compact output with table layout (default)
 pysentry --compact
+
+# Compact output with traditional text layout
+pysentry --compact --display text
 
 # Detailed output: full vulnerability descriptions included
 pysentry --detailed
+```
+
+### Color Control
+
+```bash
+# Auto-detect colors from terminal (default)
+pysentry --color auto
+
+# Force colors even when piping to a file or CI
+pysentry --color always
+
+# Disable colors entirely (same effect as NO_COLOR=1)
+pysentry --color never
 ```
 
 ### Maintenance Checks

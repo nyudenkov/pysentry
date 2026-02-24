@@ -41,6 +41,9 @@ pub struct Config {
     /// Remote notifications configuration
     #[serde(default)]
     pub notifications: NotificationsConfig,
+
+    #[serde(default)]
+    pub output: OutputConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +51,8 @@ pub struct DefaultConfig {
     #[serde(default = "default_format")]
     pub format: String,
 
-    #[serde(default = "default_severity")]
+    /// Deprecated: will be removed in v0.5. Still parsed for backward compatibility.
+    #[serde(default = "default_severity", skip_serializing)]
     pub severity: String,
 
     #[serde(default = "default_fail_on")]
@@ -65,6 +69,9 @@ pub struct DefaultConfig {
 
     #[serde(default)]
     pub compact: bool,
+
+    #[serde(default = "default_display")]
+    pub display: String,
 
     #[serde(default)]
     pub include_withdrawn: bool,
@@ -184,6 +191,12 @@ impl Default for NotificationsConfig {
 
 fn default_notifications_enabled() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OutputConfig {
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 /// Tracks where the configuration was loaded from
@@ -523,6 +536,14 @@ impl Config {
             );
         }
 
+        match self.defaults.display.as_str() {
+            "text" | "table" => {}
+            _ => anyhow::bail!(
+                "Invalid display mode '{}'. Valid modes: text, table",
+                self.defaults.display
+            ),
+        }
+
         match self.defaults.scope.as_str() {
             "main" | "all" => {}
             _ => anyhow::bail!(
@@ -612,6 +633,7 @@ impl Default for Config {
             http: HttpConfig::default(),
             maintenance: MaintenanceConfig::default(),
             notifications: NotificationsConfig::default(),
+            output: OutputConfig::default(),
         }
     }
 }
@@ -626,6 +648,7 @@ impl Default for DefaultConfig {
             direct_only: false,
             detailed: false,
             compact: false,
+            display: default_display(),
             include_withdrawn: false,
             no_ci_detect: false,
         }
@@ -701,6 +724,9 @@ fn default_fail_on() -> String {
 fn default_scope() -> String {
     "all".to_string()
 }
+fn default_display() -> String {
+    "table".to_string()
+}
 fn default_sources() -> Vec<String> {
     vec!["pypa".to_string(), "pypi".to_string(), "osv".to_string()]
 }
@@ -732,7 +758,7 @@ fn default_http_retry_max_backoff() -> u64 {
     60
 }
 fn default_http_show_progress() -> bool {
-    true
+    false
 }
 
 // Maintenance config defaults (PEP 792)
@@ -746,7 +772,7 @@ fn default_maintenance_forbid_deprecated() -> bool {
     false
 }
 fn default_maintenance_forbid_quarantined() -> bool {
-    false
+    true
 }
 fn default_maintenance_forbid_unmaintained() -> bool {
     false
@@ -1241,5 +1267,24 @@ format = "json"
         let (path, source) = result.unwrap().unwrap();
         assert_eq!(source, ConfigSource::PyProjectToml);
         assert!(path.ends_with("pyproject.toml"));
+    }
+
+    #[test]
+    fn test_config_display_validation() {
+        let mut config = Config::default();
+
+        // Default display value is valid
+        assert!(config.validate().is_ok());
+
+        // Valid values
+        config.defaults.display = "text".to_string();
+        assert!(config.validate().is_ok());
+        config.defaults.display = "table".to_string();
+        assert!(config.validate().is_ok());
+
+        // Invalid value should fail validation
+        config.defaults.display = "invalid".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("Invalid display mode"));
     }
 }

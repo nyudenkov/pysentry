@@ -37,6 +37,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
         rt.block_on(async {
             use crate::cli::{audit, check_resolvers, check_version, Cli, Commands};
             use clap::Parser;
+            let _ = enable_ansi_support::enable_ansi_support();
 
             let cli_result = Cli::try_parse_from(&args);
 
@@ -84,6 +85,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         http_config,
                         vulnerability_ttl,
                         notifications_enabled,
+                        cli.color,
                     )
                     .await
                     {

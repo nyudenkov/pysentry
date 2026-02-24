@@ -27,8 +27,8 @@ pysentry --resolver pip-tools /path/to/project
 # Exclude extra dependencies (only check main dependencies)
 pysentry --exclude-extra
 
-# Filter by severity (only show high and critical)
-pysentry --severity high
+# Only fail on high and critical vulnerabilities
+pysentry --fail-on high
 
 # Output to JSON file
 pysentry --format json --output audit-results.json
@@ -72,6 +72,18 @@ pysentry --no-fail-on-unknown
 # Disable caching for CI environments
 pysentry --no-cache
 
+# Force colors for piped output or log capture
+pysentry --color always
+
+# Disable colors (useful in plain-text environments or scripts)
+pysentry --color never
+
+# Compact output with table layout (default)
+pysentry --compact
+
+# Compact output with traditional text layout
+pysentry --compact --display text
+
 # Verbose output for debugging (-v for warnings, -vv for info, -vvv for debug)
 pysentry -v
 pysentry -vv
@@ -105,6 +117,7 @@ pysentry --clear-resolution-cache /path/to/project
 PySentry reports vulnerabilities with:
 
 - **Package name and version**: The affected dependency
+- **Dependency type**: `[direct]` or `[transitive]` tag on each vulnerability entry
 - **Vulnerability ID**: CVE, GHSA, or PYSEC identifier
 - **Severity**: Critical, High, Medium, Low, or Unknown
 - **Description**: Brief explanation of the vulnerability
