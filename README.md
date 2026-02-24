@@ -66,7 +66,7 @@ See [Quickstart Guide](https://docs.pysentry.com/getting-started/quickstart) for
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.4.2
+    rev: v0.4.3
     hooks:
       - id: pysentry
         # Use compact mode for minimal pre-commit output
