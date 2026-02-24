@@ -899,6 +899,15 @@ impl SarifGenerator {
     ) -> Result<Sarif> {
         // originalUriBaseIds enables portable path resolution across CI environments.
         // SARIF Errata 01 §3.14.14 requires a file:// URI with trailing slash here.
+        // RFC 8089: Windows paths (C:\foo) need backslash→slash conversion and an extra leading
+        // slash to form the correct three-slash authority: file:///C:/foo/
+        // Unix paths already start with '/', so "file://" + "/tmp/foo" naturally becomes file:///tmp/foo/.
+        #[cfg(windows)]
+        let project_root_uri = {
+            let normalized = self.project_root.to_string_lossy().replace('\\', "/");
+            format!("file:///{normalized}/")
+        };
+        #[cfg(not(windows))]
         let project_root_uri = format!("file://{}/", self.project_root.to_string_lossy());
         let mut uri_bases: BTreeMap<String, SarifArtifactLocation> = BTreeMap::new();
         uri_bases.insert(
