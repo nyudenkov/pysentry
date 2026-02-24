@@ -20,6 +20,15 @@ pub enum DetailLevel {
     Detailed,
 }
 
+/// Controls the visual presentation style for compact mode output
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// Traditional text-based formatting (indented lines, manual spacing)
+    Text,
+    /// Structured table rendering via tabled (rounded borders, aligned columns)
+    Table,
+}
+
 /// A complete audit report containing all findings
 #[derive(Debug)]
 pub struct AuditReport {
@@ -301,6 +310,63 @@ pub(crate) mod test_helpers {
             fix_analysis,
             vec![],
             vec![maintenance_issue],
+        )
+    }
+
+    /// Fixture with multiple fix suggestions for the same package.
+    ///
+    /// Tests fix suggestion grouping, semantic version sort, and max-version consolidation.
+    pub fn create_test_report_with_multiple_fixes() -> AuditReport {
+        use crate::vulnerability::matcher::FixSuggestion;
+
+        let dependency_stats = DependencyStats {
+            total_packages: 5,
+            direct_packages: 5,
+            transitive_packages: 0,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 100,
+            total_packages: 50,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 3,
+            fixable: 3,
+            unfixable: 0,
+            fix_suggestions: vec![
+                FixSuggestion {
+                    package_name: PackageName::from_str("flask").unwrap(),
+                    current_version: Version::from_str("2.3.1").unwrap(),
+                    suggested_version: Version::from_str("2.4.0").unwrap(),
+                    vulnerability_id: "CVE-2023-002".to_string(),
+                },
+                FixSuggestion {
+                    package_name: PackageName::from_str("flask").unwrap(),
+                    current_version: Version::from_str("2.3.1").unwrap(),
+                    suggested_version: Version::from_str("3.0.0").unwrap(),
+                    vulnerability_id: "CVE-2023-001".to_string(),
+                },
+                FixSuggestion {
+                    package_name: PackageName::from_str("requests").unwrap(),
+                    current_version: Version::from_str("2.28.0").unwrap(),
+                    suggested_version: Version::from_str("2.31.0").unwrap(),
+                    vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
+                },
+            ],
+        };
+
+        AuditReport::new(
+            dependency_stats,
+            database_stats,
+            vec![],
+            fix_analysis,
+            vec![],
+            vec![],
         )
     }
 }

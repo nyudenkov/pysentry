@@ -73,6 +73,17 @@ pub enum ColorChoice {
     Never,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum, Default)]
+pub enum DisplayModeArg {
+    /// Traditional text-based formatting (indented lines, manual spacing)
+    #[value(name = "text")]
+    Text,
+    /// Structured table rendering (default, compact mode only)
+    #[default]
+    #[value(name = "table")]
+    Table,
+}
+
 /// Resolve an `OutputStyles` instance from a `ColorChoice`.
 ///
 /// `Always` → colorized (forces ANSI on); `Never` → plain (forces ANSI off);
@@ -232,6 +243,10 @@ pub struct AuditArgs {
     #[arg(long, conflicts_with = "detailed")]
     pub compact: bool,
 
+    /// Display mode for human output. Only affects compact mode (`--compact`).
+    #[arg(long, value_enum)]
+    pub display: Option<DisplayModeArg>,
+
     /// Custom configuration file path
     #[arg(long, value_name = "FILE")]
     pub config: Option<std::path::PathBuf>,
@@ -284,6 +299,11 @@ impl AuditArgs {
         } else {
             crate::DetailLevel::Normal
         }
+    }
+
+    /// Resolve the effective display mode from --display flag.
+    pub fn display_mode(&self) -> crate::DisplayMode {
+        self.display.unwrap_or(DisplayModeArg::Table).into()
     }
 
     /// Check if quiet mode is enabled (either via -q flag or config).
@@ -459,6 +479,16 @@ impl AuditArgs {
             merged.compact = false;
         } else if !self.compact {
             merged.compact = config.defaults.compact;
+        }
+
+        // CLI Some → always wins; CLI None → config takes precedence; fallback: Table
+        if let Some(cli_display) = self.display {
+            merged.display = Some(cli_display);
+        } else {
+            merged.display = Some(match config.defaults.display.as_str() {
+                "text" => DisplayModeArg::Text,
+                _ => DisplayModeArg::Table,
+            });
         }
 
         if !self.include_withdrawn {
@@ -683,6 +713,15 @@ impl From<ResolverTypeArg> for ResolverType {
         match resolver {
             ResolverTypeArg::Uv => ResolverType::Uv,
             ResolverTypeArg::PipTools => ResolverType::PipTools,
+        }
+    }
+}
+
+impl From<DisplayModeArg> for crate::DisplayMode {
+    fn from(mode: DisplayModeArg) -> Self {
+        match mode {
+            DisplayModeArg::Text => crate::DisplayMode::Text,
+            DisplayModeArg::Table => crate::DisplayMode::Table,
         }
     }
 }
@@ -1014,6 +1053,7 @@ pub async fn audit(
         audit_args.format.clone().into(),
         Some(&audit_args.path),
         audit_args.detail_level(),
+        audit_args.display_mode(),
         &styles,
     )
     .map_err(|e| anyhow::anyhow!("Failed to generate report: {e}"))?;
@@ -1738,6 +1778,9 @@ fail_on = "high"
 # Uncomment for compact output (summary + one-liner per vuln)
 # compact = true
 
+# Display mode for human output: "text" (classic) or "table" (aligned columns, compact mode only)
+# display = "table"
+
 [sources]
 # All vulnerability sources are enabled by default: PyPA, PyPI, and OSV
 # enabled = ["pypa", "pypi", "osv"]
@@ -1928,5 +1971,44 @@ mod tests {
         );
         assert!(fail, "Unknown causes failure when fail_on_unknown=true");
         assert_eq!(display.len(), 1, "Unknown always passes display filter");
+    }
+
+    #[test]
+    fn test_display_defaults_to_table() {
+        let args = parse_audit_args(&["."]);
+        assert_eq!(args.display, None);
+    }
+
+    #[test]
+    fn test_display_text_flag() {
+        let args = parse_audit_args(&["--display", "text", "."]);
+        assert_eq!(args.display, Some(DisplayModeArg::Text));
+    }
+
+    #[test]
+    fn test_display_config_overrides_default() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.display = "text".to_string();
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.display_mode(), crate::DisplayMode::Text);
+    }
+
+    #[test]
+    fn test_display_cli_text_overrides_config_table() {
+        let args = parse_audit_args(&["--display", "text", "."]);
+        let config = crate::config::Config::default(); // config display = "table"
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.display_mode(), crate::DisplayMode::Text);
+    }
+
+    #[test]
+    fn test_display_cli_table_overrides_config_text() {
+        // Explicit --display table must win even when config says "text"
+        let args = parse_audit_args(&["--display", "table", "."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.display = "text".to_string();
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.display_mode(), crate::DisplayMode::Table);
     }
 }

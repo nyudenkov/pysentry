@@ -1,21 +1,55 @@
 // SPDX-License-Identifier: MIT
 
-use super::model::{AuditReport, DetailLevel};
-use super::styles::OutputStyles;
+use super::model::{AuditReport, DetailLevel, DisplayMode};
+use super::styles::{get_terminal_width, OutputStyles};
 use crate::vulnerability::database::Severity;
+use crate::vulnerability::matcher::FixSuggestion;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use tabled::{builder::Builder, settings::Style};
+
+fn group_and_sort_fixes(
+    fix_suggestions: &[FixSuggestion],
+) -> BTreeMap<String, Vec<&FixSuggestion>> {
+    let mut package_fixes: BTreeMap<String, Vec<&FixSuggestion>> = BTreeMap::new();
+    for suggestion in fix_suggestions {
+        package_fixes
+            .entry(suggestion.package_name.to_string())
+            .or_default()
+            .push(suggestion);
+    }
+    for fixes in package_fixes.values_mut() {
+        fixes.sort_by(|a, b| {
+            a.suggested_version
+                .partial_cmp(&b.suggested_version)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    package_fixes
+}
+
+/// Returns (from → to version string, fix count) for a sorted group.
+/// Returns None only if `fixes` is unexpectedly empty (defensive guard).
+fn fix_version_summary(fixes: &[&FixSuggestion]) -> Option<(String, usize)> {
+    let best = fixes.last()?;
+    Some((
+        format!("{} → {}", best.current_version, best.suggested_version),
+        fixes.len(),
+    ))
+}
 
 pub(crate) fn generate_human_report(
     report: &AuditReport,
     detail_level: DetailLevel,
+    display_mode: DisplayMode,
     styles: &OutputStyles,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut output = String::new();
     let summary = report.summary();
     let is_compact = detail_level == DetailLevel::Compact;
     let is_detailed = detail_level == DetailLevel::Detailed;
+    let use_table = is_compact && display_mode == DisplayMode::Table;
 
     if !is_compact {
         writeln!(output, "{}", "PYSENTRY SECURITY AUDIT".style(styles.header))?;
@@ -91,7 +125,36 @@ pub(crate) fn generate_human_report(
     if !report.matches.is_empty() {
         writeln!(output, "{}", "VULNERABILITIES".style(styles.header))?;
 
-        if is_compact {
+        if use_table {
+            writeln!(output)?;
+            let mut builder = Builder::new();
+            builder.push_record(["ID", "Package", "Version", "Severity", "Type"]);
+            for m in &report.matches {
+                let id_field = if m.vulnerability.withdrawn.is_some() {
+                    format!(
+                        "{} {}",
+                        m.vulnerability.id.style(styles.vuln_id),
+                        "(WITHDRAWN)".style(styles.withdrawn_tag)
+                    )
+                } else {
+                    m.vulnerability.id.style(styles.vuln_id).to_string()
+                };
+                let dep_type = if m.is_direct { "direct" } else { "transitive" };
+                builder.push_record([
+                    id_field,
+                    m.package_name.to_string().style(styles.package).to_string(),
+                    format!("v{}", m.installed_version),
+                    m.vulnerability
+                        .severity
+                        .to_string()
+                        .style(*styles.severity(&m.vulnerability.severity))
+                        .to_string(),
+                    dep_type.style(styles.dimmed).to_string(),
+                ]);
+            }
+            let table = builder.build().with(Style::rounded()).to_string();
+            writeln!(output, "{table}")?;
+        } else if is_compact {
             writeln!(output)?;
             for m in &report.matches {
                 let withdrawn_tag = if m.vulnerability.withdrawn.is_some() {
@@ -99,11 +162,7 @@ pub(crate) fn generate_human_report(
                 } else {
                     String::new()
                 };
-                let dep_type = if m.is_direct {
-                    "[direct]"
-                } else {
-                    "[transitive]"
-                };
+                let dep_type = if m.is_direct { "direct" } else { "transitive" };
                 writeln!(
                     output,
                     "  {}{}  {} v{}  [{}] {}",
@@ -111,9 +170,11 @@ pub(crate) fn generate_human_report(
                     withdrawn_tag,
                     m.package_name.to_string().style(styles.package),
                     m.installed_version,
-                    format!("{}", m.vulnerability.severity)
+                    m.vulnerability
+                        .severity
+                        .to_string()
                         .style(*styles.severity(&m.vulnerability.severity)),
-                    dep_type.style(styles.dimmed),
+                    dep_type.style(styles.dimmed)
                 )?;
             }
             writeln!(output)?;
@@ -148,7 +209,9 @@ pub(crate) fn generate_human_report(
                     withdrawn_tag,
                     m.package_name.to_string().style(styles.package),
                     m.installed_version,
-                    format!("{}", m.vulnerability.severity)
+                    m.vulnerability
+                        .severity
+                        .to_string()
                         .style(*styles.severity(&m.vulnerability.severity)),
                     dep_type.style(styles.dimmed),
                     source_tag
@@ -178,7 +241,11 @@ pub(crate) fn generate_human_report(
                 } else if !m.vulnerability.summary.is_empty() {
                     writeln!(output, "    {}", m.vulnerability.summary)?;
                 } else if let Some(description) = &m.vulnerability.description {
-                    let truncated = description.chars().take(117).collect::<String>();
+                    const DESCRIPTION_INDENT: usize = 4;
+                    const DESCRIPTION_ELLIPSIS: usize = 3;
+                    let max_desc_width = get_terminal_width()
+                        .saturating_sub(DESCRIPTION_INDENT + DESCRIPTION_ELLIPSIS);
+                    let truncated = description.chars().take(max_desc_width).collect::<String>();
                     writeln!(output, "    {truncated}...")?;
                 }
 
@@ -205,72 +272,110 @@ pub(crate) fn generate_human_report(
     }
 
     if !report.fix_analysis.fix_suggestions.is_empty() {
-        let mut package_fixes: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for suggestion in &report.fix_analysis.fix_suggestions {
-            let package = suggestion.package_name.to_string();
-            let version_info = format!(
-                "{} → {}",
-                suggestion.current_version, suggestion.suggested_version
-            );
-            package_fixes.entry(package).or_default().push(version_info);
-        }
+        let package_fixes = group_and_sort_fixes(&report.fix_analysis.fix_suggestions);
 
-        if is_compact {
+        if use_table {
             writeln!(output)?;
             writeln!(output, "{}", "FIX SUGGESTIONS".style(styles.header))?;
+            let mut builder = Builder::new();
+            builder.push_record(["Package", "Suggested Fix"]);
+            for (package, fixes) in &package_fixes {
+                let Some((version_str, count)) = fix_version_summary(fixes) else {
+                    continue;
+                };
+                let fix_text = if count == 1 {
+                    version_str.style(styles.fix_suggestion).to_string()
+                } else {
+                    format!(
+                        "{} (fixes {} vulnerabilities)",
+                        version_str.style(styles.fix_suggestion),
+                        count
+                    )
+                };
+                builder.push_record([package.style(styles.package).to_string(), fix_text]);
+            }
+            let table = builder.build().with(Style::rounded()).to_string();
+            writeln!(output, "{table}")?;
+        } else if is_compact {
+            writeln!(output)?;
+            writeln!(output, "{}", "FIX SUGGESTIONS".style(styles.header))?;
+            for (package, fixes) in &package_fixes {
+                let Some((version_str, count)) = fix_version_summary(fixes) else {
+                    continue;
+                };
+                let version_info = if count == 1 {
+                    version_str.style(styles.fix_suggestion).to_string()
+                } else {
+                    format!(
+                        "{} (fixes {} vulnerabilities)",
+                        version_str.style(styles.fix_suggestion),
+                        count
+                    )
+                };
+                writeln!(output, "  {}: {}", package.style(styles.package), version_info)?;
+            }
         } else {
             writeln!(output, "{}", "FIX SUGGESTIONS".style(styles.header))?;
             writeln!(output, "---------------")?;
-        }
-
-        let indent = if is_compact { "  " } else { "" };
-
-        for (package, fixes) in &package_fixes {
-            if fixes.len() == 1 {
-                let Some(fix) = fixes.first() else {
+            for (package, fixes) in &package_fixes {
+                let Some((version_str, count)) = fix_version_summary(fixes) else {
                     continue;
                 };
-                writeln!(
-                    output,
-                    "{}{}: {}",
-                    indent,
-                    package.style(styles.package),
-                    fix.style(styles.fix_suggestion)
-                )?;
-            } else {
-                let Some(best_fix) = fixes.first() else {
-                    continue;
-                };
-                writeln!(
-                    output,
-                    "{}{}: {} (fixes {} vulnerabilities)",
-                    indent,
-                    package.style(styles.package),
-                    best_fix.style(styles.fix_suggestion),
-                    fixes.len()
-                )?;
+                if count == 1 {
+                    writeln!(
+                        output,
+                        "{}: {}",
+                        package.style(styles.package),
+                        version_str.style(styles.fix_suggestion)
+                    )?;
+                } else {
+                    writeln!(
+                        output,
+                        "{}: {} (fixes {} vulnerabilities)",
+                        package.style(styles.package),
+                        version_str.style(styles.fix_suggestion),
+                        count
+                    )?;
+                }
             }
-        }
-
-        if !is_compact {
             writeln!(output)?;
         }
     }
 
     // Maintenance issues section (PEP 792)
     if !report.maintenance_issues.is_empty() {
-        if is_compact {
+        if use_table {
+            writeln!(output)?;
+            writeln!(output, "{}", "MAINTENANCE".style(styles.header))?;
+            let mut builder = Builder::new();
+            builder.push_record(["Status", "Package", "Version", "Type"]);
+            for issue in &report.maintenance_issues {
+                let status_text = issue.issue_type.to_string();
+                let dep_type = if issue.is_direct { "direct" } else { "transitive" };
+                builder.push_record([
+                    status_text
+                        .style(*styles.maintenance(&issue.issue_type))
+                        .to_string(),
+                    issue.package_name.to_string().style(styles.package).to_string(),
+                    format!("v{}", issue.installed_version),
+                    dep_type.style(styles.dimmed).to_string(),
+                ]);
+            }
+            let table = builder.build().with(Style::rounded()).to_string();
+            writeln!(output, "{table}")?;
+        } else if is_compact {
             writeln!(output)?;
             writeln!(output, "{}", "MAINTENANCE".style(styles.header))?;
             for issue in &report.maintenance_issues {
                 let status_text = issue.issue_type.to_string();
-                let status_tag = status_text.style(*styles.maintenance(&issue.issue_type));
+                let dep_type = if issue.is_direct { "direct" } else { "transitive" };
                 writeln!(
                     output,
-                    "  {}  {} v{}",
-                    status_tag,
+                    "  {}  {} v{}  {}",
+                    status_text.style(*styles.maintenance(&issue.issue_type)),
                     issue.package_name.to_string().style(styles.package),
                     issue.installed_version,
+                    dep_type.style(styles.dimmed)
                 )?;
             }
         } else {
@@ -361,7 +466,7 @@ mod tests {
     fn test_human_report_generation() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Normal, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(output.contains("SUMMARY") && output.contains("10 packages scanned"));
@@ -410,7 +515,7 @@ mod tests {
         assert!(!report.has_vulnerabilities());
 
         let output =
-            generate_human_report(&report, DetailLevel::Normal, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
         assert!(output.contains("No vulnerabilities found"));
     }
 
@@ -418,7 +523,7 @@ mod tests {
     fn test_compact_report_no_header_no_footer() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(!output.contains("PYSENTRY SECURITY AUDIT"));
         assert!(!output.contains("Scan completed"));
@@ -428,7 +533,7 @@ mod tests {
     fn test_compact_report_contains_summary() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("SUMMARY"));
         assert!(output.contains("10 packages scanned"));
@@ -439,7 +544,7 @@ mod tests {
     fn test_compact_report_condensed_vulns() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         // Vuln ID should be present
         assert!(output.contains("GHSA-test-1234"));
@@ -450,15 +555,17 @@ mod tests {
         assert!(!output.contains("→ Fix:"));
         // No numbering
         assert!(!output.contains(" 1. "));
-        // Dependency type tag must appear in compact mode
-        assert!(output.contains("[direct]"));
+        // Dependency type appears in table (no brackets in tabled compact mode)
+        assert!(output.contains("direct"));
+        // Table structure is present
+        assert!(output.contains("│"));
     }
 
     #[test]
     fn test_compact_report_no_fix_suggestions_when_empty() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(!output.contains("FIX SUGGESTIONS"));
     }
@@ -474,7 +581,7 @@ mod tests {
         }];
 
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("FIX SUGGESTIONS"));
         assert!(output.contains("requests"));
@@ -488,7 +595,7 @@ mod tests {
     fn test_compact_report_hint_line() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("Run pysentry --detailed for full descriptions"));
     }
@@ -529,6 +636,7 @@ mod tests {
         let output = generate_human_report(
             &clean_report,
             DetailLevel::Compact,
+            DisplayMode::Table,
             &OutputStyles::default(),
         )
         .unwrap();
@@ -579,7 +687,7 @@ mod tests {
         );
 
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         // Compact mode shows per-issue one-liners under MAINTENANCE header
         assert!(output.contains("MAINTENANCE"));
@@ -600,7 +708,7 @@ mod tests {
     fn test_detailed_report_shows_full_description() {
         let report = create_test_report();
         let output =
-            generate_human_report(&report, DetailLevel::Detailed, &OutputStyles::default())
+            generate_human_report(&report, DetailLevel::Detailed, DisplayMode::Table, &OutputStyles::default())
                 .unwrap();
 
         // Both summary and the distinct description text must appear
@@ -626,7 +734,7 @@ mod tests {
     fn test_detailed_report_cvss_version_tag() {
         let report = create_test_report_with_extras();
         let output =
-            generate_human_report(&report, DetailLevel::Detailed, &OutputStyles::default())
+            generate_human_report(&report, DetailLevel::Detailed, DisplayMode::Table, &OutputStyles::default())
                 .unwrap();
 
         // Transitive dep has cvss_version: Some(3) → version tag must appear
@@ -640,7 +748,7 @@ mod tests {
     fn test_normal_report_transitive_tag() {
         let report = create_test_report_with_extras();
         let output =
-            generate_human_report(&report, DetailLevel::Normal, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("[direct]"));
         assert!(output.contains("[transitive]"));
@@ -650,10 +758,205 @@ mod tests {
     fn test_compact_report_transitive_tag() {
         let report = create_test_report_with_extras();
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
-        assert!(output.contains("[direct]"));
-        assert!(output.contains("[transitive]"));
+        // In compact tabled mode, values appear without brackets
+        assert!(output.contains("direct"));
+        assert!(output.contains("transitive"));
+    }
+
+    #[test]
+    fn test_compact_table_has_headers() {
+        let report = create_test_report();
+        let output =
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+
+        assert!(output.contains("ID"));
+        assert!(output.contains("Package"));
+        assert!(output.contains("Version"));
+        assert!(output.contains("Severity"));
+        assert!(output.contains("Type"));
+    }
+
+    #[test]
+    fn test_compact_fix_suggestions_table() {
+        let mut report = create_test_report();
+        report.fix_analysis.fix_suggestions = vec![FixSuggestion {
+            package_name: PackageName::from_str("requests").unwrap(),
+            current_version: Version::from_str("2.28.0").unwrap(),
+            suggested_version: Version::from_str("2.31.0").unwrap(),
+            vulnerability_id: "GHSA-j8r2-6x86-q33q".to_string(),
+        }];
+
+        let output =
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+
+        assert!(output.contains("FIX SUGGESTIONS"));
+        assert!(output.contains("Package"));
+        assert!(output.contains("Suggested Fix"));
+        assert!(output.contains("requests"));
+        assert!(output.contains("2.28.0"));
+        assert!(output.contains("2.31.0"));
+        assert!(output.contains("│"));
+    }
+
+    #[test]
+    fn test_fix_suggestions_multi_cve_shows_max_version() {
+        let mut report = create_test_report();
+        report.fix_analysis.fix_suggestions = vec![
+            FixSuggestion {
+                package_name: PackageName::from_str("flask").unwrap(),
+                current_version: Version::from_str("2.3.1").unwrap(),
+                suggested_version: Version::from_str("2.4.0").unwrap(),
+                vulnerability_id: "CVE-2023-002".to_string(),
+            },
+            FixSuggestion {
+                package_name: PackageName::from_str("flask").unwrap(),
+                current_version: Version::from_str("2.3.1").unwrap(),
+                suggested_version: Version::from_str("3.0.0").unwrap(),
+                vulnerability_id: "CVE-2023-001".to_string(),
+            },
+        ];
+
+        let output1 =
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+        let output2 =
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+
+        // Output must be identical across multiple calls (deterministic)
+        assert_eq!(output1, output2);
+        // Multi-CVE: the maximum fix version must be shown (covers all vulnerabilities)
+        assert!(output1.contains("3.0.0"), "Maximum fix version must appear");
+        // The lower version is not shown separately when a higher fix covers it
+        assert!(!output1.contains("2.4.0"), "Minimum version must not appear when a higher fix exists");
+        assert!(output1.contains("fixes 2 vulnerabilities"), "Count of addressed vulnerabilities must appear");
+    }
+
+    #[test]
+    fn test_compact_maintenance_table() {
+        let dependency_stats = DependencyStats {
+            total_packages: 5,
+            direct_packages: 3,
+            transitive_packages: 2,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 0,
+            total_packages: 0,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 0,
+            fixable: 0,
+            unfixable: 0,
+            fix_suggestions: vec![],
+        };
+
+        use crate::maintenance::{MaintenanceIssue, MaintenanceIssueType};
+        let maintenance_issue = MaintenanceIssue::new(
+            PackageName::from_str("old-pkg").unwrap(),
+            Version::from_str("1.0.0").unwrap(),
+            MaintenanceIssueType::Archived,
+            None,
+            true,
+            None,
+        );
+
+        let report = crate::output::model::AuditReport::new(
+            dependency_stats,
+            database_stats,
+            vec![],
+            fix_analysis,
+            vec![],
+            vec![maintenance_issue],
+        );
+
+        let output =
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
+
+        assert!(output.contains("MAINTENANCE"));
+        assert!(output.contains("Status"));
+        assert!(output.contains("Package"));
+        assert!(output.contains("Version"));
+        assert!(output.contains("Type"));
+        assert!(output.contains("ARCHIVED"));
+        assert!(output.contains("old-pkg"));
+        assert!(output.contains("direct"));
+        assert!(output.contains("│"));
+    }
+
+    #[test]
+    fn test_description_truncation_uses_terminal_width() {
+        use crate::vulnerability::database::{Severity, Vulnerability, VulnerabilityMatch};
+
+        let long_description = "A".repeat(200);
+
+        let dependency_stats = DependencyStats {
+            total_packages: 1,
+            direct_packages: 1,
+            transitive_packages: 0,
+            by_type: HashMap::new(),
+            by_source: HashMap::new(),
+        };
+
+        let database_stats = DatabaseStats {
+            total_vulnerabilities: 0,
+            total_packages: 0,
+            severity_counts: HashMap::new(),
+            packages_with_most_vulns: vec![],
+        };
+
+        let vulnerability = Vulnerability {
+            id: "CVE-2023-trunc".to_string(),
+            summary: String::new(),
+            description: Some(long_description),
+            severity: Severity::Low,
+            affected_versions: vec![],
+            fixed_versions: vec![],
+            references: vec![],
+            cvss_score: None,
+            cvss_version: None,
+            published: None,
+            modified: None,
+            source: None,
+            withdrawn: None,
+            aliases: vec![],
+        };
+
+        let matches = vec![VulnerabilityMatch {
+            package_name: PackageName::from_str("pkg").unwrap(),
+            installed_version: Version::from_str("1.0.0").unwrap(),
+            vulnerability,
+            is_direct: true,
+        }];
+
+        let fix_analysis = FixAnalysis {
+            total_matches: 1,
+            fixable: 0,
+            unfixable: 1,
+            fix_suggestions: vec![],
+        };
+
+        let report = crate::output::model::AuditReport::new(
+            dependency_stats,
+            database_stats,
+            matches,
+            fix_analysis,
+            vec![],
+            vec![],
+        );
+
+        let output =
+            generate_human_report(&report, DetailLevel::Normal, DisplayMode::Table, &OutputStyles::default()).unwrap();
+
+        // Description must be truncated with "..." suffix (not the full 200 chars)
+        assert!(output.contains("..."));
+        // The raw 200-char description must NOT appear verbatim
+        assert!(!output.contains(&"A".repeat(200)));
     }
 
     #[test]
@@ -717,9 +1020,90 @@ mod tests {
         );
 
         let output =
-            generate_human_report(&report, DetailLevel::Compact, &OutputStyles::default()).unwrap();
+            generate_human_report(&report, DetailLevel::Compact, DisplayMode::Table, &OutputStyles::default()).unwrap();
 
         assert!(output.contains("GHSA-withdrawn-0001"));
         assert!(output.contains("WITHDRAWN"));
+    }
+
+    #[test]
+    fn test_compact_text_display_no_table_borders() {
+        let report = create_test_report();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Text,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        // Text mode uses bracket syntax for severity and dep type
+        assert!(output.contains("GHSA-test-1234"));
+        assert!(output.contains("[HIGH]"));
+        assert!(output.contains("direct"));
+        // No table borders
+        assert!(!output.contains('│'));
+        assert!(!output.contains('╭'));
+        assert!(!output.contains("──"));
+    }
+
+    #[test]
+    fn test_compact_table_display_has_borders() {
+        let report = create_test_report();
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        // Table mode uses tabled borders
+        assert!(output.contains("GHSA-test-1234"));
+        assert!(output.contains('│'));
+        assert!(output.contains('╭'));
+    }
+
+    #[test]
+    fn test_table_display_ignored_in_normal_mode() {
+        let report = create_test_report();
+        let table_output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+        let text_output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Text,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        // DisplayMode is irrelevant outside compact mode — output must be identical
+        assert_eq!(table_output, text_output);
+    }
+
+    #[test]
+    fn test_table_display_ignored_in_detailed_mode() {
+        let report = create_test_report();
+        let table_output = generate_human_report(
+            &report,
+            DetailLevel::Detailed,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+        let text_output = generate_human_report(
+            &report,
+            DetailLevel::Detailed,
+            DisplayMode::Text,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        assert_eq!(table_output, text_output);
     }
 }

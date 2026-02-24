@@ -3,6 +3,7 @@
 use crate::maintenance::MaintenanceIssueType;
 use crate::vulnerability::database::Severity;
 use owo_colors::Style;
+use terminal_size::{terminal_size, Width};
 
 /// Centralized stylesheet for terminal output styling.
 ///
@@ -93,6 +94,13 @@ impl OutputStyles {
             MaintenanceIssueType::Deprecated => &self.maintenance_deprecated,
         }
     }
+}
+
+/// Returns current terminal width, falling back to 120 when piped or unavailable.
+pub fn get_terminal_width() -> usize {
+    terminal_size()
+        .map(|(Width(w), _)| w as usize)
+        .unwrap_or(120)
 }
 
 /// Emoji icon for a severity level, used in markdown and compact output.

@@ -2,7 +2,7 @@
 
 //! Output generation module
 
-pub use model::{AuditReport, AuditSummary, DetailLevel};
+pub use model::{AuditReport, AuditSummary, DetailLevel, DisplayMode};
 pub use styles::OutputStyles;
 
 pub(crate) mod human;
@@ -24,10 +24,11 @@ pub fn generate_report(
     format: AuditFormat,
     project_root: Option<&Path>,
     detail_level: DetailLevel,
+    display_mode: DisplayMode,
     styles: &OutputStyles,
 ) -> Result<String, Box<dyn std::error::Error>> {
     match format {
-        AuditFormat::Human => generate_human_report(report, detail_level, styles),
+        AuditFormat::Human => generate_human_report(report, detail_level, display_mode, styles),
         AuditFormat::Json => generate_json_report(report),
         AuditFormat::Markdown => generate_markdown_report(report),
         AuditFormat::Sarif => generate_sarif_report(report, project_root),
@@ -51,6 +52,7 @@ mod tests {
             AuditFormat::Human,
             project_root,
             DetailLevel::Normal,
+            DisplayMode::Table,
             &styles,
         )
         .unwrap();
@@ -62,6 +64,7 @@ mod tests {
             AuditFormat::Json,
             project_root,
             DetailLevel::Normal,
+            DisplayMode::Table,
             &styles,
         )
         .unwrap();
@@ -73,6 +76,7 @@ mod tests {
             AuditFormat::Sarif,
             project_root,
             DetailLevel::Normal,
+            DisplayMode::Table,
             &styles,
         )
         .unwrap();
@@ -84,6 +88,7 @@ mod tests {
             AuditFormat::Markdown,
             project_root,
             DetailLevel::Normal,
+            DisplayMode::Table,
             &styles,
         )
         .unwrap();

@@ -3,7 +3,10 @@
 use super::model::AuditReport;
 use super::styles::{maintenance_icon, severity_icon};
 use crate::vulnerability::database::Severity;
+use crate::vulnerability::matcher::FixSuggestion;
+use std::collections::BTreeMap;
 use std::fmt::Write;
+use tabled::{builder::Builder, settings::Style};
 
 pub(crate) fn generate_markdown_report(
     report: &AuditReport,
@@ -214,9 +217,41 @@ pub(crate) fn generate_markdown_report(
         writeln!(output, "## 💡 Fix Suggestions")?;
         writeln!(output)?;
 
+        let mut package_fixes: BTreeMap<String, Vec<&FixSuggestion>> = BTreeMap::new();
         for suggestion in &report.fix_analysis.fix_suggestions {
-            writeln!(output, "- {suggestion}")?;
+            package_fixes
+                .entry(suggestion.package_name.to_string())
+                .or_default()
+                .push(suggestion);
         }
+        for fixes in package_fixes.values_mut() {
+            fixes.sort_by(|a, b| {
+                a.suggested_version
+                    .partial_cmp(&b.suggested_version)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        let mut builder = Builder::new();
+        builder.push_record(["Package", "Fix", "Vulnerabilities"]);
+        for (package, fixes) in &package_fixes {
+            let (fix_str, count_str) = if fixes.len() == 1 {
+                let Some(fix) = fixes.first() else { continue; };
+                (
+                    format!("{} → {}", fix.current_version, fix.suggested_version),
+                    "1 vulnerability".to_string(),
+                )
+            } else {
+                let Some(best) = fixes.last() else { continue; };
+                (
+                    format!("{} → {}", best.current_version, best.suggested_version),
+                    format!("fixes {} vulnerabilities", fixes.len()),
+                )
+            };
+            builder.push_record([package.as_str(), &fix_str, &count_str]);
+        }
+        let table = builder.build().with(Style::markdown()).to_string();
+        writeln!(output, "{table}")?;
         writeln!(output)?;
     }
 
@@ -233,7 +268,9 @@ pub(crate) fn generate_markdown_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::model::test_helpers::{create_test_report, create_test_report_with_extras};
+    use crate::output::model::test_helpers::{
+        create_test_report, create_test_report_with_extras, create_test_report_with_multiple_fixes,
+    };
 
     #[test]
     fn test_markdown_report_generation() {
@@ -283,5 +320,31 @@ mod tests {
         assert!(output.contains("Use new-lib instead"));
         // Maintenance issue is_direct = true → "direct" label
         assert!(output.contains("- **Type:** direct"));
+    }
+
+    #[test]
+    fn test_markdown_fix_suggestions_table() {
+        let report = create_test_report_with_multiple_fixes();
+        let output = generate_markdown_report(&report).unwrap();
+
+        assert!(output.contains("## 💡 Fix Suggestions"));
+        // Consolidated columns (no per-CVE rows)
+        assert!(output.contains("| Package"));
+        assert!(output.contains("| Fix"));
+        assert!(output.contains("| Vulnerabilities"));
+        // flask row: max version (3.0.0) shown with count annotation
+        assert!(output.contains("flask"));
+        assert!(output.contains("2.3.1 → 3.0.0"));
+        assert!(output.contains("fixes 2 vulnerabilities"));
+        // requests row: single CVE, plain count
+        assert!(output.contains("requests"));
+        assert!(output.contains("2.28.0 → 2.31.0"));
+        assert!(output.contains("1 vulnerability"));
+        // Table header separator row starts with |---
+        assert!(output.contains("|---"));
+        // CVE IDs are NOT shown in the consolidated view
+        assert!(!output.contains("CVE-2023-001"));
+        assert!(!output.contains("CVE-2023-002"));
+        assert!(!output.contains("GHSA-j8r2-6x86-q33q"));
     }
 }

@@ -67,6 +67,9 @@ pub struct DefaultConfig {
     #[serde(default)]
     pub compact: bool,
 
+    #[serde(default = "default_display")]
+    pub display: String,
+
     #[serde(default)]
     pub include_withdrawn: bool,
 
@@ -524,6 +527,14 @@ impl Config {
             );
         }
 
+        match self.defaults.display.as_str() {
+            "text" | "table" => {}
+            _ => anyhow::bail!(
+                "Invalid display mode '{}'. Valid modes: text, table",
+                self.defaults.display
+            ),
+        }
+
         match self.defaults.scope.as_str() {
             "main" | "all" => {}
             _ => anyhow::bail!(
@@ -627,6 +638,7 @@ impl Default for DefaultConfig {
             direct_only: false,
             detailed: false,
             compact: false,
+            display: default_display(),
             include_withdrawn: false,
             no_ci_detect: false,
         }
@@ -701,6 +713,9 @@ fn default_fail_on() -> String {
 }
 fn default_scope() -> String {
     "all".to_string()
+}
+fn default_display() -> String {
+    "table".to_string()
 }
 fn default_sources() -> Vec<String> {
     vec!["pypa".to_string(), "pypi".to_string(), "osv".to_string()]
@@ -1242,5 +1257,24 @@ format = "json"
         let (path, source) = result.unwrap().unwrap();
         assert_eq!(source, ConfigSource::PyProjectToml);
         assert!(path.ends_with("pyproject.toml"));
+    }
+
+    #[test]
+    fn test_config_display_validation() {
+        let mut config = Config::default();
+
+        // Default display value is valid
+        assert!(config.validate().is_ok());
+
+        // Valid values
+        config.defaults.display = "text".to_string();
+        assert!(config.validate().is_ok());
+        config.defaults.display = "table".to_string();
+        assert!(config.validate().is_ok());
+
+        // Invalid value should fail validation
+        config.defaults.display = "invalid".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("Invalid display mode"));
     }
 }
