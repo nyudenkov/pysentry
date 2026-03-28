@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use futures::stream::{FuturesUnordered, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -196,38 +196,50 @@ impl OsvSource {
         self.cache.database_entry(&format!("osv-{package_hash:x}"))
     }
 
-    /// Convert OSV advisory to internal vulnerability format
-    fn convert_osv_vulnerability(advisory: OsvAdvisory) -> Option<Vulnerability> {
+    /// Convert OSV advisory to internal vulnerability format for a specific package
+    fn convert_osv_vulnerability(
+        advisory: &OsvAdvisory,
+        target_package: &str,
+    ) -> Option<Vulnerability> {
         if advisory.affected.is_empty() {
             return None;
         }
 
-        let (severity, cvss_score, cvss_version) = Self::map_osv_severity(&advisory);
+        let (severity, cvss_score, cvss_version) = Self::map_osv_severity(advisory);
+
+        let target_normalized = target_package.to_lowercase().replace('_', "-");
 
         let mut affected_versions = Vec::new();
         let mut fixed_versions = Vec::new();
 
         for affected in &advisory.affected {
+            if affected.package.ecosystem != "PyPI" {
+                continue;
+            }
+            let pkg_normalized = affected.package.name.to_lowercase().replace('_', "-");
+            if pkg_normalized != target_normalized {
+                continue;
+            }
             affected_versions.extend(Self::extract_osv_ranges(affected));
             fixed_versions.extend(Self::extract_fixed_versions(affected));
         }
 
-        // Build references
-        let mut references = vec![];
-        for reference in advisory.references {
-            references.push(reference.url);
+        if affected_versions.is_empty() && fixed_versions.is_empty() {
+            return None;
         }
-        // Add OSV URL as a reference
+
+        // Build references
+        let mut references: Vec<String> =
+            advisory.references.iter().map(|r| r.url.clone()).collect();
         references.push(format!("https://osv.dev/vulnerability/{}", advisory.id));
 
         let aliases = advisory.aliases.clone();
 
         Some(Vulnerability {
-            id: advisory.id,
+            id: advisory.id.clone(),
             summary: match (&advisory.summary, &advisory.details) {
                 (Some(summary), _) if !summary.is_empty() => summary.clone(),
                 (_, Some(details)) => {
-                    // Truncate details for summary (first sentence or 100 chars)
                     let summary = details.split('.').next().unwrap_or(details);
                     let truncated = super::truncate_chars(summary, 100);
                     if truncated.len() < summary.len() {
@@ -238,20 +250,20 @@ impl OsvSource {
                 }
                 _ => "OSV Advisory".to_string(),
             },
-            description: advisory.details,
+            description: advisory.details.clone(),
             severity,
             affected_versions,
             fixed_versions,
             references,
             cvss_score,
             cvss_version,
-            published: advisory.published.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
+            published: advisory.published.as_ref().and_then(|s| {
+                DateTime::parse_from_rfc3339(s)
                     .ok()
                     .map(|dt| dt.with_timezone(&Utc))
             }),
-            modified: advisory.modified.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
+            modified: advisory.modified.as_ref().and_then(|s| {
+                DateTime::parse_from_rfc3339(s)
                     .ok()
                     .map(|dt| dt.with_timezone(&Utc))
             }),
@@ -289,6 +301,7 @@ impl OsvSource {
 
             let mut min_version = None;
             let mut max_version = None;
+            let mut has_fixed = false;
 
             for event in &range.events {
                 if let Some(intro) = &event.introduced {
@@ -301,21 +314,34 @@ impl OsvSource {
                 if let Some(fix) = &event.fixed {
                     if let Ok(version) = Version::from_str(fix) {
                         max_version = Some(version);
+                        has_fixed = true;
+                    }
+                }
+                if let Some(last) = &event.last_affected {
+                    if !has_fixed {
+                        if let Ok(version) = Version::from_str(last) {
+                            max_version = Some(version);
+                        }
                     }
                 }
             }
 
-            let constraint = match (&min_version, &max_version) {
-                (Some(min), Some(max)) => format!(">={min},<{max}"),
-                (Some(min), None) => format!(">={min}"),
-                (None, Some(max)) => format!("<{max}"),
-                (None, None) => "*".to_string(),
+            let max_inclusive = !has_fixed && max_version.is_some();
+
+            let constraint = match (&min_version, &max_version, max_inclusive) {
+                (Some(min), Some(max), true) => format!(">={min},<={max}"),
+                (Some(min), Some(max), false) => format!(">={min},<{max}"),
+                (Some(min), None, _) => format!(">={min}"),
+                (None, Some(max), true) => format!("<={max}"),
+                (None, Some(max), false) => format!("<{max}"),
+                (None, None, _) => "*".to_string(),
             };
 
             ranges.push(VersionRange {
                 min: min_version,
                 max: max_version,
                 constraint,
+                max_inclusive,
             });
         }
 
@@ -678,6 +704,20 @@ impl OsvSource {
             source: Box::new(err),
         })
     }
+
+    fn should_cache_result(
+        db: &VulnerabilityDatabase,
+        expected_vuln_count: usize,
+        no_cache: bool,
+    ) -> bool {
+        if no_cache {
+            return false;
+        }
+        if db.is_empty() && expected_vuln_count > 0 {
+            return false;
+        }
+        true
+    }
 }
 
 #[async_trait]
@@ -740,7 +780,7 @@ impl VulnerabilityProvider for OsvSource {
         // Split into batches of 1000 (OSV API limit)
         const BATCH_SIZE: usize = 1000;
         let mut all_vulnerability_ids = Vec::new();
-        let mut package_vuln_mapping = HashMap::new();
+        let mut package_vuln_mapping: HashMap<String, HashSet<String>> = HashMap::new();
 
         let batches: Vec<_> = queries.chunks(BATCH_SIZE).collect();
         let total_batches = batches.len();
@@ -788,7 +828,10 @@ impl VulnerabilityProvider for OsvSource {
                                 vuln.id, package_name
                             );
                             all_vulnerability_ids.push(vuln.id.clone());
-                            package_vuln_mapping.insert(vuln.id, package_name.clone());
+                            package_vuln_mapping
+                                .entry(vuln.id)
+                                .or_default()
+                                .insert(package_name.clone());
                         }
                     }
                 }
@@ -817,7 +860,7 @@ impl VulnerabilityProvider for OsvSource {
         );
 
         // Fetch full vulnerability details concurrently
-        let mut all_vulnerabilities = HashMap::new();
+        let mut all_vulnerabilities: HashMap<String, Vec<Vulnerability>> = HashMap::new();
         let mut successful_fetches = 0;
         let mut failed_fetches = 0;
 
@@ -857,27 +900,29 @@ impl VulnerabilityProvider for OsvSource {
             match result {
                 Ok(Some(advisory)) => {
                     successful_fetches += 1;
-                    match Self::convert_osv_vulnerability(advisory) {
-                        Some(vuln) => {
-                            let package_name = package_vuln_mapping
-                                .get(&vuln_id)
-                                .unwrap_or(&"unknown".to_string())
-                                .clone();
+                    let target_packages = package_vuln_mapping
+                        .get(&vuln_id)
+                        .cloned()
+                        .unwrap_or_default();
 
-                            debug!(
-                                "Successfully processed vulnerability {} for package {}",
-                                vuln_id, package_name
-                            );
-                            all_vulnerabilities
-                                .entry(package_name)
-                                .or_insert_with(Vec::new)
-                                .push(vuln);
-                        }
-                        None => {
-                            warn!(
-                                "Failed to convert OSV advisory to vulnerability: {}",
-                                vuln_id
-                            );
+                    for package_name in target_packages {
+                        match Self::convert_osv_vulnerability(&advisory, &package_name) {
+                            Some(vuln) => {
+                                debug!(
+                                    "Successfully processed vulnerability {} for package {}",
+                                    vuln_id, package_name
+                                );
+                                all_vulnerabilities
+                                    .entry(package_name)
+                                    .or_default()
+                                    .push(vuln);
+                            }
+                            None => {
+                                debug!(
+                                    "No matching affected entry in {} for package {}",
+                                    vuln_id, package_name
+                                );
+                            }
                         }
                     }
                 }
@@ -941,11 +986,14 @@ impl VulnerabilityProvider for OsvSource {
 
         let db = VulnerabilityDatabase::from_package_map(all_vulnerabilities);
 
-        // Cache the result
-        if !self.no_cache {
-            // Directory creation handled by cache entry write
+        if Self::should_cache_result(&db, all_vulnerability_ids.len(), self.no_cache) {
             let content = serde_json::to_vec(&db)?;
             cache_entry.write(&content).await?;
+        } else if !self.no_cache && db.is_empty() && !all_vulnerability_ids.is_empty() {
+            warn!(
+                "Skipping OSV cache write: 0 vulnerabilities resolved despite {} IDs from batch query (likely network failure)",
+                all_vulnerability_ids.len()
+            );
         }
 
         Ok(db)
@@ -1238,7 +1286,25 @@ mod tests {
                     name: "test-package".to_string(),
                     purl: None,
                 },
-                ranges: vec![],
+                ranges: vec![OsvRange {
+                    range_type: "ECOSYSTEM".to_string(),
+                    repo: None,
+                    events: vec![
+                        OsvEvent {
+                            introduced: Some("0".to_string()),
+                            fixed: None,
+                            last_affected: None,
+                            limit: None,
+                        },
+                        OsvEvent {
+                            introduced: None,
+                            fixed: Some("2.0.0".to_string()),
+                            last_affected: None,
+                            limit: None,
+                        },
+                    ],
+                    database_specific: None,
+                }],
                 versions: None,
                 database_specific: None,
                 ecosystem_specific: None,
@@ -1254,9 +1320,295 @@ mod tests {
             aliases: vec![],
         };
 
-        let vuln = OsvSource::convert_osv_vulnerability(advisory).unwrap();
+        let vuln = OsvSource::convert_osv_vulnerability(&advisory, "test-package").unwrap();
         assert_eq!(vuln.severity, Severity::Critical);
         assert!(vuln.cvss_score.is_some());
         assert!(vuln.cvss_score.unwrap() >= 9.0);
+    }
+
+    #[test]
+    fn test_convert_osv_multi_package_advisory_filters_by_package() {
+        let advisory = OsvAdvisory {
+            id: "GHSA-test".to_string(),
+            summary: Some("Multi-package advisory".to_string()),
+            details: None,
+            affected: vec![
+                OsvAffected {
+                    package: OsvPackage {
+                        ecosystem: "PyPI".to_string(),
+                        name: "langchain".to_string(),
+                        purl: None,
+                    },
+                    ranges: vec![OsvRange {
+                        range_type: "ECOSYSTEM".to_string(),
+                        repo: None,
+                        events: vec![
+                            OsvEvent {
+                                introduced: Some("0".to_string()),
+                                fixed: None,
+                                last_affected: None,
+                                limit: None,
+                            },
+                            OsvEvent {
+                                introduced: None,
+                                fixed: Some("0.0.308".to_string()),
+                                last_affected: None,
+                                limit: None,
+                            },
+                        ],
+                        database_specific: None,
+                    }],
+                    versions: None,
+                    database_specific: None,
+                    ecosystem_specific: None,
+                },
+                OsvAffected {
+                    package: OsvPackage {
+                        ecosystem: "PyPI".to_string(),
+                        name: "numexpr".to_string(),
+                        purl: None,
+                    },
+                    ranges: vec![OsvRange {
+                        range_type: "ECOSYSTEM".to_string(),
+                        repo: None,
+                        events: vec![
+                            OsvEvent {
+                                introduced: Some("0".to_string()),
+                                fixed: None,
+                                last_affected: None,
+                                limit: None,
+                            },
+                            OsvEvent {
+                                introduced: None,
+                                fixed: Some("2.8.5".to_string()),
+                                last_affected: None,
+                                limit: None,
+                            },
+                        ],
+                        database_specific: None,
+                    }],
+                    versions: None,
+                    database_specific: None,
+                    ecosystem_specific: None,
+                },
+            ],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec!["CVE-2023-39631".to_string()],
+        };
+
+        // langchain conversion should only have langchain's ranges
+        let langchain_vuln = OsvSource::convert_osv_vulnerability(&advisory, "langchain").unwrap();
+        assert_eq!(langchain_vuln.affected_versions.len(), 1);
+        assert_eq!(langchain_vuln.fixed_versions.len(), 1);
+        assert_eq!(
+            langchain_vuln.fixed_versions[0],
+            Version::from_str("0.0.308").unwrap()
+        );
+        // langchain 1.2.10 should NOT be in range (>= 0.0.308)
+        assert!(
+            !langchain_vuln.affected_versions[0].contains(&Version::from_str("1.2.10").unwrap())
+        );
+
+        // numexpr conversion should only have numexpr's ranges
+        let numexpr_vuln = OsvSource::convert_osv_vulnerability(&advisory, "numexpr").unwrap();
+        assert_eq!(numexpr_vuln.affected_versions.len(), 1);
+        assert_eq!(numexpr_vuln.fixed_versions.len(), 1);
+        assert_eq!(
+            numexpr_vuln.fixed_versions[0],
+            Version::from_str("2.8.5").unwrap()
+        );
+
+        // Non-existent package should return None
+        assert!(OsvSource::convert_osv_vulnerability(&advisory, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_convert_osv_vulnerability_normalizes_package_name() {
+        let advisory = OsvAdvisory {
+            id: "TEST-NORM".to_string(),
+            summary: Some("Test".to_string()),
+            details: None,
+            affected: vec![OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "My_Package".to_string(),
+                    purl: None,
+                },
+                ranges: vec![OsvRange {
+                    range_type: "ECOSYSTEM".to_string(),
+                    repo: None,
+                    events: vec![
+                        OsvEvent {
+                            introduced: Some("1.0".to_string()),
+                            fixed: None,
+                            last_affected: None,
+                            limit: None,
+                        },
+                        OsvEvent {
+                            introduced: None,
+                            fixed: Some("2.0".to_string()),
+                            last_affected: None,
+                            limit: None,
+                        },
+                    ],
+                    database_specific: None,
+                }],
+                versions: None,
+                database_specific: None,
+                ecosystem_specific: None,
+            }],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        // Should match with different casing and separator style
+        assert!(OsvSource::convert_osv_vulnerability(&advisory, "my-package").is_some());
+        assert!(OsvSource::convert_osv_vulnerability(&advisory, "my_package").is_some());
+        assert!(OsvSource::convert_osv_vulnerability(&advisory, "My_Package").is_some());
+    }
+
+    #[test]
+    fn test_last_affected_creates_inclusive_range() {
+        let affected = OsvAffected {
+            package: OsvPackage {
+                ecosystem: "PyPI".to_string(),
+                name: "test-package".to_string(),
+                purl: None,
+            },
+            ranges: vec![OsvRange {
+                range_type: "ECOSYSTEM".to_string(),
+                repo: None,
+                events: vec![
+                    OsvEvent {
+                        introduced: Some("1.0.0".to_string()),
+                        fixed: None,
+                        last_affected: None,
+                        limit: None,
+                    },
+                    OsvEvent {
+                        introduced: None,
+                        fixed: None,
+                        last_affected: Some("1.5.0".to_string()),
+                        limit: None,
+                    },
+                ],
+                database_specific: None,
+            }],
+            versions: None,
+            database_specific: None,
+            ecosystem_specific: None,
+        };
+
+        let ranges = OsvSource::extract_osv_ranges(&affected);
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].max_inclusive);
+        assert!(ranges[0].constraint.contains("<="));
+        // Version at upper bound should match (inclusive)
+        assert!(ranges[0].contains(&Version::from_str("1.5.0").unwrap()));
+        // Version above upper bound should not
+        assert!(!ranges[0].contains(&Version::from_str("1.5.1").unwrap()));
+    }
+
+    #[test]
+    fn test_fixed_takes_precedence_over_last_affected() {
+        let affected = OsvAffected {
+            package: OsvPackage {
+                ecosystem: "PyPI".to_string(),
+                name: "test-package".to_string(),
+                purl: None,
+            },
+            ranges: vec![OsvRange {
+                range_type: "ECOSYSTEM".to_string(),
+                repo: None,
+                events: vec![
+                    OsvEvent {
+                        introduced: Some("1.0.0".to_string()),
+                        fixed: None,
+                        last_affected: None,
+                        limit: None,
+                    },
+                    OsvEvent {
+                        introduced: None,
+                        fixed: Some("2.0.0".to_string()),
+                        last_affected: None,
+                        limit: None,
+                    },
+                    OsvEvent {
+                        introduced: None,
+                        fixed: None,
+                        last_affected: Some("1.9.0".to_string()),
+                        limit: None,
+                    },
+                ],
+                database_specific: None,
+            }],
+            versions: None,
+            database_specific: None,
+            ecosystem_specific: None,
+        };
+
+        let ranges = OsvSource::extract_osv_ranges(&affected);
+        assert_eq!(ranges.len(), 1);
+        assert!(!ranges[0].max_inclusive);
+        assert_eq!(
+            ranges[0].max.as_ref().unwrap(),
+            &Version::from_str("2.0.0").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_should_cache_empty_db_with_expected_vulns() {
+        let db = VulnerabilityDatabase::new();
+        assert!(
+            !OsvSource::should_cache_result(&db, 5, false),
+            "empty DB with expected vulns should NOT be cached"
+        );
+    }
+
+    #[test]
+    fn test_should_cache_empty_db_no_expected_vulns() {
+        let db = VulnerabilityDatabase::new();
+        assert!(
+            OsvSource::should_cache_result(&db, 0, false),
+            "empty DB with no expected vulns IS a legitimate result"
+        );
+    }
+
+    #[test]
+    fn test_should_cache_nonempty_db() {
+        let db = VulnerabilityDatabase::from_package_map(HashMap::from([(
+            "pkg".to_string(),
+            vec![Vulnerability {
+                id: "TEST".to_string(),
+                summary: "t".to_string(),
+                description: None,
+                severity: Severity::Low,
+                affected_versions: vec![],
+                fixed_versions: vec![],
+                references: vec![],
+                cvss_score: None,
+                cvss_version: None,
+                published: None,
+                modified: None,
+                source: None,
+                withdrawn: None,
+                aliases: vec![],
+            }],
+        )]));
+        assert!(OsvSource::should_cache_result(&db, 1, false));
+    }
+
+    #[test]
+    fn test_should_cache_respects_no_cache() {
+        let db = VulnerabilityDatabase::new();
+        assert!(!OsvSource::should_cache_result(&db, 0, true));
     }
 }

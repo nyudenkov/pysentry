@@ -522,6 +522,7 @@ impl PypaSource {
                             min: Some(version.clone()),
                             max: Some(version.clone()),
                             constraint: format!("=={version}"),
+                            max_inclusive: true,
                         });
                     }
                 }
@@ -543,6 +544,7 @@ impl PypaSource {
     fn parse_pypa_range(range: &PypaRange) -> VersionRange {
         let mut min_version: Option<Version> = None;
         let mut max_version: Option<Version> = None;
+        let mut has_fixed = false;
 
         for event in &range.events {
             if let Some(introduced) = &event.introduced {
@@ -556,22 +558,36 @@ impl PypaSource {
             if let Some(fixed) = &event.fixed {
                 if let Ok(version) = Version::from_str(fixed) {
                     max_version = Some(version);
+                    has_fixed = true;
+                }
+            }
+
+            if let Some(last) = &event.last_affected {
+                if !has_fixed {
+                    if let Ok(version) = Version::from_str(last) {
+                        max_version = Some(version);
+                    }
                 }
             }
         }
 
+        let max_inclusive = !has_fixed && max_version.is_some();
+
         // Build constraint string
-        let constraint = match (&min_version, &max_version) {
-            (Some(min), Some(max)) => format!(">={min},<{max}"),
-            (Some(min), None) => format!(">={min}"),
-            (None, Some(max)) => format!("<{max}"),
-            (None, None) => "*".to_string(),
+        let constraint = match (&min_version, &max_version, max_inclusive) {
+            (Some(min), Some(max), true) => format!(">={min},<={max}"),
+            (Some(min), Some(max), false) => format!(">={min},<{max}"),
+            (Some(min), None, _) => format!(">={min}"),
+            (None, Some(max), true) => format!("<={max}"),
+            (None, Some(max), false) => format!("<{max}"),
+            (None, None, _) => "*".to_string(),
         };
 
         VersionRange {
             min: min_version,
             max: max_version,
             constraint,
+            max_inclusive,
         }
     }
 
@@ -886,5 +902,57 @@ withdrawn: "2023-11-08T00:54:24Z"
         assert_eq!(withdrawn_date.year(), 2023);
         assert_eq!(withdrawn_date.month(), 11);
         assert_eq!(withdrawn_date.day(), 8);
+    }
+
+    #[test]
+    fn test_explicit_version_range_matches_exact_version() {
+        let range = VersionRange {
+            min: Some(Version::from_str("1.0.3").unwrap()),
+            max: Some(Version::from_str("1.0.3").unwrap()),
+            constraint: "==1.0.3".to_string(),
+            max_inclusive: true,
+        };
+        assert!(range.contains(&Version::from_str("1.0.3").unwrap()));
+    }
+
+    #[test]
+    fn test_explicit_version_range_does_not_match_adjacent() {
+        let range = VersionRange {
+            min: Some(Version::from_str("1.0.3").unwrap()),
+            max: Some(Version::from_str("1.0.3").unwrap()),
+            constraint: "==1.0.3".to_string(),
+            max_inclusive: true,
+        };
+        assert!(!range.contains(&Version::from_str("1.0.2").unwrap()));
+        assert!(!range.contains(&Version::from_str("1.0.4").unwrap()));
+    }
+
+    #[test]
+    fn test_pypa_last_affected_range() {
+        let range = PypaRange {
+            range_type: "ECOSYSTEM".to_string(),
+            repo: None,
+            events: vec![
+                PypaEvent {
+                    introduced: Some("1.0.0".to_string()),
+                    fixed: None,
+                    last_affected: None,
+                    limit: None,
+                },
+                PypaEvent {
+                    introduced: None,
+                    fixed: None,
+                    last_affected: Some("1.8.0".to_string()),
+                    limit: None,
+                },
+            ],
+            database_specific: None,
+        };
+
+        let version_range = PypaSource::parse_pypa_range(&range);
+        assert!(version_range.max_inclusive);
+        assert!(version_range.constraint.contains("<="));
+        assert!(version_range.contains(&Version::from_str("1.8.0").unwrap()));
+        assert!(!version_range.contains(&Version::from_str("1.8.1").unwrap()));
     }
 }

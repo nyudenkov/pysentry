@@ -185,6 +185,7 @@ impl PypiSource {
                         min: None,
                         max: Some(version),
                         constraint: format!("<{first_fixed}"),
+                        max_inclusive: false,
                     }];
                 }
             }
