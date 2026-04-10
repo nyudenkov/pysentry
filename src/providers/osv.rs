@@ -207,7 +207,7 @@ impl OsvSource {
 
         let (severity, cvss_score, cvss_version) = Self::map_osv_severity(advisory);
 
-        let target_normalized = target_package.to_lowercase().replace('_', "-");
+        let target_normalized = target_package.to_lowercase().replace(['-', '_', '.'], "-");
 
         let mut affected_versions = Vec::new();
         let mut fixed_versions = Vec::new();
@@ -216,7 +216,11 @@ impl OsvSource {
             if affected.package.ecosystem != "PyPI" {
                 continue;
             }
-            let pkg_normalized = affected.package.name.to_lowercase().replace('_', "-");
+            let pkg_normalized = affected
+                .package
+                .name
+                .to_lowercase()
+                .replace(['-', '_', '.'], "-");
             if pkg_normalized != target_normalized {
                 continue;
             }

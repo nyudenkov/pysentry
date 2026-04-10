@@ -423,7 +423,7 @@ impl RequirementsParser {
                     skipped.push(SkippedPackage {
                         name: PackageName::new(included_file),
                         reason: SkipReason::Other(
-                            "include directive ignored in --no-resolver mode; pass via --requirements-files".into(),
+                            "include directive ignored in --no-resolver mode; packages must be pinned directly in requirements files".into(),
                         ),
                     });
                 } else if trimmed.starts_with("-e ")
