@@ -240,7 +240,6 @@ impl ProjectParser for PoetryLockParser {
                 is_direct,
                 source,
                 path: None, // TODO: Extract path for path dependencies
-                dependency_type,
                 source_file: Some("poetry.lock".to_string()),
             };
 

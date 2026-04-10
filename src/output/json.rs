@@ -109,7 +109,6 @@ mod tests {
             total_packages: 3,
             direct_packages: 3,
             transitive_packages: 0,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
         let database_stats = DatabaseStats {

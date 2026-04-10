@@ -5,29 +5,8 @@ use super::styles::{get_terminal_width, OutputStyles};
 use crate::vulnerability::database::Severity;
 use crate::vulnerability::matcher::FixSuggestion;
 use owo_colors::OwoColorize;
-use std::collections::BTreeMap;
 use std::fmt::Write;
 use tabled::{builder::Builder, settings::Style};
-
-fn group_and_sort_fixes(
-    fix_suggestions: &[FixSuggestion],
-) -> BTreeMap<String, Vec<&FixSuggestion>> {
-    let mut package_fixes: BTreeMap<String, Vec<&FixSuggestion>> = BTreeMap::new();
-    for suggestion in fix_suggestions {
-        package_fixes
-            .entry(suggestion.package_name.to_string())
-            .or_default()
-            .push(suggestion);
-    }
-    for fixes in package_fixes.values_mut() {
-        fixes.sort_by(|a, b| {
-            a.suggested_version
-                .partial_cmp(&b.suggested_version)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-    }
-    package_fixes
-}
 
 /// Returns (from → to version string, fix count) for a sorted group.
 /// Returns None only if `fixes` is unexpectedly empty (defensive guard).
@@ -272,7 +251,8 @@ pub(crate) fn generate_human_report(
     }
 
     if !report.fix_analysis.fix_suggestions.is_empty() {
-        let package_fixes = group_and_sort_fixes(&report.fix_analysis.fix_suggestions);
+        let package_fixes =
+            super::model::group_fixes_by_package(&report.fix_analysis.fix_suggestions);
 
         if use_table {
             writeln!(output)?;
@@ -507,7 +487,6 @@ mod tests {
             total_packages: 5,
             direct_packages: 5,
             transitive_packages: 0,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 
@@ -663,7 +642,6 @@ mod tests {
             total_packages: 5,
             direct_packages: 5,
             transitive_packages: 0,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 
@@ -707,7 +685,6 @@ mod tests {
             total_packages: 5,
             direct_packages: 3,
             transitive_packages: 2,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 
@@ -944,7 +921,6 @@ mod tests {
             total_packages: 5,
             direct_packages: 3,
             transitive_packages: 2,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 
@@ -1010,7 +986,6 @@ mod tests {
             total_packages: 1,
             direct_packages: 1,
             transitive_packages: 0,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 
@@ -1084,7 +1059,6 @@ mod tests {
             total_packages: 3,
             direct_packages: 3,
             transitive_packages: 0,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 

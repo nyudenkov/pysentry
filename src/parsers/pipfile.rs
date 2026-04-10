@@ -442,7 +442,6 @@ impl PipfileParser {
                 is_direct: true,
                 source,
                 path: None,
-                dependency_type: dep_type,
                 source_file: Some("Pipfile".to_string()),
             };
 
@@ -505,23 +504,12 @@ impl PipfileParser {
                 let version =
                     Version::from_str(&version_str).unwrap_or_else(|_| Version::new([0, 0, 0]));
 
-                let dependency_type = if is_direct {
-                    direct_deps_with_info
-                        .iter()
-                        .find(|(name, _, _)| name == &package_name)
-                        .map(|(_, dep_type, _)| *dep_type)
-                        .unwrap_or(DependencyType::Main)
-                } else {
-                    DependencyType::Main
-                };
-
                 let dependency = ParsedDependency {
                     name: package_name,
                     version,
                     is_direct,
                     source: DependencySource::Registry,
                     path: None,
-                    dependency_type,
                     source_file: Some("Pipfile".to_string()),
                 };
 

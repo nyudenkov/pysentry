@@ -165,7 +165,6 @@ impl PyProjectParser {
                 is_direct: true,
                 source,
                 path,
-                dependency_type: dep_type,
                 source_file: Some("pyproject.toml".to_string()),
             });
         }
@@ -278,19 +277,12 @@ impl PyProjectParser {
                             continue;
                         }
 
-                        // Determine dependency type based on original specifications
-                        let dependency_type = self.get_dependency_type_from_original(
-                            &package_name,
-                            direct_deps_with_info,
-                        );
-
                         dependencies.push(ParsedDependency {
                             name: package_name,
                             version: parsed_version,
                             is_direct,
                             source: DependencySource::Registry, // Resolver typically works with PyPI
                             path: None,
-                            dependency_type,
                             source_file: Some("pyproject.toml".to_string()),
                         });
                     }
@@ -314,20 +306,6 @@ impl PyProjectParser {
         }
 
         Ok(dependencies)
-    }
-
-    /// Get dependency type from original specifications
-    fn get_dependency_type_from_original(
-        &self,
-        package_name: &PackageName,
-        direct_deps_with_info: &[(PackageName, DependencyType, String)],
-    ) -> DependencyType {
-        // Find the dependency type from original specifications
-        direct_deps_with_info
-            .iter()
-            .find(|(name, _, _)| name == package_name)
-            .map(|(_, dep_type, _)| *dep_type)
-            .unwrap_or(DependencyType::Main) // Default to Main for transitive dependencies
     }
 }
 
@@ -924,7 +902,6 @@ urllib3==1.26.12
             .unwrap();
         assert!(click_dep.is_direct);
         assert_eq!(click_dep.version, Version::from_str("8.1.3").unwrap());
-        assert_eq!(click_dep.dependency_type, DependencyType::Main);
 
         let requests_dep = result
             .iter()
@@ -932,7 +909,6 @@ urllib3==1.26.12
             .unwrap();
         assert!(requests_dep.is_direct);
         assert_eq!(requests_dep.version, Version::from_str("2.28.1").unwrap());
-        assert_eq!(requests_dep.dependency_type, DependencyType::Main);
 
         // Check transitive dependencies
         let certifi_dep = result
@@ -941,7 +917,6 @@ urllib3==1.26.12
             .unwrap();
         assert!(!certifi_dep.is_direct);
         assert_eq!(certifi_dep.version, Version::from_str("2022.9.24").unwrap());
-        assert_eq!(certifi_dep.dependency_type, DependencyType::Main);
     }
 
     #[tokio::test]
@@ -981,41 +956,6 @@ charset-normalizer==2.1.1
         assert!(package_names.contains("requests"));
         assert!(!package_names.contains("certifi"));
         assert!(!package_names.contains("charset-normalizer"));
-    }
-
-    #[test]
-    fn test_get_dependency_type_from_original() {
-        let parser = PyProjectParser::new(None);
-        let direct_deps_with_info = vec![
-            (
-                PackageName::new("requests"),
-                DependencyType::Main,
-                "requests>=2.25.0".to_string(),
-            ),
-            (
-                PackageName::new("pytest"),
-                DependencyType::Optional,
-                "pytest".to_string(),
-            ),
-        ];
-
-        // Test finding existing dependency
-        let dep_type = parser.get_dependency_type_from_original(
-            &PackageName::new("requests"),
-            &direct_deps_with_info,
-        );
-        assert_eq!(dep_type, DependencyType::Main);
-
-        let dep_type = parser
-            .get_dependency_type_from_original(&PackageName::new("pytest"), &direct_deps_with_info);
-        assert_eq!(dep_type, DependencyType::Optional);
-
-        // Test default for non-existing dependency (transitive)
-        let dep_type = parser.get_dependency_type_from_original(
-            &PackageName::new("certifi"),
-            &direct_deps_with_info,
-        );
-        assert_eq!(dep_type, DependencyType::Main);
     }
 
     #[test]

@@ -389,7 +389,6 @@ impl ProjectParser for PyLockParser {
                 is_direct,
                 source,
                 path: None, // TODO: Extract path for path dependencies
-                dependency_type,
                 source_file: Some("pylock.toml".to_string()),
             };
 

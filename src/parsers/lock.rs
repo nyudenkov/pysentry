@@ -196,7 +196,6 @@ impl ProjectParser for UvLockParser {
             seen_packages.insert(package_name.clone());
 
             // Check if this package should be included based on direct/transitive filtering
-            let dep_info = direct_deps.get(&package_name);
             // For uv.lock files, we ignore direct_only filtering, so always treat as direct
             // This ensures the vulnerability matcher doesn't filter them out
             let is_direct = true;
@@ -214,15 +213,12 @@ impl ProjectParser for UvLockParser {
             }
 
             let source = self.determine_source_from_lock_package(package);
-            let dependency_type = dep_info.copied().unwrap_or(DependencyType::Main);
-
             let dependency = ParsedDependency {
                 name: package_name,
                 version,
                 is_direct,
                 source,
                 path: None, // TODO: Extract path for local dependencies
-                dependency_type,
                 source_file: Some("uv.lock".to_string()),
             };
 
@@ -232,7 +228,7 @@ impl ProjectParser for UvLockParser {
         // Process dependencies referenced by main dependencies
         let all_dep_refs = self.collect_all_dependency_references(&lock);
 
-        for (dep_name, dep_type, is_from_optional_group) in all_dep_refs {
+        for (dep_name, _dep_type, is_from_optional_group) in all_dep_refs {
             // Skip if we've already processed this as a package
             if seen_packages.contains(&dep_name) {
                 continue;
@@ -259,7 +255,6 @@ impl ProjectParser for UvLockParser {
                 is_direct: true, // Always treat as direct since we're ignoring direct_only filtering
                 source: DependencySource::Registry, // Default assumption
                 path: None,
-                dependency_type: dep_type,
                 source_file: Some("uv.lock".to_string()),
             };
 

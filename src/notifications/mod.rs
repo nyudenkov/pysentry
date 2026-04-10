@@ -7,6 +7,7 @@
 //! "show once" tracking.
 
 pub mod client;
+pub mod display;
 pub mod types;
 
 pub use client::NotificationClient;

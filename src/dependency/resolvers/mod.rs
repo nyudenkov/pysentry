@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 pub mod pip_tools;
+pub(crate) mod shared;
 pub mod uv;
 
 pub struct CacheMetadata {

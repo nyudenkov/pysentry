@@ -81,9 +81,6 @@ pub struct PackageIndex {
     /// Project status marker (PEP 792) - may be absent for active projects
     #[serde(rename = "project-status", default)]
     pub project_status: Option<ProjectStatus>,
-    /// List of available versions/files (not fully parsed - we only need status)
-    #[serde(default)]
-    pub versions: Vec<String>,
 }
 
 impl PackageIndex {

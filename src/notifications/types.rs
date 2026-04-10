@@ -9,9 +9,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// Schema version for notifications file format
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
-
 /// Root structure of the notifications JSON file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationsFile {

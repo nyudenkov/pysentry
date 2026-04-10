@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
+use super::{DependencySource, ParsedDependency, ProjectParser, SkippedPackage};
 use crate::{
     types::{PackageName, Version},
     AuditError, Result,
@@ -185,24 +185,18 @@ impl ProjectParser for PipfileLockParser {
         let mut seen_packages = HashSet::new();
 
         for (package_name, package_info) in &lock.default_packages {
-            if let Some(dependency) = self.process_package(
-                package_name,
-                package_info,
-                DependencyType::Main,
-                &mut seen_packages,
-            )? {
+            if let Some(dependency) =
+                self.process_package(package_name, package_info, &mut seen_packages)?
+            {
                 dependencies.push(dependency);
             }
         }
 
         if include_optional {
             for (package_name, package_info) in &lock.develop_packages {
-                if let Some(dependency) = self.process_package(
-                    package_name,
-                    package_info,
-                    DependencyType::Optional,
-                    &mut seen_packages,
-                )? {
+                if let Some(dependency) =
+                    self.process_package(package_name, package_info, &mut seen_packages)?
+                {
                     dependencies.push(dependency);
                 }
             }
@@ -250,7 +244,6 @@ impl PipfileLockParser {
         &self,
         package_name: &str,
         package_info: &PipfileLockPackage,
-        dependency_type: DependencyType,
         seen_packages: &mut HashSet<PackageName>,
     ) -> Result<Option<ParsedDependency>> {
         let package_name_obj = PackageName::new(package_name);
@@ -299,7 +292,6 @@ impl PipfileLockParser {
             is_direct,
             source,
             path,
-            dependency_type,
             source_file: Some("Pipfile.lock".to_string()),
         };
 

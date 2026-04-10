@@ -5,9 +5,7 @@
 //! This parser can work with any dependency resolver (UV, pip-tools)
 //! through the DependencyResolver trait, providing better separation of concerns.
 
-use super::{
-    DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason, SkippedPackage,
-};
+use super::{DependencySource, ParsedDependency, ProjectParser, SkipReason, SkippedPackage};
 use crate::{
     dependency::resolvers::{DependencyResolver, ResolverRegistry},
     types::{PackageName, ResolverType, Version},
@@ -190,7 +188,6 @@ impl RequirementsParser {
                             is_direct,
                             source: DependencySource::Registry, // Most resolvers work with PyPI
                             path: None,
-                            dependency_type: DependencyType::Main, // We'll refine this based on file patterns later
                             source_file: source_file.clone(),
                         });
                     }
@@ -500,7 +497,6 @@ impl RequirementsParser {
                             is_direct: true,
                             source: DependencySource::Registry,
                             path: None,
-                            dependency_type: DependencyType::Main,
                             source_file: source_file.clone(),
                         });
                     }

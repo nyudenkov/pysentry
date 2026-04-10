@@ -51,8 +51,6 @@ pub struct ParsedDependency {
     pub source: DependencySource,
     /// Optional path for path dependencies
     pub path: Option<std::path::PathBuf>,
-    /// Type of dependency (main, dev, optional)
-    pub dependency_type: DependencyType,
     /// Source file where this dependency was parsed from (e.g., "uv.lock", "poetry.lock")
     pub source_file: Option<String>,
 }
@@ -259,7 +257,6 @@ pub struct DependencyStats {
     pub total_packages: usize,
     pub direct_packages: usize,
     pub transitive_packages: usize,
-    pub by_type: std::collections::HashMap<DependencyType, usize>,
     pub by_source: std::collections::HashMap<String, usize>,
 }
 
@@ -270,12 +267,9 @@ impl DependencyStats {
         let direct_packages = dependencies.iter().filter(|d| d.is_direct).count();
         let transitive_packages = total_packages - direct_packages;
 
-        let mut by_type = std::collections::HashMap::new();
         let mut by_source = std::collections::HashMap::new();
 
         for dep in dependencies {
-            *by_type.entry(dep.dependency_type).or_insert(0) += 1;
-
             let source_name = match &dep.source {
                 DependencySource::Registry => "Registry",
                 DependencySource::Git { .. } => "Git",
@@ -289,7 +283,6 @@ impl DependencyStats {
             total_packages,
             direct_packages,
             transitive_packages,
-            by_type,
             by_source,
         }
     }

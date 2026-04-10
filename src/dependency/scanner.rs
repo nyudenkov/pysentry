@@ -91,7 +91,6 @@ impl DependencyScanner {
                 is_direct: dep.is_direct,
                 source: dep.source.clone().into(),
                 path: dep.path.clone(),
-                dependency_type: crate::parsers::DependencyType::Main, // Default assumption for backward compatibility
                 source_file: dep.source_file.clone(),
             })
             .collect();
@@ -114,7 +113,6 @@ impl DependencyScanner {
                 is_direct: dep.is_direct,
                 source: dep.source.clone().into(),
                 path: dep.path.clone(),
-                dependency_type: crate::parsers::DependencyType::Main,
                 source_file: dep.source_file.clone(),
             })
             .collect();
