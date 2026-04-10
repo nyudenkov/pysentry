@@ -67,6 +67,7 @@ Complete reference for all PySentry command line options.
 |--------|-------------|---------|
 | `--resolver` | Dependency resolver: `uv`, `pip-tools` | `uv` |
 | `--requirements-files` | Specific requirements files to audit (disables auto-discovery, repeatable) | `[]` |
+| `--no-resolver` | Skip dependency resolution; audit only pinned (`package==version`) packages directly. Unpinned entries are skipped. Implies `--direct-only` | `false` |
 
 ## Maintenance Options
 
@@ -188,6 +189,10 @@ pysentry --requirements-files requirements-dev.txt requirements-test.txt
 
 # Force specific resolver
 pysentry --resolver uv
+
+# Audit pinned requirements without invoking an external resolver
+pysentry --no-resolver
+pysentry --no-resolver --requirements-files requirements.txt requirements-prod.txt
 ```
 
 ### Output Detail

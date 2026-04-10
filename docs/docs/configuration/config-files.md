@@ -36,6 +36,7 @@ enabled = ["pypa", "osv"]
 
 [resolver]
 type = "uv"
+no_resolver = false
 
 [cache]
 enabled = true
@@ -92,6 +93,7 @@ enabled = ["pypa", "osv"]
 
 [tool.pysentry.resolver]
 type = "uv"
+no_resolver = false
 
 [tool.pysentry.cache]
 enabled = true
@@ -159,6 +161,7 @@ quiet = false
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
 | `type` | string | Dependency resolver: `uv`, `pip-tools` | `uv` |
+| `no_resolver` | bool | Skip resolver; audit only pinned (`package==version`) packages directly. Implies `direct_only` | `false` |
 
 ### `[cache]`
 

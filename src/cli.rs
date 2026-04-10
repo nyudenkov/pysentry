@@ -291,6 +291,11 @@ pub struct AuditArgs {
     /// Disable automatic CI environment detection
     #[arg(long)]
     pub no_ci_detect: bool,
+
+    /// Skip dependency resolution; audit pinned packages (package==version) as-is.
+    /// Unpinned packages are skipped. Implies --direct-only.
+    #[arg(long)]
+    pub no_resolver: bool,
 }
 
 impl AuditArgs {
@@ -504,6 +509,14 @@ impl AuditArgs {
                 "pip-tools" => ResolverTypeArg::PipTools,
                 _ => ResolverTypeArg::Uv, // fallback
             };
+        }
+
+        if !self.no_resolver && config.resolver.no_resolver {
+            merged.no_resolver = true;
+        }
+
+        if merged.no_resolver {
+            merged.direct_only = true;
         }
 
         if !self.no_cache && !config.cache.enabled {
@@ -1276,18 +1289,48 @@ async fn perform_audit(
                         .join(", ")
                 );
             }
-            (
-                scan_explicit_requirements(
-                    &audit_args.requirements_files,
-                    audit_args.include_dev(),
-                    audit_args.include_optional(),
-                    audit_args.direct_only,
-                    audit_args.resolver.clone(),
-                )
-                .await?,
-                Vec::new(), // No skipped packages for explicit requirements files
-                "requirements.txt".to_string(),
+            let (scanned, skipped) = scan_explicit_requirements(
+                &audit_args.requirements_files,
+                audit_args.include_dev(),
+                audit_args.include_optional(),
+                audit_args.direct_only,
+                audit_args.resolver.clone(),
+                audit_args.no_resolver,
             )
+            .await?;
+            (scanned, skipped, "requirements.txt".to_string())
+        } else if audit_args.no_resolver {
+            // --no-resolver without --requirements-files: discover requirements.txt files
+            let resolver_type: ResolverType = audit_args.resolver.clone().into();
+            let parser = crate::parsers::requirements::RequirementsParser::new(Some(resolver_type));
+            let req_files =
+                parser.find_requirements_files(&audit_args.path, audit_args.include_dev());
+            if req_files.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--no-resolver requires requirements.txt files but none were found in {}",
+                    audit_args.path.display()
+                ));
+            }
+            if !audit_args.is_quiet() {
+                eprintln!(
+                    "Using --no-resolver with discovered requirements files: {}",
+                    req_files
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            let (scanned, skipped) = scan_explicit_requirements(
+                &req_files,
+                audit_args.include_dev(),
+                audit_args.include_optional(),
+                true,
+                audit_args.resolver.clone(),
+                true,
+            )
+            .await?;
+            (scanned, skipped, "requirements.txt".to_string())
         } else {
             let resolver_type: ResolverType = audit_args.resolver.clone().into();
 
@@ -1348,7 +1391,7 @@ async fn perform_audit(
             )
         };
 
-    let dependency_stats = if !audit_args.requirements_files.is_empty() {
+    let dependency_stats = if !audit_args.requirements_files.is_empty() || audit_args.no_resolver {
         calculate_dependency_stats(&dependencies)
     } else {
         let scanner = DependencyScanner::new(
@@ -1364,7 +1407,7 @@ async fn perform_audit(
         eprintln!("{dependency_stats}");
     }
 
-    let warnings = if !audit_args.requirements_files.is_empty() {
+    let warnings = if !audit_args.requirements_files.is_empty() || audit_args.no_resolver {
         if dependencies.is_empty() {
             vec!["No dependencies found in specified requirements files.".to_string()]
         } else {
@@ -1525,13 +1568,16 @@ async fn scan_explicit_requirements(
     _optional: bool,
     direct_only: bool,
     resolver: ResolverTypeArg,
-) -> Result<Vec<crate::dependency::scanner::ScannedDependency>> {
+    no_resolver: bool,
+) -> Result<(
+    Vec<crate::dependency::scanner::ScannedDependency>,
+    Vec<crate::parsers::SkippedPackage>,
+)> {
     let resolver_type: ResolverType = resolver.into();
-
     let parser = RequirementsParser::new(Some(resolver_type));
 
-    let parsed_deps = parser
-        .parse_explicit_files(requirements_files, direct_only)
+    let (parsed_deps, skipped_packages) = parser
+        .parse_explicit_files(requirements_files, direct_only, no_resolver)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to parse requirements files: {}", e))?;
 
@@ -1547,7 +1593,7 @@ async fn scan_explicit_requirements(
         })
         .collect();
 
-    Ok(scanned_dependencies)
+    Ok((scanned_dependencies, skipped_packages))
 }
 
 fn calculate_dependency_stats(
@@ -2067,5 +2113,52 @@ mod tests {
         assert_eq!(merged.sources, vec!["osv".to_string()]);
         let resolved = merged.resolve_sources().unwrap();
         assert_eq!(resolved, vec![VulnerabilitySourceType::Osv]);
+    }
+
+    #[test]
+    fn test_no_resolver_flag_parsed() {
+        let args = parse_audit_args(&["--no-resolver", "."]);
+        assert!(args.no_resolver);
+    }
+
+    #[test]
+    fn test_no_resolver_default_is_false() {
+        let args = parse_audit_args(&["."]);
+        assert!(!args.no_resolver);
+    }
+
+    #[test]
+    fn test_no_resolver_config_merge() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.resolver.no_resolver = true;
+        let merged = args.merge_with_config(&config);
+        assert!(merged.no_resolver);
+        assert!(merged.direct_only);
+    }
+
+    #[test]
+    fn test_no_resolver_cli_overrides_config() {
+        let args = parse_audit_args(&["--no-resolver", "."]);
+        let config = crate::config::Config::default();
+        let merged = args.merge_with_config(&config);
+        assert!(merged.no_resolver);
+    }
+
+    #[test]
+    fn test_no_resolver_without_requirements_files_has_empty_requirements_files() {
+        let args = parse_audit_args(&["--no-resolver", "."]);
+        // Standalone --no-resolver must NOT auto-populate requirements_files at arg-parse time.
+        // The downstream conditions `|| audit_args.no_resolver` exist precisely because
+        // requirements_files is empty in this case.
+        assert!(args.requirements_files.is_empty());
+        assert!(args.no_resolver);
+    }
+
+    #[test]
+    fn test_no_resolver_with_requirements_files() {
+        let args = parse_audit_args(&["--no-resolver", "--requirements-files", "req.txt", "."]);
+        assert!(!args.requirements_files.is_empty());
+        assert!(args.no_resolver);
     }
 }

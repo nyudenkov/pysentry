@@ -5,7 +5,9 @@
 //! This parser can work with any dependency resolver (UV, pip-tools)
 //! through the DependencyResolver trait, providing better separation of concerns.
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
+use super::{
+    DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason, SkippedPackage,
+};
 use crate::{
     dependency::resolvers::{DependencyResolver, ResolverRegistry},
     types::{PackageName, ResolverType, Version},
@@ -32,7 +34,7 @@ impl RequirementsParser {
     }
 
     /// Find requirements files in the project directory
-    fn find_requirements_files(&self, project_path: &Path, include_dev: bool) -> Vec<PathBuf> {
+    pub fn find_requirements_files(&self, project_path: &Path, include_dev: bool) -> Vec<PathBuf> {
         let mut files = Vec::new();
 
         // Main requirements.txt
@@ -234,27 +236,15 @@ impl RequirementsParser {
         Ok(direct_deps)
     }
 
-    /// Parse explicit requirements files (bypasses auto-discovery)
+    /// Parse explicit requirements files (bypasses auto-discovery).
+    /// When `no_resolver` is true, pinned packages are parsed directly without invoking
+    /// an external resolver; unpinned packages are returned as skipped.
     pub async fn parse_explicit_files(
         &self,
         requirements_files: &[PathBuf],
         direct_only: bool,
-    ) -> Result<Vec<ParsedDependency>> {
-        info!(
-            "Parsing explicit requirements files with {} resolver",
-            self.resolver.name()
-        );
-
-        // Check if resolver is available
-        if !self.resolver.is_available().await {
-            return Err(AuditError::other(format!(
-                "{} resolver not available. Please install {}",
-                self.resolver.name(),
-                self.resolver.name()
-            )));
-        }
-
-        // Validate that all files exist
+        no_resolver: bool,
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         for file in requirements_files {
             if !file.exists() {
                 return Err(AuditError::other(format!(
@@ -269,16 +259,13 @@ impl RequirementsParser {
             requirements_files.len()
         );
 
-        // Combine all requirements files into one
         let combined_requirements = self.combine_explicit_files(requirements_files).await?;
 
-        // Build source file description from the actual filenames
         let source_file = if requirements_files.len() == 1 {
             requirements_files[0]
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
         } else {
-            // Multiple files - list them all
             Some(
                 requirements_files
                     .iter()
@@ -288,18 +275,35 @@ impl RequirementsParser {
             )
         };
 
-        // Resolve dependencies using the configured resolver
+        if no_resolver {
+            info!("Parsing requirements files without dependency resolution (--no-resolver)");
+            return self
+                .parse_content_no_resolve(&combined_requirements, source_file)
+                .await;
+        }
+
+        info!(
+            "Parsing explicit requirements files with {} resolver",
+            self.resolver.name()
+        );
+
+        if !self.resolver.is_available().await {
+            return Err(AuditError::other(format!(
+                "{} resolver not available. Please install {}",
+                self.resolver.name(),
+                self.resolver.name()
+            )));
+        }
+
         let resolved_content = self
             .resolver
             .resolve_requirements(&combined_requirements)
             .await?;
 
-        // Parse the resolved dependencies
         let dependencies = self
             .parse_resolved_content(&resolved_content, &combined_requirements, source_file)
             .await?;
 
-        // Filter dependencies based on options
         let filtered_dependencies = if direct_only {
             dependencies
                 .into_iter()
@@ -313,7 +317,7 @@ impl RequirementsParser {
             "Successfully parsed {} dependencies from explicit requirements files",
             filtered_dependencies.len()
         );
-        Ok(filtered_dependencies)
+        Ok((filtered_dependencies, Vec::new()))
     }
 
     /// Parse include directive (-r or -c) from a requirements line
@@ -388,6 +392,157 @@ impl RequirementsParser {
         }
 
         Ok(resolved)
+    }
+
+    /// Parse requirements content without invoking an external resolver (--no-resolver mode).
+    /// Only pinned dependencies (package==version) are parsed; unpinned lines are skipped.
+    async fn parse_content_no_resolve(
+        &self,
+        content: &str,
+        source_file: Option<String>,
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        let mut dependencies = Vec::new();
+        let mut skipped = Vec::new();
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Skip pip flags (--index-url, --hash, etc.)
+            // Warn on include directives that won't be followed in no-resolver mode
+            if trimmed.starts_with('-') {
+                if trimmed.starts_with("-r ") || trimmed.starts_with("-c ") {
+                    let included_file = trimmed.split_once(' ').map_or(trimmed, |(_, r)| r).trim();
+                    warn!(
+                        "Include directive '{}' ignored in --no-resolver mode; pass included files explicitly via --requirements-files",
+                        trimmed
+                    );
+                    skipped.push(SkippedPackage {
+                        name: PackageName::new(included_file),
+                        reason: SkipReason::Other(
+                            "include directive ignored in --no-resolver mode; packages must be pinned directly in requirements files".into(),
+                        ),
+                    });
+                } else if trimmed.starts_with("-e ")
+                    || trimmed.starts_with("--editable ")
+                    || trimmed.starts_with("--editable=")
+                {
+                    let editable_target = if let Some(rest) = trimmed.strip_prefix("-e ") {
+                        rest.trim()
+                    } else if let Some(rest) = trimmed.strip_prefix("--editable ") {
+                        rest.trim()
+                    } else if let Some(rest) = trimmed.strip_prefix("--editable=") {
+                        rest.trim()
+                    } else {
+                        trimmed
+                    };
+                    let normalized = format!("-e {editable_target}");
+                    if let Ok(Some(name)) = self.extract_package_name(&normalized) {
+                        warn!("Skipping editable install '{}' in --no-resolver mode", name);
+                        skipped.push(SkippedPackage {
+                            name,
+                            reason: SkipReason::Editable,
+                        });
+                    } else {
+                        warn!(
+                            "Skipping editable install in --no-resolver mode (could not extract package name): {}",
+                            trimmed
+                        );
+                    }
+                }
+                continue;
+            }
+
+            // Skip URL dependencies
+            if trimmed.contains("://") {
+                if let Ok(Some(name)) = self.extract_package_name(trimmed) {
+                    skipped.push(SkippedPackage {
+                        name,
+                        reason: SkipReason::Other(
+                            "URL dependency cannot be audited without resolver".into(),
+                        ),
+                    });
+                } else {
+                    warn!(
+                        "Skipping URL dependency in --no-resolver mode (could not extract package name): {}",
+                        trimmed
+                    );
+                }
+                continue;
+            }
+
+            if let Some((name_part, version_part)) = trimmed.split_once("==") {
+                let name = name_part.trim();
+
+                let clean_name = if let Some(bracket_pos) = name.find('[') {
+                    &name[..bracket_pos]
+                } else {
+                    name
+                };
+
+                let version_str = version_part
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+
+                match Version::from_str(version_str) {
+                    Ok(version) => {
+                        dependencies.push(ParsedDependency {
+                            name: PackageName::new(clean_name),
+                            version,
+                            is_direct: true,
+                            source: DependencySource::Registry,
+                            path: None,
+                            dependency_type: DependencyType::Main,
+                            source_file: source_file.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Skipping '{}': invalid version '{}': {}",
+                            clean_name, version_str, e
+                        );
+                        skipped.push(SkippedPackage {
+                            name: PackageName::new(clean_name),
+                            reason: SkipReason::Other(format!("invalid version: {version_str}")),
+                        });
+                    }
+                }
+            } else if let Ok(Some(pkg_name)) = self.extract_package_name(trimmed) {
+                warn!(
+                    "Skipping unpinned dependency '{}'; --no-resolver requires pinned versions (package==version)",
+                    pkg_name
+                );
+                skipped.push(SkippedPackage {
+                    name: pkg_name,
+                    reason: SkipReason::Other(
+                        "unpinned (no exact version); --no-resolver requires package==version"
+                            .into(),
+                    ),
+                });
+            } else {
+                debug!("Skipping unrecognized line: {}", trimmed);
+            }
+        }
+
+        if dependencies.is_empty() && skipped.is_empty() {
+            return Err(AuditError::EmptyResolution);
+        }
+
+        info!(
+            "--no-resolver: found {} pinned packages, skipped {} unpinned",
+            dependencies.len(),
+            skipped.len()
+        );
+
+        Ok((dependencies, skipped))
     }
 
     /// Combine multiple explicit requirements files into single content
@@ -781,5 +936,160 @@ click==8.0.0
         assert!(resolved.contains(&format!("-r {}", base_abs.display())));
         assert!(resolved.contains(&format!("-r {}", security_abs.display())));
         assert!(resolved.contains("pytest==8.4.2"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_pinned() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "flask==2.0.0\nrequests==2.28.0\nclick==8.1.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 3);
+        assert!(skipped.is_empty());
+        assert!(deps.iter().all(|d| d.is_direct));
+        assert_eq!(deps[0].name, PackageName::new("flask"));
+        assert_eq!(deps[1].name, PackageName::new("requests"));
+        assert_eq!(deps[2].name, PackageName::new("click"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_mixed() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "flask==2.0.0\nrequests>=2.28.0\nclick==8.1.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 2);
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, PackageName::new("requests"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_comments_and_blanks() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "# comment\n\nflask==2.0.0\n  \n# another\nclick==8.0.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 2);
+        assert!(skipped.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_extras_and_markers() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "requests[security]==2.28.0\nflask==2.0.0 ; python_version >= '3.8'\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 2);
+        assert!(skipped.is_empty());
+        assert_eq!(deps[0].name, PackageName::new("requests"));
+        assert_eq!(deps[1].name, PackageName::new("flask"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_all_unpinned() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "flask>=2.0.0\nrequests>=2.28.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 0);
+        assert_eq!(skipped.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_skips_pip_flags() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        // --index-url is a bare pip flag with no package name: not tracked in skipped
+        // -r produces a SkippedPackage (tested separately)
+        let content = "--index-url https://pypi.org/simple\nflask==2.0.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("flask"));
+        assert!(skipped.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_include_directives_tracked_as_skipped() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "-r base.txt\n-c constraints.txt\nflask==2.0.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("flask"));
+        assert_eq!(skipped.len(), 2);
+        assert_eq!(skipped[0].name, PackageName::new("base.txt"));
+        assert_eq!(skipped[1].name, PackageName::new("constraints.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_skips_url_deps() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "flask==2.0.0\ngit+https://github.com/user/repo.git@main#egg=mypkg\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("flask"));
+        assert_eq!(skipped.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_editable_with_egg() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "flask==2.0.0\n-e git+https://github.com/user/repo.git@main#egg=mypkg\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("flask"));
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, PackageName::new("mypkg"));
+        assert!(matches!(skipped[0].reason, SkipReason::Editable));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_editable_long_form() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "--editable git+https://github.com/user/repo.git#egg=mypkg\nclick==8.0.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("click"));
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, PackageName::new("mypkg"));
+        assert!(matches!(skipped[0].reason, SkipReason::Editable));
+    }
+
+    #[tokio::test]
+    async fn test_parse_content_no_resolve_editable_equals_form() {
+        let parser = RequirementsParser::new(Some(ResolverType::Uv));
+        let content = "--editable=git+https://github.com/user/repo.git#egg=mypkg\nclick==8.0.0\n";
+        let (deps, skipped) = parser
+            .parse_content_no_resolve(content, None)
+            .await
+            .unwrap();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("click"));
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].name, PackageName::new("mypkg"));
+        assert!(matches!(skipped[0].reason, SkipReason::Editable));
     }
 }

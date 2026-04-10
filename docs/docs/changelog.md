@@ -4,6 +4,45 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.4
+
+### ✨ New Features
+
+#### Audit Without a Resolver (`--no-resolver`)
+
+The new `--no-resolver` flag lets you audit `requirements.txt` files that are already fully pinned without invoking an external resolver (uv or pip-compile):
+
+```bash
+pysentry --no-resolver
+pysentry --no-resolver --requirements-files requirements.txt requirements-prod.txt
+```
+
+Only `package==version` lines are processed. Unpinned entries (`requests>=2.0`), URL dependencies, and editable installs are skipped and reported. Include directives (`-r other.txt`) are also skipped with a warning — pass those files explicitly via `--requirements-files`.
+
+`--no-resolver` automatically implies `--direct-only`. It can also be set in config:
+
+```toml
+# .pysentry.toml
+[resolver]
+no_resolver = true
+```
+
+Resolves [#150](https://github.com/nyudenkov/pysentry/issues/150).
+
+### 🐛 Bug Fixes
+
+#### Cross-Package Vulnerability Contamination
+
+Advisories covering multiple packages (e.g. a CVE affecting both `package-a` and `package-b`) could incorrectly report a vulnerability against the wrong package. Version ranges from all affected packages in a shared advisory were merged and attributed to whichever package triggered the lookup. PySentry now filters advisory entries to the queried package before converting them, and merges vulnerabilities per-package rather than globally.
+
+Resolves [#148](https://github.com/nyudenkov/pysentry/issues/148).
+
+---
+
+**Full Changelog**: https://github.com/nyudenkov/pysentry/compare/v0.4.3...v0.4.4
+
+---
+
 ## v0.4.3
 
 ### ✨ New Features

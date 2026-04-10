@@ -90,6 +90,9 @@ pub struct SourcesConfig {
 pub struct ResolverConfig {
     #[serde(default = "default_resolver_type", rename = "type")]
     pub resolver_type: String,
+
+    #[serde(default)]
+    pub no_resolver: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -667,6 +670,7 @@ impl Default for ResolverConfig {
     fn default() -> Self {
         Self {
             resolver_type: default_resolver_type(),
+            no_resolver: false,
         }
     }
 }
