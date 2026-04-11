@@ -42,11 +42,11 @@ struct Package {
     version: Option<String>,
     #[serde(default)]
     source: Option<serde_json::Value>, // Used for source detection
-    #[serde(default)]
-    #[allow(dead_code)] // Used for deserialization
+    #[serde(skip)]
+    #[allow(dead_code)]
     sdist: Option<serde_json::Value>,
-    #[serde(default)]
-    #[allow(dead_code)] // Used for deserialization
+    #[serde(skip)]
+    #[allow(dead_code)]
     wheels: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     #[allow(dead_code)] // Used for deserialization
@@ -132,16 +132,23 @@ impl ProjectParser for UvLockParser {
 
         debug!("Found {} packages in lock file", lock.packages.len());
 
-        // Identify packages that come from optional dependency groups
-        let optional_packages = self.identify_optional_packages(&lock);
-        debug!(
-            "Identified {} optional packages (direct and transitive)",
-            optional_packages.len()
-        );
+        // Identify packages that come from optional dependency groups.
+        // Skipped when include_optional=true — the result is only used to filter packages
+        // out, so an empty set produces identical behaviour when nothing is being filtered.
+        let optional_packages = if include_optional {
+            HashSet::new()
+        } else {
+            let set = self.identify_optional_packages(&lock);
+            debug!(
+                "Identified {} optional packages (direct and transitive)",
+                set.len()
+            );
+            set
+        };
 
         let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
             &project_path.join("pyproject.toml"),
-        )? {
+        ).await? {
             Some(names) if !names.is_empty() => names,
             _ => {
                 warn!(

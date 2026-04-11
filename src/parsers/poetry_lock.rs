@@ -85,7 +85,7 @@ where
 struct PoetryLock {
     #[serde(rename = "package")]
     packages: Vec<Package>,
-    #[serde(default)]
+    #[serde(skip)]
     #[allow(dead_code)]
     metadata: Option<serde_json::Value>,
 }
@@ -105,11 +105,11 @@ struct Package {
     python_versions: Option<String>,
     #[serde(default)]
     groups: Vec<String>,
-    #[serde(default)]
+    #[serde(skip)]
     #[allow(dead_code)]
     files: Vec<serde_json::Value>,
     #[serde(default)]
-    dependencies: HashMap<String, serde_json::Value>,
+    dependencies: HashMap<String, serde::de::IgnoredAny>,
     #[serde(default)]
     #[allow(dead_code)]
     extras: HashMap<String, Vec<String>>,
@@ -192,7 +192,7 @@ impl ProjectParser for PoetryLockParser {
 
         let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
             &project_path.join("pyproject.toml"),
-        )? {
+        ).await? {
             Some(names) if !names.is_empty() => names,
             _ => {
                 warn!(

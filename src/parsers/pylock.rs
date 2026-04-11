@@ -73,7 +73,7 @@ struct PyLockPackage {
     #[serde(default)]
     #[allow(dead_code)]
     index: Option<String>,
-    #[serde(default)]
+    #[serde(skip)]
     #[allow(dead_code)]
     attestation_identities: Vec<serde_json::Value>,
 }
@@ -281,7 +281,17 @@ impl ProjectParser for PyLockParser {
     }
 
     fn can_parse(&self, project_path: &Path) -> bool {
-        !self.find_pylock_files(project_path).is_empty()
+        // Fast path: single stat for the primary PEP 751 filename
+        if project_path.join("pylock.toml").exists() {
+            return true;
+        }
+        // Slow path: scan for named variants (pylock.<name>.toml)
+        std::fs::read_dir(project_path)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| e.file_name().to_str().is_some_and(Self::is_pylock_file))
     }
 
     fn priority(&self) -> u8 {
@@ -326,7 +336,7 @@ impl ProjectParser for PyLockParser {
 
         let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
             &project_path.join("pyproject.toml"),
-        )? {
+        ).await? {
             Some(names) if !names.is_empty() => names,
             _ => {
                 warn!(

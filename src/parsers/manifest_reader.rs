@@ -13,12 +13,12 @@ use std::path::Path;
 /// Returns Ok(empty set) if the file does not exist.
 /// Returns Err if the file cannot be read or parsed as TOML.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub fn read_direct_deps_from_pyproject(path: &Path) -> Result<Option<HashSet<PackageName>>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(path)?;
+pub async fn read_direct_deps_from_pyproject(path: &Path) -> Result<Option<HashSet<PackageName>>> {
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     let doc: toml::Value = toml::from_str(&content)?;
 
     let mut names = HashSet::new();
@@ -161,12 +161,12 @@ fn collect_group_deps(
 /// Values are ignored — only keys matter.
 /// Returns Ok(empty set) if the file does not exist.
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-pub fn read_direct_deps_from_pipfile(path: &Path) -> Result<Option<HashSet<PackageName>>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(path)?;
+pub async fn read_direct_deps_from_pipfile(path: &Path) -> Result<Option<HashSet<PackageName>>> {
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     let doc: toml::Value = toml::from_str(&content)?;
 
     let mut names = HashSet::new();
@@ -208,8 +208,8 @@ mod tests {
         file
     }
 
-    #[test]
-    fn test_pep621_dependencies() {
+    #[tokio::test]
+    async fn test_pep621_dependencies() {
         let file = write_toml(
             r#"
 [project]
@@ -221,15 +221,15 @@ dependencies = [
 ]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("requests")));
         assert_eq!(result.len(), 3);
     }
 
-    #[test]
-    fn test_pep621_optional_dependencies() {
+    #[tokio::test]
+    async fn test_pep621_optional_dependencies() {
         let file = write_toml(
             r#"
 [project]
@@ -241,7 +241,7 @@ dev = ["pytest>=7", "coverage"]
 docs = ["sphinx>=7"]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
@@ -249,8 +249,8 @@ docs = ["sphinx>=7"]
         assert_eq!(result.len(), 4);
     }
 
-    #[test]
-    fn test_pep735_dependency_groups() {
+    #[tokio::test]
+    async fn test_pep735_dependency_groups() {
         let file = write_toml(
             r#"
 [dependency-groups]
@@ -258,7 +258,7 @@ test = ["pytest>=7", "coverage>=7"]
 lint = ["ruff>=0.5", "mypy>=1.10"]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
         assert!(result.contains(&PackageName::new("ruff")));
@@ -266,8 +266,8 @@ lint = ["ruff>=0.5", "mypy>=1.10"]
         assert_eq!(result.len(), 4);
     }
 
-    #[test]
-    fn test_pep735_include_group_resolution() {
+    #[tokio::test]
+    async fn test_pep735_include_group_resolution() {
         let file = write_toml(
             r#"
 [dependency-groups]
@@ -280,15 +280,15 @@ dev = [
 ]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
         assert!(result.contains(&PackageName::new("ruff")));
         assert!(result.contains(&PackageName::new("pre-commit")));
     }
 
-    #[test]
-    fn test_pep735_cycle_detection_returns_err() {
+    #[tokio::test]
+    async fn test_pep735_cycle_detection_returns_err() {
         let file = write_toml(
             r#"
 [dependency-groups]
@@ -296,19 +296,19 @@ a = [{include-group = "b"}]
 b = [{include-group = "a"}]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path());
+        let result = read_direct_deps_from_pyproject(file.path()).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_missing_file_returns_none() {
+    #[tokio::test]
+    async fn test_missing_file_returns_none() {
         let path = Path::new("/nonexistent/path/to/pyproject.toml");
-        let result = read_direct_deps_from_pyproject(path).unwrap();
+        let result = read_direct_deps_from_pyproject(path).await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_file_exists_no_recognized_sections_returns_some_empty() {
+    #[tokio::test]
+    async fn test_file_exists_no_recognized_sections_returns_some_empty() {
         let file = write_toml(
             r#"
 [build-system]
@@ -316,7 +316,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap();
         assert!(
             result.is_some(),
             "file exists — should return Some, not None"
@@ -327,8 +327,8 @@ build-backend = "setuptools.build_meta"
         );
     }
 
-    #[test]
-    fn test_poetry_main_deps_filters_python_key() {
+    #[tokio::test]
+    async fn test_poetry_main_deps_filters_python_key() {
         let file = write_toml(
             r#"
 [tool.poetry.dependencies]
@@ -337,15 +337,15 @@ django = "^4.2"
 httpx = {version = "^0.24", extras = ["http2"]}
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(!result.contains(&PackageName::new("python")));
         assert_eq!(result.len(), 2);
     }
 
-    #[test]
-    fn test_poetry_legacy_dev_dependencies() {
+    #[tokio::test]
+    async fn test_poetry_legacy_dev_dependencies() {
         let file = write_toml(
             r#"
 [tool.poetry.dependencies]
@@ -357,7 +357,7 @@ pytest = "^7"
 coverage = "^7"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("requests")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
@@ -365,8 +365,8 @@ coverage = "^7"
         assert_eq!(result.len(), 3);
     }
 
-    #[test]
-    fn test_poetry_modern_group_dependencies() {
+    #[tokio::test]
+    async fn test_poetry_modern_group_dependencies() {
         let file = write_toml(
             r#"
 [tool.poetry.dependencies]
@@ -380,7 +380,7 @@ pytest = "^7"
 sphinx = "^7"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("flask")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("sphinx")));
@@ -388,8 +388,8 @@ sphinx = "^7"
         assert_eq!(result.len(), 3);
     }
 
-    #[test]
-    fn test_uv_dev_dependencies() {
+    #[tokio::test]
+    async fn test_uv_dev_dependencies() {
         let file = write_toml(
             r#"
 [project]
@@ -400,15 +400,15 @@ dependencies = ["httpx>=0.24"]
 dev-dependencies = ["pytest>=7", "ruff>=0.5"]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("ruff")));
         assert_eq!(result.len(), 3);
     }
 
-    #[test]
-    fn test_pipfile_packages_section() {
+    #[tokio::test]
+    async fn test_pipfile_packages_section() {
         let file = write_toml(
             r#"
 [packages]
@@ -416,14 +416,14 @@ django = ">=4.2"
 requests = "*"
 "#,
         );
-        let result = read_direct_deps_from_pipfile(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pipfile(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("requests")));
         assert_eq!(result.len(), 2);
     }
 
-    #[test]
-    fn test_pipfile_dev_packages_section() {
+    #[tokio::test]
+    async fn test_pipfile_dev_packages_section() {
         let file = write_toml(
             r#"
 [packages]
@@ -434,15 +434,15 @@ pytest = ">=7"
 coverage = "*"
 "#,
         );
-        let result = read_direct_deps_from_pipfile(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pipfile(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
         assert_eq!(result.len(), 3);
     }
 
-    #[test]
-    fn test_pipfile_table_value_uses_key_as_name() {
+    #[tokio::test]
+    async fn test_pipfile_table_value_uses_key_as_name() {
         let file = write_toml(
             r#"
 [packages]
@@ -450,21 +450,21 @@ mypackage = {version = ">=1.0", extras = ["extra1"]}
 gitpackage = {git = "https://github.com/org/repo.git", ref = "main"}
 "#,
         );
-        let result = read_direct_deps_from_pipfile(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pipfile(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("mypackage")));
         assert!(result.contains(&PackageName::new("gitpackage")));
         assert_eq!(result.len(), 2);
     }
 
-    #[test]
-    fn test_pipfile_missing_file_returns_none() {
+    #[tokio::test]
+    async fn test_pipfile_missing_file_returns_none() {
         let path = Path::new("/nonexistent/path/to/Pipfile");
-        let result = read_direct_deps_from_pipfile(path).unwrap();
+        let result = read_direct_deps_from_pipfile(path).await.unwrap();
         assert!(result.is_none());
     }
 
-    #[test]
-    fn test_poetry_and_pep621_union() {
+    #[tokio::test]
+    async fn test_poetry_and_pep621_union() {
         let file = write_toml(
             r#"
 [project]
@@ -479,7 +479,7 @@ django = "^4.2"
 pytest = "^7"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("pytest")));

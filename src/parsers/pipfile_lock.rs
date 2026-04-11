@@ -176,7 +176,7 @@ impl ProjectParser for PipfileLockParser {
         debug!("Found {} packages in Pipfile.lock", total_packages);
 
         let companion_set =
-            manifest_reader::read_direct_deps_from_pipfile(&project_path.join("Pipfile"))?;
+            manifest_reader::read_direct_deps_from_pipfile(&project_path.join("Pipfile")).await?;
         if companion_set.is_none() {
             warn!(
                 "No Pipfile found alongside Pipfile.lock — cannot determine direct dependencies, treating all as direct"
