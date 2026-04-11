@@ -10,7 +10,7 @@ These override defaults. Violations cause production bugs, panics, or security i
 - NEVER add files, abstractions, dependencies, or features not explicitly requested
 - NEVER refactor surrounding code when fixing a bug - fix only what is broken
 - NEVER add docstrings, comments, or type annotations to code you did not change
-- When adding/removing `Commands`/`ConfigCommands` variants or changing handler signatures in `src/cli.rs`, MUST update the match arms in `src/python.rs` - it's a thin PyO3 shim that mirrors `src/main.rs` through shared types
+- `src/python.rs` mirrors the `Commands`/`ConfigCommands` match arms from `src/main.rs`. Update it ONLY when: (1) a `Commands`/`ConfigCommands` variant is added or removed, or (2) a function called directly inside a match arm in `main.rs` is renamed or moved to a new module path. Functions called from *within* a handler body (not from the match arm itself) do NOT require `python.rs` changes.
 
 **Resolver Isolation (CRITICAL):**
 - Resolvers MUST run in isolated temp directories - shared state causes cross-project contamination

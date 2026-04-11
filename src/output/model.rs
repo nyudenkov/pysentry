@@ -4,7 +4,7 @@ use crate::maintenance::{MaintenanceCheckConfig, MaintenanceIssue, MaintenanceSu
 use crate::parsers::DependencyStats;
 use crate::vulnerability::database::Severity;
 use crate::vulnerability::database::VulnerabilityMatch;
-use crate::vulnerability::matcher::{DatabaseStats, FixAnalysis};
+use crate::vulnerability::matcher::{DatabaseStats, FixAnalysis, FixSuggestion};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
@@ -140,6 +140,12 @@ pub struct AuditSummary {
     pub unfixable_vulnerabilities: usize,
 }
 
+impl AuditSummary {
+    pub fn counts_by_level(&self) -> &BTreeMap<Severity, usize> {
+        &self.severity_counts
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_helpers {
     use super::*;
@@ -156,7 +162,6 @@ pub(crate) mod test_helpers {
             total_packages: 10,
             direct_packages: 5,
             transitive_packages: 5,
-            by_type: HashMap::new(),
             by_source: {
                 let mut map = HashMap::new();
                 map.insert("Registry".to_string(), 10);
@@ -223,7 +228,6 @@ pub(crate) mod test_helpers {
             total_packages: 10,
             direct_packages: 5,
             transitive_packages: 5,
-            by_type: HashMap::new(),
             by_source: {
                 let mut map = HashMap::new();
                 map.insert("Registry".to_string(), 10);
@@ -323,7 +327,6 @@ pub(crate) mod test_helpers {
             total_packages: 5,
             direct_packages: 5,
             transitive_packages: 0,
-            by_type: HashMap::new(),
             by_source: HashMap::new(),
         };
 
@@ -385,4 +388,24 @@ mod tests {
         assert_eq!(summary.fixable_vulnerabilities, 1);
         assert_eq!(summary.unfixable_vulnerabilities, 0);
     }
+}
+
+pub(crate) fn group_fixes_by_package(
+    fix_suggestions: &[FixSuggestion],
+) -> BTreeMap<String, Vec<&FixSuggestion>> {
+    let mut package_fixes: BTreeMap<String, Vec<&FixSuggestion>> = BTreeMap::new();
+    for suggestion in fix_suggestions {
+        package_fixes
+            .entry(suggestion.package_name.to_string())
+            .or_default()
+            .push(suggestion);
+    }
+    for fixes in package_fixes.values_mut() {
+        fixes.sort_by(|a, b| {
+            a.suggested_version
+                .partial_cmp(&b.suggested_version)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+    package_fixes
 }

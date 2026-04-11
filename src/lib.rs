@@ -22,9 +22,11 @@ pub use vulnerability::{
     matcher::{DatabaseStats, FixAnalysis, FixSuggestion, MatcherConfig, VulnerabilityMatcher},
 };
 
+pub mod audit;
 pub mod cache;
 pub mod ci;
 pub mod cli;
+pub mod commands;
 pub mod config;
 pub mod dependency;
 pub mod logging;

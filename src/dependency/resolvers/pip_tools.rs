@@ -10,18 +10,14 @@ use super::{
     ResolverFeature,
 };
 use crate::cache::audit::AuditCache;
-use crate::types::{ResolvedDependency, ResolverType};
+use crate::types::ResolverType;
 use crate::{AuditError, Result};
 use async_trait::async_trait;
-use regex::Regex;
 use std::collections::HashMap;
 use std::env;
-use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::debug;
-
-static PACKAGE_REGEX: OnceLock<Regex> = OnceLock::new();
 
 /// pip-tools-based dependency resolver
 pub struct PipToolsResolver;
@@ -135,7 +131,7 @@ impl PipToolsResolver {
             }
         }
 
-        Ok("3.12".to_string()) // Fallback to common version
+        Ok(super::shared::FALLBACK_PYTHON_VERSION.to_string())
     }
 
     fn get_platform(&self) -> String {
@@ -169,45 +165,6 @@ impl PipToolsResolver {
         }
 
         markers
-    }
-
-    fn parse_resolved_dependencies(
-        &self,
-        resolved_output: &str,
-        source_file: &std::path::Path,
-    ) -> Vec<ResolvedDependency> {
-        let mut dependencies = Vec::new();
-
-        let package_regex = PACKAGE_REGEX
-            .get_or_init(|| Regex::new(r"^([a-zA-Z0-9_.-]+)==([^;]+)(?:;\s*(.+))?").unwrap());
-
-        for line in resolved_output.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-
-            if let Some(captures) = package_regex.captures(trimmed) {
-                let name = captures.get(1).unwrap().as_str().to_string();
-                let version = captures.get(2).unwrap().as_str().to_string();
-                let markers = captures.get(3).map(|m| m.as_str().to_string());
-
-                dependencies.push(ResolvedDependency {
-                    name,
-                    version,
-                    is_direct: true, // We'll mark all as direct for now, could be enhanced
-                    source_file: source_file.to_path_buf(),
-                    extras: Vec::new(), // Could be parsed from package name if needed
-                    markers,
-                });
-            }
-        }
-
-        debug!(
-            "Parsed {} dependencies from pip-tools output",
-            dependencies.len()
-        );
-        dependencies
     }
 }
 
@@ -309,7 +266,8 @@ impl DependencyResolver for PipToolsResolver {
         match self.execute_pip_compile(requirements_content).await {
             Ok(resolved_output) => {
                 let temp_file = std::path::Path::new("requirements.in");
-                let dependencies = self.parse_resolved_dependencies(&resolved_output, temp_file);
+                let dependencies =
+                    super::shared::parse_resolved_dependencies(&resolved_output, temp_file);
 
                 write_to_cache(cache, &metadata, &resolved_output, dependencies).await?;
 

@@ -3,8 +3,6 @@
 use super::model::AuditReport;
 use super::styles::{maintenance_icon, severity_icon};
 use crate::vulnerability::database::Severity;
-use crate::vulnerability::matcher::FixSuggestion;
-use std::collections::BTreeMap;
 use std::fmt::Write;
 use tabled::{builder::Builder, settings::Style};
 
@@ -217,20 +215,8 @@ pub(crate) fn generate_markdown_report(
         writeln!(output, "## 💡 Fix Suggestions")?;
         writeln!(output)?;
 
-        let mut package_fixes: BTreeMap<String, Vec<&FixSuggestion>> = BTreeMap::new();
-        for suggestion in &report.fix_analysis.fix_suggestions {
-            package_fixes
-                .entry(suggestion.package_name.to_string())
-                .or_default()
-                .push(suggestion);
-        }
-        for fixes in package_fixes.values_mut() {
-            fixes.sort_by(|a, b| {
-                a.suggested_version
-                    .partial_cmp(&b.suggested_version)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
+        let package_fixes =
+            super::model::group_fixes_by_package(&report.fix_analysis.fix_suggestions);
 
         let mut builder = Builder::new();
         builder.push_record(["Package", "Fix", "Vulnerabilities"]);

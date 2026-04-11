@@ -199,7 +199,6 @@ impl SimpleIndexClient {
                     },
                     name: String::new(),
                     project_status: None,
-                    versions: Vec::new(),
                 });
             }
             return Err(AuditError::Http(response.error_for_status().unwrap_err()));

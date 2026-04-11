@@ -4,10 +4,11 @@ use anyhow::Result;
 use clap::Parser;
 use std::process::ExitCode;
 
-use pysentry::cli::{
-    audit, check_resolvers, check_version, config_init, config_path, config_show, config_validate,
-    Cli, Commands, ConfigCommands,
-};
+use pysentry::audit::pipeline::audit;
+use pysentry::cli::{Cli, Commands, ConfigCommands};
+use pysentry::commands::config::{config_init, config_path, config_show, config_validate};
+use pysentry::commands::resolvers::check_resolvers;
+use pysentry::commands::version::check_version;
 use pysentry::logging;
 
 #[tokio::main]

@@ -283,41 +283,55 @@ impl PypaSource {
         self.cache.database_entry("pypa")
     }
 
-    /// Download and parse `PyPA` advisory database
-    async fn download_and_parse_database(&self) -> Result<Vec<PypaAdvisory>> {
+    /// Download and parse `PyPA` advisory database, returning a pre-built VulnerabilityDatabase.
+    /// On a cache hit the database is deserialized directly from JSON (fast path).
+    /// On a cache miss the ZIP is downloaded, parsed, converted, and the JSON is written to cache.
+    async fn download_and_parse_database(&self) -> Result<VulnerabilityDatabase> {
         use crate::cache::Freshness;
         use std::time::Duration;
 
         let cache_entry = self.cache_entry();
         let ttl = Duration::from_secs(self.vulnerability_ttl * 3600);
 
-        // Check cache freshness first unless no_cache is set
         let cache_is_fresh = if self.no_cache {
             false
         } else {
             matches!(cache_entry.freshness(ttl), Ok(Freshness::Fresh))
         };
 
-        let zip_data = if cache_is_fresh {
-            debug!(
-                "Using cached PyPA database (TTL: {} hours)",
-                self.vulnerability_ttl
-            );
-            fs_err::read(cache_entry.path())?
-        } else {
-            debug!("Downloading PyPA advisory database (cache stale or missing)");
-            let data = self.client.download_advisory_database().await?;
-
-            // Cache the downloaded data
-            if !self.no_cache {
-                // Directory creation handled by cache entry write
-                cache_entry.write(&data).await?;
+        if cache_is_fresh {
+            if let Ok(content) = fs_err::read(cache_entry.path()) {
+                if let Ok(db) = serde_json::from_slice::<VulnerabilityDatabase>(&content) {
+                    debug!(
+                        "Using cached PyPA database (TTL: {} hours)",
+                        self.vulnerability_ttl
+                    );
+                    return Ok(db);
+                }
+                // Cache exists but is in old ZIP format — fall through to re-download
+                debug!("PyPA cache present but not in expected JSON format, re-downloading");
             }
+        }
 
-            data
-        };
+        debug!("Downloading PyPA advisory database (cache stale or missing)");
+        let zip_data = self.client.download_advisory_database().await?;
+        let advisories = self.parse_zip_database(&zip_data).await?;
+        let db = Self::convert_advisories(advisories)?;
 
-        self.parse_zip_database(&zip_data).await
+        if !self.no_cache && !db.is_empty() {
+            match serde_json::to_vec(&db) {
+                Ok(content) => {
+                    if let Err(e) = cache_entry.write(&content).await {
+                        tracing::warn!("Failed to write PyPA cache: {}", e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to serialize PyPA database for cache: {}", e);
+                }
+            }
+        }
+
+        Ok(db)
     }
 
     /// Parse `PyPA` advisory database from ZIP data
@@ -669,11 +683,9 @@ impl VulnerabilityProvider for PypaSource {
         &self,
         _packages: &[(String, String)],
     ) -> Result<VulnerabilityDatabase> {
-        // Download and parse the entire PyPA database
-        let advisories = self.download_and_parse_database().await?;
-
-        // Convert PyPA advisories to vulnerability database
-        Self::convert_advisories(advisories)
+        #[cfg(feature = "hotpath")]
+        let _hp_wall = hotpath::MeasurementGuardSync::new("pypa::fetch_vulnerabilities", false, false);
+        self.download_and_parse_database().await
     }
 }
 
