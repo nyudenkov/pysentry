@@ -1,0 +1,130 @@
+name: Benchmark PR
+
+# Triggered by adding the "benchmark" label to a PR, or manually via workflow_dispatch.
+# Note: the label trigger fires once when the label is added. For subsequent pushes on
+# the same PR, use workflow_dispatch and select the PR branch in the "Run workflow" dropdown.
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to post results to (leave empty to only write job summary)"
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'benchmark')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch baseline from main
+        id: baseline
+        run: |
+          if git show origin/main:benchmarks/results/latest.json > /tmp/baseline.json 2>/dev/null; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target
+          key: ${{ runner.os }}-cargo-benchmark-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-benchmark-
+            ${{ runner.os }}-cargo-build-
+
+      - name: Build PySentry
+        run: cargo build --release
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Install benchmark dependencies
+        run: |
+          cd benchmarks
+          uv sync
+
+      - name: Run benchmark suite
+        run: |
+          cd benchmarks
+          uv run python main.py --skip-build --output-dir /tmp/bench-results
+
+      - name: Locate result JSON
+        id: result
+        run: |
+          JSON_FILE=$(ls /tmp/bench-results/*.json 2>/dev/null | head -1)
+          if [ -z "$JSON_FILE" ]; then
+            echo "Error: no benchmark JSON produced" >&2
+            exit 1
+          fi
+          echo "path=${JSON_FILE}" >> $GITHUB_OUTPUT
+
+      - name: Generate comparison report
+        run: |
+          ARGS="--current ${{ steps.result.outputs.path }}"
+          if [ "${{ steps.baseline.outputs.found }}" = "true" ]; then
+            ARGS="$ARGS --baseline /tmp/baseline.json"
+          fi
+          python3 benchmarks/compare.py $ARGS --output /tmp/comparison.md
+          cat /tmp/comparison.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Post PR comment
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ steps.pr.outputs.number }} --body "$(cat /tmp/comparison.md)"
