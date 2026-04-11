@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
+use super::{
+    manifest_reader, DependencySource, DependencyType, ParsedDependency, ProjectParser,
+    SkippedPackage,
+};
 use crate::{
     types::{PackageName, Version},
     AuditError, Result,
@@ -159,7 +162,6 @@ impl ProjectParser for PoetryLockParser {
         1 // Same priority as lock files with exact versions, but will be after uv.lock in registry order
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -167,6 +169,8 @@ impl ProjectParser for PoetryLockParser {
         include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall = hotpath::MeasurementGuardSync::new("poetry_lock::parse_dependencies", false, false);
         let lock_path = project_path.join("poetry.lock");
         debug!("Reading poetry lock file: {}", lock_path.display());
 
@@ -174,7 +178,7 @@ impl ProjectParser for PoetryLockParser {
             .await
             .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
 
-        let lock: PoetryLock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
+        let lock: PoetryLock = Self::deserialize_poetry_lock(&content)?;
 
         if lock.packages.is_empty() {
             warn!(
@@ -186,17 +190,17 @@ impl ProjectParser for PoetryLockParser {
 
         debug!("Found {} packages in poetry lock file", lock.packages.len());
 
-        // Infer direct dependencies from lock file structure only
-        let _direct_deps = self
-            .infer_direct_dependencies_from_lock(project_path)
-            .await?;
-
-        // Warn about --direct-only being ignored for poetry.lock files similar to uv.lock
-        if direct_only {
-            warn!(
-                "--direct-only flag is ignored for poetry.lock files (scanning all main dependencies)"
-            );
-        }
+        let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
+            &project_path.join("pyproject.toml"),
+        )? {
+            Some(names) if !names.is_empty() => names,
+            _ => {
+                warn!(
+                    "No pyproject.toml found alongside poetry.lock — using graph inference for is_direct (diamond dependencies may be misclassified)"
+                );
+                Self::infer_direct_deps(&lock.packages)
+            }
+        };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
@@ -212,9 +216,11 @@ impl ProjectParser for PoetryLockParser {
             }
             seen_packages.insert(package_name.clone());
 
-            // For poetry.lock files, we ignore direct_only filtering, so always treat as direct
-            // This ensures the vulnerability matcher doesn't filter them out
-            let is_direct = true;
+            let is_direct = direct_set.contains(&package_name);
+
+            if direct_only && !is_direct {
+                continue;
+            }
 
             // Determine dependency type from groups
             let dependency_type = if package.optional || self.is_dev_dependency(&package.groups) {
@@ -314,55 +320,180 @@ impl PoetryLockParser {
         DependencySource::Registry
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn deserialize_poetry_lock(content: &str) -> Result<PoetryLock> {
+        toml::from_str(content).map_err(AuditError::LockFileParse)
+    }
+
     /// Infer direct dependencies from poetry.lock file structure when pyproject.toml is not used
     /// by finding packages that are not dependencies of any other package (root nodes)
-    async fn infer_direct_dependencies_from_lock(
-        &self,
-        project_dir: &Path,
-    ) -> Result<HashMap<PackageName, DependencyType>> {
-        let lock_path = project_dir.join("poetry.lock");
-        let content = tokio::fs::read_to_string(&lock_path)
-            .await
-            .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
-
-        let lock: PoetryLock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
-
-        // Build a set of all packages that are dependencies of other packages
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn infer_direct_deps(packages: &[Package]) -> HashSet<PackageName> {
         let mut transitive_deps = HashSet::new();
-        for package in &lock.packages {
-            // Add dependencies from the dependencies field
+        for package in packages {
             for dep_name in package.dependencies.keys() {
                 transitive_deps.insert(PackageName::new(dep_name));
             }
         }
-
-        // Find root packages (packages that are not dependencies of others)
-        let mut direct_deps = HashMap::new();
-        for package in &lock.packages {
-            let package_name = PackageName::new(&package.name);
-            if !transitive_deps.contains(&package_name) {
-                // This package is not a dependency of any other package - it's likely a direct dependency
-                // Determine type based on groups
-                let dependency_type = if package.optional || self.is_dev_dependency(&package.groups)
-                {
-                    DependencyType::Optional
+        packages
+            .iter()
+            .filter_map(|pkg| {
+                let name = PackageName::new(&pkg.name);
+                if transitive_deps.contains(&name) {
+                    None
                 } else {
-                    DependencyType::Main
-                };
-                direct_deps.insert(package_name, dependency_type);
-            }
-        }
+                    Some(name)
+                }
+            })
+            .collect()
+    }
+}
 
-        debug!(
-            "Inferred {} direct dependencies from poetry lock file structure: {}",
-            direct_deps.len(),
-            direct_deps
-                .keys()
-                .map(|k| k.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    async fn create_test_poetry_lock(content: &str) -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let lock_path = temp_dir.path().join("poetry.lock");
+        let project_path = temp_dir.path().to_path_buf();
+        tokio::fs::write(&lock_path, content).await.unwrap();
+        (temp_dir, project_path)
+    }
+
+    #[tokio::test]
+    async fn test_poetry_lock_is_direct_with_companion() {
+        let lock_content = r#"
+[[package]]
+name = "django"
+version = "4.2.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+certifi = ">=14.5.14"
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["django>=4.2"]
+"#;
+
+        let (temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PoetryLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let django = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("django"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(django.is_direct, "django should be direct");
+        assert!(!certifi.is_direct, "certifi should be transitive");
+    }
+
+    #[tokio::test]
+    async fn test_poetry_lock_direct_only_filters_transitive() {
+        let lock_content = r#"
+[[package]]
+name = "django"
+version = "4.2.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+certifi = ">=14.5.14"
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["django>=4.2"]
+"#;
+
+        let (temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PoetryLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, true)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("django"));
+    }
+
+    #[tokio::test]
+    async fn test_poetry_lock_inference_fallback_no_companion() {
+        let lock_content = r#"
+[[package]]
+name = "requests"
+version = "2.31.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+certifi = ">=14.5.14"
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+optional = false
+groups = ["main"]
+files = []
+"#;
+
+        let (_temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        let parser = PoetryLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 2, "all packages should be classified");
+        let requests = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("requests"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(requests.is_direct, "requests should be inferred as direct");
+        assert!(
+            !certifi.is_direct,
+            "certifi should be inferred as transitive"
         );
-
-        Ok(direct_deps)
     }
 }

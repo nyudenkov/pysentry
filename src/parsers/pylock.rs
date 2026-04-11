@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 use super::{
-    DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason, SkippedPackage,
+    manifest_reader, DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason,
+    SkippedPackage,
 };
 use crate::{
     types::{PackageName, Version},
@@ -197,6 +198,7 @@ impl PyLockParser {
                 && filename.len() > 11)
     }
 
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn find_pylock_files(&self, project_path: &Path) -> Vec<std::path::PathBuf> {
         let mut pylock_files = Vec::new();
 
@@ -286,7 +288,6 @@ impl ProjectParser for PyLockParser {
         1
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -294,6 +295,8 @@ impl ProjectParser for PyLockParser {
         include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall = hotpath::MeasurementGuardSync::new("pylock::parse_dependencies", false, false);
         let pylock_files = self.find_pylock_files(project_path);
 
         if pylock_files.is_empty() {
@@ -307,7 +310,7 @@ impl ProjectParser for PyLockParser {
             .await
             .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
 
-        let lock: PyLock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
+        let lock: PyLock = Self::deserialize_pylock(&content)?;
 
         self.validate_lock_version(&lock.lock_version)?;
 
@@ -321,11 +324,17 @@ impl ProjectParser for PyLockParser {
 
         debug!("Found {} packages in pylock file", lock.packages.len());
 
-        if direct_only {
-            warn!(
-                "--direct-only flag is ignored for pylock.toml files (scanning all dependencies)"
-            );
-        }
+        let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
+            &project_path.join("pyproject.toml"),
+        )? {
+            Some(names) if !names.is_empty() => names,
+            _ => {
+                warn!(
+                    "No pyproject.toml found alongside pylock.toml — using graph inference for is_direct (diamond dependencies may be misclassified)"
+                );
+                Self::infer_direct_deps(&lock.packages)
+            }
+        };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
@@ -367,10 +376,12 @@ impl ProjectParser for PyLockParser {
                 }
             };
 
-            let is_direct = true;
+            let is_direct = direct_set.contains(&package_name);
 
-            // Determine dependency type - for now, treat all as main unless we can infer otherwise
-            // TODO: Could enhance this by analyzing dependency groups or markers
+            if direct_only && !is_direct {
+                continue;
+            }
+
             let dependency_type = DependencyType::Main;
 
             if !include_optional && dependency_type == DependencyType::Optional {
@@ -435,6 +446,32 @@ impl ProjectParser for PyLockParser {
 }
 
 impl PyLockParser {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn deserialize_pylock(content: &str) -> Result<PyLock> {
+        toml::from_str(content).map_err(AuditError::LockFileParse)
+    }
+
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn infer_direct_deps(packages: &[PyLockPackage]) -> HashSet<PackageName> {
+        let mut transitive_names: HashSet<PackageName> = HashSet::new();
+        for package in packages {
+            for dep in &package.dependencies {
+                transitive_names.insert(PackageName::new(&dep.name));
+            }
+        }
+        packages
+            .iter()
+            .filter_map(|pkg| {
+                let name = PackageName::new(&pkg.name);
+                if transitive_names.contains(&name) {
+                    None
+                } else {
+                    Some(name)
+                }
+            })
+            .collect()
+    }
+
     fn validate_lock_version(&self, version: &str) -> Result<()> {
         // Currently, only "1.0" is defined by PEP 751
         match version {
@@ -752,5 +789,124 @@ created-by = "test-tool"
         let (dependencies, skipped) = result.unwrap();
         assert_eq!(dependencies.len(), 0);
         assert_eq!(skipped.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pylock_is_direct_with_companion() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "django"
+version = "4.2.0"
+dependencies = [{name = "certifi"}]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["django>=4.2"]
+"#;
+
+        let (temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PyLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let django = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("django"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(django.is_direct, "django should be direct");
+        assert!(!certifi.is_direct, "certifi should be transitive");
+    }
+
+    #[tokio::test]
+    async fn test_pylock_direct_only_filters_transitive() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "django"
+version = "4.2.0"
+dependencies = [{name = "certifi"}]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["django>=4.2"]
+"#;
+
+        let (temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PyLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, true)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("django"));
+    }
+
+    #[tokio::test]
+    async fn test_pylock_inference_fallback_no_companion() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+dependencies = [{name = "certifi"}]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+"#;
+
+        let (_temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        let parser = PyLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 2, "all packages should be classified");
+        let requests = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("requests"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(requests.is_direct, "requests should be inferred as direct");
+        assert!(
+            !certifi.is_direct,
+            "certifi should be inferred as transitive"
+        );
     }
 }

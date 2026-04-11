@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use std::path::Path;
 
 pub mod lock;
+pub mod manifest_reader;
 pub mod pipfile;
 pub mod pipfile_lock;
 pub mod poetry_lock;

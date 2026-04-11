@@ -323,7 +323,6 @@ impl ProjectParser for PyProjectParser {
         2 // Lower priority than lock files - only used when lock file is not available
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -331,6 +330,8 @@ impl ProjectParser for PyProjectParser {
         include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall = hotpath::MeasurementGuardSync::new("pyproject::parse_dependencies", false, false);
         let pyproject_path = project_path.join("pyproject.toml");
         debug!("Reading pyproject.toml: {}", pyproject_path.display());
 

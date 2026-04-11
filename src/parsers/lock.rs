@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 use super::{
-    DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason, SkippedPackage,
+    manifest_reader, DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason,
+    SkippedPackage,
 };
 use crate::{
     types::{PackageName, Version},
@@ -106,7 +107,6 @@ impl ProjectParser for UvLockParser {
         1 // Highest priority - lock files have exact versions
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -114,6 +114,8 @@ impl ProjectParser for UvLockParser {
         include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall = hotpath::MeasurementGuardSync::new("lock::parse_dependencies", false, false);
         let lock_path = project_path.join("uv.lock");
         debug!("Reading lock file: {}", lock_path.display());
 
@@ -121,7 +123,7 @@ impl ProjectParser for UvLockParser {
             .await
             .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
 
-        let lock: Lock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
+        let lock: Lock = Self::deserialize_lock(&content)?;
 
         if lock.packages.is_empty() {
             warn!("Lock file contains no packages: {}", lock_path.display());
@@ -137,27 +139,21 @@ impl ProjectParser for UvLockParser {
             optional_packages.len()
         );
 
-        // Infer direct dependencies from lock file structure only
-        let direct_deps = self
-            .infer_direct_dependencies_from_lock(project_path)
-            .await?;
-
-        // Build dependency graph from uv.lock
-        let dependency_graph = self.build_dependency_graph(&lock);
-
-        // Determine which packages are reachable from which direct dependencies
-        let _reachability = self.analyze_reachability(&direct_deps, &dependency_graph);
+        let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
+            &project_path.join("pyproject.toml"),
+        )? {
+            Some(names) if !names.is_empty() => names,
+            _ => {
+                warn!(
+                    "No pyproject.toml found alongside uv.lock — using graph inference for is_direct (diamond dependencies may be misclassified)"
+                );
+                Self::infer_direct_deps(&lock.packages)
+            }
+        };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
-        let mut skipped_packages = Vec::new(); // Track skipped packages for warnings
-
-        // Warn about --direct-only being ignored for uv.lock files
-        if direct_only {
-            warn!(
-                "--direct-only flag is ignored for uv.lock files (scanning all main dependencies)"
-            );
-        }
+        let mut skipped_packages = Vec::new();
 
         // Process all packages and extract both main and optional dependencies
         for package in &lock.packages {
@@ -195,13 +191,11 @@ impl ProjectParser for UvLockParser {
             }
             seen_packages.insert(package_name.clone());
 
-            // Check if this package should be included based on direct/transitive filtering
-            // For uv.lock files, we ignore direct_only filtering, so always treat as direct
-            // This ensures the vulnerability matcher doesn't filter them out
-            let is_direct = true;
+            let is_direct = direct_set.contains(&package_name);
 
-            // Skip direct_only filtering for uv.lock files since inference is unreliable
-            // uv.lock contains all resolved dependencies, so this filter doesn't make sense
+            if direct_only && !is_direct {
+                continue;
+            }
 
             // Skip optional packages when include_optional is false
             if optional_packages.contains(&package_name) && !include_optional {
@@ -243,17 +237,17 @@ impl ProjectParser for UvLockParser {
                 continue;
             }
 
-            // Skip direct-only filtering for dependency references (consistent with warning)
-            // Since we ignore the --direct-only flag for uv.lock files, don't filter here either
+            let is_direct = direct_set.contains(&dep_name);
 
-            // Create a placeholder dependency for dependencies that are referenced but not in packages
-            // This happens when lock file has dependency references but the actual package isn't included
-            // Use version 0.0.0 as placeholder - this will trigger warnings in validation
+            if direct_only && !is_direct {
+                continue;
+            }
+
             let dependency = ParsedDependency {
                 name: dep_name,
-                version: Version::new([0, 0, 0]), // Placeholder version
-                is_direct: true, // Always treat as direct since we're ignoring direct_only filtering
-                source: DependencySource::Registry, // Default assumption
+                version: Version::new([0, 0, 0]),
+                is_direct,
+                source: DependencySource::Registry,
                 path: None,
                 source_file: Some("uv.lock".to_string()),
             };
@@ -297,7 +291,13 @@ impl ProjectParser for UvLockParser {
 }
 
 impl UvLockParser {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn deserialize_lock(content: &str) -> Result<Lock> {
+        toml::from_str(content).map_err(AuditError::LockFileParse)
+    }
+
     /// Identify packages that come from optional dependency groups (and their transitive deps)
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn identify_optional_packages(&self, lock: &Lock) -> HashSet<PackageName> {
         let mut optional_packages = HashSet::new();
         let mut to_process = Vec::new();
@@ -343,6 +343,7 @@ impl UvLockParser {
     }
 
     /// Collect all dependency references from both main and optional dependencies
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn collect_all_dependency_references(
         &self,
         lock: &Lock,
@@ -373,6 +374,7 @@ impl UvLockParser {
     }
 
     /// Build dependency graph from uv.lock file including both main and optional dependencies
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn build_dependency_graph(&self, lock: &Lock) -> HashMap<PackageName, Vec<PackageName>> {
         let mut graph = HashMap::new();
 
@@ -416,50 +418,6 @@ impl UvLockParser {
         graph
     }
 
-    /// Analyze which packages are reachable from which direct dependencies
-    fn analyze_reachability(
-        &self,
-        direct_deps: &HashMap<PackageName, DependencyType>,
-        graph: &HashMap<PackageName, Vec<PackageName>>,
-    ) -> HashMap<PackageName, HashSet<DependencyType>> {
-        let mut reachability = HashMap::new();
-
-        // For each direct dependency, do a DFS to find all reachable packages
-        for (direct_dep, dep_type) in direct_deps {
-            debug!(
-                "Starting DFS from direct dependency '{}' of type {:?}",
-                direct_dep, dep_type
-            );
-            let mut visited = HashSet::new();
-            let mut stack = vec![direct_dep.clone()];
-
-            while let Some(current) = stack.pop() {
-                if visited.contains(&current) {
-                    continue;
-                }
-                visited.insert(current.clone());
-
-                // Mark this package as reachable from this dependency type
-                reachability
-                    .entry(current.clone())
-                    .or_insert_with(HashSet::new)
-                    .insert(*dep_type);
-
-                // Add dependencies to the stack for further exploration
-                if let Some(deps) = graph.get(&current) {
-                    for dep in deps {
-                        if !visited.contains(dep) {
-                            stack.push(dep.clone());
-                        }
-                    }
-                }
-            }
-        }
-
-        debug!("Analyzed reachability for {} packages", reachability.len());
-        reachability
-    }
-
     /// Determine source type from lock file package data
     fn determine_source_from_lock_package(&self, package: &Package) -> DependencySource {
         // Try to parse the source field from the lock file package
@@ -498,58 +456,30 @@ impl UvLockParser {
         DependencySource::Registry
     }
 
-    /// Infer direct dependencies from lock file structure when pyproject.toml is missing
-    /// by finding packages that are not dependencies of any other package (root nodes)
-    async fn infer_direct_dependencies_from_lock(
-        &self,
-        project_dir: &Path,
-    ) -> Result<HashMap<PackageName, DependencyType>> {
-        let lock_path = project_dir.join("uv.lock");
-        let content = tokio::fs::read_to_string(&lock_path)
-            .await
-            .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
-
-        let lock: Lock = toml::from_str(&content).map_err(AuditError::LockFileParse)?;
-
-        // Build a set of all packages that are dependencies of other packages (both main and optional)
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn infer_direct_deps(packages: &[Package]) -> HashSet<PackageName> {
         let mut transitive_deps = HashSet::new();
-        for package in &lock.packages {
-            // Add main dependencies
+        for package in packages {
             for dep in &package.dependencies {
                 transitive_deps.insert(PackageName::new(&dep.name));
             }
-
-            // Add optional dependencies from all groups
             for optional_deps in package.optional_dependencies.values() {
                 for dep in optional_deps {
                     transitive_deps.insert(PackageName::new(&dep.name));
                 }
             }
         }
-
-        // Find root packages (packages that are not dependencies of others)
-        let mut direct_deps = HashMap::new();
-        for package in &lock.packages {
-            let package_name = PackageName::new(&package.name);
-            if !transitive_deps.contains(&package_name) {
-                // This package is not a dependency of any other package - it's likely a direct dependency
-                // For now, assume all root packages are Main type since we can't distinguish from lock file alone
-                // TODO: Consider if we can infer optional vs main based on dependency group context
-                direct_deps.insert(package_name, DependencyType::Main);
-            }
-        }
-
-        debug!(
-            "Inferred {} direct dependencies from lock file structure: {}",
-            direct_deps.len(),
-            direct_deps
-                .keys()
-                .map(|k| k.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-
-        Ok(direct_deps)
+        packages
+            .iter()
+            .filter_map(|pkg| {
+                let name = PackageName::new(&pkg.name);
+                if transitive_deps.contains(&name) {
+                    None
+                } else {
+                    Some(name)
+                }
+            })
+            .collect()
     }
 
     fn is_virtual_package(&self, package: &Package) -> bool {
@@ -702,6 +632,140 @@ source = { editable = "../other" }
         if !warnings.is_empty() {
             assert!(warnings[0].contains("No dependencies found"));
         }
+    }
+
+    #[tokio::test]
+    async fn test_uv_lock_is_direct_with_companion() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.11"
+
+[[package]]
+name = "django"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+  { name = "certifi" },
+]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["django>=4.2"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = UvLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let django = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("django"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(django.is_direct, "django should be direct");
+        assert!(!certifi.is_direct, "certifi should be transitive");
+    }
+
+    #[tokio::test]
+    async fn test_uv_lock_direct_only_filters_transitive() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.11"
+
+[[package]]
+name = "django"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+  { name = "certifi" },
+]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["django>=4.2"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = UvLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, true)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("django"));
+    }
+
+    #[tokio::test]
+    async fn test_uv_lock_inference_fallback_no_companion() {
+        let lock_content = r#"
+version = 1
+revision = 2
+requires-python = ">=3.11"
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+  { name = "certifi" },
+]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+source = { registry = "https://pypi.org/simple" }
+"#;
+
+        let (_temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        let parser = UvLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 2, "all packages should be classified");
+        let requests = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("requests"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(requests.is_direct, "requests should be inferred as direct");
+        assert!(
+            !certifi.is_direct,
+            "certifi should be inferred as transitive"
+        );
     }
 
     #[test]

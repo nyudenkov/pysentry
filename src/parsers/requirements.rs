@@ -584,7 +584,6 @@ impl ProjectParser for RequirementsParser {
         7 // Medium priority - after lock files and pyproject.toml, before simple parsers
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -592,6 +591,8 @@ impl ProjectParser for RequirementsParser {
         _include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall = hotpath::MeasurementGuardSync::new("requirements::parse_dependencies", false, false);
         info!(
             "Parsing requirements.txt files with {} resolver",
             self.resolver.name()
