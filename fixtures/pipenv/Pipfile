@@ -1,0 +1,40 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[packages]
+django = ">=4.2,<5.0"
+djangorestframework = ">=3.14.0"
+django-cors-headers = ">=4.2.0"
+django-filter = ">=23.2"
+psycopg2-binary = ">=2.9.7"
+celery = {extras = ["redis"], version = ">=5.3.4"}
+redis = ">=5.0.0"
+httpx = ">=0.25.0"
+pydantic = ">=2.4.0"
+python-decouple = ">=3.8"
+pillow = ">=10.0.0"
+boto3 = ">=1.28.0"
+sentry-sdk = {extras = ["django"], version = ">=1.32.0"}
+gunicorn = ">=21.2.0"
+
+[dev-packages]
+pytest = ">=7.4.0"
+pytest-django = ">=4.5.2"
+pytest-cov = ">=4.1.0"
+pytest-mock = ">=3.11.0"
+factory-boy = ">=3.3.0"
+faker = ">=19.6.0"
+ruff = ">=0.1.0"
+mypy = ">=1.6.0"
+django-stubs = {extras = ["compatible-mypy"], version = ">=4.2.6"}
+djangorestframework-stubs = ">=3.14.4"
+
+[requires]
+python_version = "3.12"
+
+[scripts]
+test = "pytest"
+lint = "ruff check ."
+format = "ruff format ."
