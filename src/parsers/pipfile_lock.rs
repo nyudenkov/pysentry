@@ -157,7 +157,8 @@ impl ProjectParser for PipfileLockParser {
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         #[cfg(feature = "hotpath")]
-        let _hp_wall = hotpath::MeasurementGuardSync::new("pipfile_lock::parse_dependencies", false, false);
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("pipfile_lock::parse_dependencies", false, false);
         let lock_path = project_path.join("Pipfile.lock");
         debug!("Reading Pipfile lock file: {}", lock_path.display());
 
@@ -187,9 +188,9 @@ impl ProjectParser for PipfileLockParser {
         let mut seen_packages = HashSet::new();
 
         for (package_name, package_info) in &lock.default_packages {
-            let is_direct = companion_set
-                .as_ref()
-                .map_or(true, |set| set.is_empty() || set.contains(&PackageName::new(package_name)));
+            let is_direct = companion_set.as_ref().map_or(true, |set| {
+                set.is_empty() || set.contains(&PackageName::new(package_name))
+            });
             if direct_only && !is_direct {
                 continue;
             }
@@ -202,9 +203,9 @@ impl ProjectParser for PipfileLockParser {
 
         if include_optional {
             for (package_name, package_info) in &lock.develop_packages {
-                let is_direct = companion_set
-                    .as_ref()
-                    .map_or(true, |set| set.is_empty() || set.contains(&PackageName::new(package_name)));
+                let is_direct = companion_set.as_ref().map_or(true, |set| {
+                    set.is_empty() || set.contains(&PackageName::new(package_name))
+                });
                 if direct_only && !is_direct {
                     continue;
                 }

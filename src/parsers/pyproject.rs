@@ -331,7 +331,8 @@ impl ProjectParser for PyProjectParser {
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         #[cfg(feature = "hotpath")]
-        let _hp_wall = hotpath::MeasurementGuardSync::new("pyproject::parse_dependencies", false, false);
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("pyproject::parse_dependencies", false, false);
         let pyproject_path = project_path.join("pyproject.toml");
         debug!("Reading pyproject.toml: {}", pyproject_path.display());
 

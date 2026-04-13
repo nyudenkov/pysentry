@@ -170,7 +170,8 @@ impl ProjectParser for PoetryLockParser {
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         #[cfg(feature = "hotpath")]
-        let _hp_wall = hotpath::MeasurementGuardSync::new("poetry_lock::parse_dependencies", false, false);
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("poetry_lock::parse_dependencies", false, false);
         let lock_path = project_path.join("poetry.lock");
         debug!("Reading poetry lock file: {}", lock_path.display());
 
@@ -190,17 +191,20 @@ impl ProjectParser for PoetryLockParser {
 
         debug!("Found {} packages in poetry lock file", lock.packages.len());
 
-        let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
-            &project_path.join("pyproject.toml"),
-        ).await? {
-            Some(names) if !names.is_empty() => names,
-            _ => {
-                warn!(
+        let direct_set: HashSet<PackageName> =
+            match manifest_reader::read_direct_deps_from_pyproject(
+                &project_path.join("pyproject.toml"),
+            )
+            .await?
+            {
+                Some(names) if !names.is_empty() => names,
+                _ => {
+                    warn!(
                     "No pyproject.toml found alongside poetry.lock — using graph inference for is_direct (diamond dependencies may be misclassified)"
                 );
-                Self::infer_direct_deps(&lock.packages)
-            }
-        };
+                    Self::infer_direct_deps(&lock.packages)
+                }
+            };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();

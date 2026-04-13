@@ -221,7 +221,10 @@ dependencies = [
 ]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("requests")));
@@ -241,7 +244,10 @@ dev = ["pytest>=7", "coverage"]
 docs = ["sphinx>=7"]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
@@ -258,7 +264,10 @@ test = ["pytest>=7", "coverage>=7"]
 lint = ["ruff>=0.5", "mypy>=1.10"]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
         assert!(result.contains(&PackageName::new("ruff")));
@@ -280,7 +289,10 @@ dev = [
 ]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
         assert!(result.contains(&PackageName::new("ruff")));
@@ -337,7 +349,10 @@ django = "^4.2"
 httpx = {version = "^0.24", extras = ["http2"]}
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(!result.contains(&PackageName::new("python")));
@@ -357,7 +372,10 @@ pytest = "^7"
 coverage = "^7"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("requests")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
@@ -380,7 +398,10 @@ pytest = "^7"
 sphinx = "^7"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("flask")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("sphinx")));
@@ -400,7 +421,10 @@ dependencies = ["httpx>=0.24"]
 dev-dependencies = ["pytest>=7", "ruff>=0.5"]
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("ruff")));
@@ -416,7 +440,10 @@ django = ">=4.2"
 requests = "*"
 "#,
         );
-        let result = read_direct_deps_from_pipfile(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pipfile(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("requests")));
         assert_eq!(result.len(), 2);
@@ -434,7 +461,10 @@ pytest = ">=7"
 coverage = "*"
 "#,
         );
-        let result = read_direct_deps_from_pipfile(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pipfile(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("pytest")));
         assert!(result.contains(&PackageName::new("coverage")));
@@ -450,7 +480,10 @@ mypackage = {version = ">=1.0", extras = ["extra1"]}
 gitpackage = {git = "https://github.com/org/repo.git", ref = "main"}
 "#,
         );
-        let result = read_direct_deps_from_pipfile(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pipfile(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("mypackage")));
         assert!(result.contains(&PackageName::new("gitpackage")));
         assert_eq!(result.len(), 2);
@@ -479,7 +512,10 @@ django = "^4.2"
 pytest = "^7"
 "#,
         );
-        let result = read_direct_deps_from_pyproject(file.path()).await.unwrap().unwrap();
+        let result = read_direct_deps_from_pyproject(file.path())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(result.contains(&PackageName::new("httpx")));
         assert!(result.contains(&PackageName::new("django")));
         assert!(result.contains(&PackageName::new("pytest")));

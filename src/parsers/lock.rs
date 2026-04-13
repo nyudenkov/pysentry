@@ -146,17 +146,20 @@ impl ProjectParser for UvLockParser {
             set
         };
 
-        let direct_set: HashSet<PackageName> = match manifest_reader::read_direct_deps_from_pyproject(
-            &project_path.join("pyproject.toml"),
-        ).await? {
-            Some(names) if !names.is_empty() => names,
-            _ => {
-                warn!(
+        let direct_set: HashSet<PackageName> =
+            match manifest_reader::read_direct_deps_from_pyproject(
+                &project_path.join("pyproject.toml"),
+            )
+            .await?
+            {
+                Some(names) if !names.is_empty() => names,
+                _ => {
+                    warn!(
                     "No pyproject.toml found alongside uv.lock — using graph inference for is_direct (diamond dependencies may be misclassified)"
                 );
-                Self::infer_direct_deps(&lock.packages)
-            }
-        };
+                    Self::infer_direct_deps(&lock.packages)
+                }
+            };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();

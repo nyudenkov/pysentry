@@ -239,7 +239,8 @@ impl VulnerabilityProvider for PypiSource {
         packages: &[(String, String)],
     ) -> Result<VulnerabilityDatabase> {
         #[cfg(feature = "hotpath")]
-        let _hp_wall = hotpath::MeasurementGuardSync::new("pypi::fetch_vulnerabilities", false, false);
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("pypi::fetch_vulnerabilities", false, false);
         debug!(
             "Fetching vulnerabilities for {} packages from PyPI",
             packages.len()

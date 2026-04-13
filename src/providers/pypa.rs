@@ -684,7 +684,8 @@ impl VulnerabilityProvider for PypaSource {
         _packages: &[(String, String)],
     ) -> Result<VulnerabilityDatabase> {
         #[cfg(feature = "hotpath")]
-        let _hp_wall = hotpath::MeasurementGuardSync::new("pypa::fetch_vulnerabilities", false, false);
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("pypa::fetch_vulnerabilities", false, false);
         self.download_and_parse_database().await
     }
 }
