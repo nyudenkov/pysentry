@@ -136,7 +136,6 @@ quiet = false
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
 | `format` | string | Output format: `human`, `json`, `sarif`, `markdown` | `human` |
-| `severity` | string | **Deprecated** (will be removed in v0.5). Minimum severity to display in report | `low` |
 | `fail_on` | string | Minimum severity to cause non-zero exit | `medium` |
 | `scope` | string | Dependency scope: `all` or `main` | `all` |
 | `direct_only` | bool | Only check direct dependencies | `false` |

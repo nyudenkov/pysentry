@@ -26,7 +26,6 @@ Complete reference for all PySentry command line options.
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--severity` | **Deprecated** (will be removed in v0.5). Minimum severity to display in report | `low` |
 | `--fail-on` | Fail (exit non-zero) on vulnerabilities >= severity | `medium` |
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
@@ -40,9 +39,6 @@ Complete reference for all PySentry command line options.
 `--compact` and `--detailed` are mutually exclusive. Using both together will cause an error.
 :::
 
-:::note
-`--severity` is a post-hoc **display filter only**. It never affects which vulnerabilities are evaluated against `--fail-on`. For example, with `--severity high --fail-on medium`, medium+ vulnerabilities are still evaluated for exit-code purposes, but only high+ are shown in the report. Use `--fail-on` to control exit behavior; `--severity` will be removed in v0.5.
-:::
 
 ## Ignore Options
 

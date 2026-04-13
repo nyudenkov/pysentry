@@ -4,6 +4,40 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.5
+
+### ✨ New Features
+
+#### `--direct-only` Now Works for All Lock File Formats
+
+`--direct-only` now correctly identifies direct dependencies when used with any lock file format — `uv.lock`, `Pipfile.lock`, `poetry.lock`, and `pylock.toml`.
+
+PySentry reads the companion manifest alongside the lock file (pyproject.toml, Pipfile) to determine which packages are declared as direct dependencies. When no companion manifest is found, it falls back to lock-graph inference.
+
+```bash
+pysentry --direct-only
+```
+
+### ⚠️ Breaking Changes
+
+#### `--severity` Flag Removed
+
+The `--severity` display filter, deprecated since v0.4.3, has been removed. Use `--fail-on` to control exit behavior based on severity level.
+
+#### `severity` Config Field Removed
+
+The `severity` field in `[defaults]` (`.pysentry.toml` / `[tool.pysentry]` in `pyproject.toml`) has been removed alongside the CLI flag. Remove it from your config if present.
+
+#### `--all` / `--all-extras` Flags Removed
+
+The hidden `--all` and `--all-extras` flags have been removed. Extra dependencies are included by default; use `--exclude-extra` to opt out.
+
+---
+
+**Full Changelog**: https://github.com/nyudenkov/pysentry/compare/v0.4.4...v0.4.5
+
+---
+
 ## v0.4.4
 
 ### ✨ New Features
