@@ -26,7 +26,9 @@ jobs:
     name: Run Benchmarks
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.label.name == 'benchmark')
+      (github.event_name == 'pull_request' &&
+       github.event.label.name == 'benchmark' &&
+       !contains(github.event.pull_request.labels.*.name, 'automated'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
