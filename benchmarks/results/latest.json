@@ -1,0 +1,295 @@
+{
+  "system_info": {
+    "platform": "Linux-6.17.0-1010-azure-x86_64-with-glibc2.39",
+    "python_version": "3.11.15",
+    "cpu_count": 4,
+    "total_memory_gb": 15.61899185180664,
+    "available_memory_gb": 14.564765930175781
+  },
+  "results": [
+    {
+      "config_name": "pysentry-pypa",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 2.5124025344848633,
+        "peak_memory_mb": 71.6484375,
+        "avg_memory_mb": 29.532001201923077,
+        "cpu_percent": 22.61923076923077,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:24.971794"
+    },
+    {
+      "config_name": "pysentry-osv",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 1.0024495124816895,
+        "peak_memory_mb": 20.203125,
+        "avg_memory_mb": 13.421484375,
+        "cpu_percent": 9.98,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:25.976987"
+    },
+    {
+      "config_name": "pysentry-pypi",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 0.819469690322876,
+        "peak_memory_mb": 20.0546875,
+        "avg_memory_mb": 13.13454861111111,
+        "cpu_percent": 14.399999999999999,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:26.881815"
+    },
+    {
+      "config_name": "pysentry-all-sources",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 1.990830659866333,
+        "peak_memory_mb": 91.33203125,
+        "avg_memory_mb": 32.97421875,
+        "cpu_percent": 33.394999999999996,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:28.889948"
+    },
+    {
+      "config_name": "pip-audit-default",
+      "tool_name": "pip-audit",
+      "dataset_name": "small_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 9.002362966537476,
+        "peak_memory_mb": 46.2265625,
+        "avg_memory_mb": 43.46710069444445,
+        "cpu_percent": 4.324444444444444,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:37.917611"
+    },
+    {
+      "config_name": "pysentry-pypa",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 1.8476083278656006,
+        "peak_memory_mb": 103.2578125,
+        "avg_memory_mb": 22.27549342105263,
+        "cpu_percent": 30.95263157894737,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:41.937201"
+    },
+    {
+      "config_name": "pysentry-osv",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 0.679469108581543,
+        "peak_memory_mb": 11.890625,
+        "avg_memory_mb": 8.860491071428571,
+        "cpu_percent": 2.8428571428571425,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:43.546751"
+    },
+    {
+      "config_name": "pysentry-pypi",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 0.464824914932251,
+        "peak_memory_mb": 11.390625,
+        "avg_memory_mb": 7.646875,
+        "cpu_percent": 2.0,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:44.854005"
+    },
+    {
+      "config_name": "pysentry-all-sources",
+      "tool_name": "pysentry",
+      "dataset_name": "small_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 1.9481959342956543,
+        "peak_memory_mb": 85.40625,
+        "avg_memory_mb": 23.3671875,
+        "cpu_percent": 32.400000000000006,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:53:49.169787"
+    },
+    {
+      "config_name": "pip-audit-default",
+      "tool_name": "pip-audit",
+      "dataset_name": "small_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 8.019059658050537,
+        "peak_memory_mb": 44.9296875,
+        "avg_memory_mb": 43.25576171875,
+        "cpu_percent": 3.7399999999999993,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:05.621654"
+    },
+    {
+      "config_name": "pysentry-pypa",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 2.7828800678253174,
+        "peak_memory_mb": 87.62890625,
+        "avg_memory_mb": 32.938755580357146,
+        "cpu_percent": 30.625,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:08.435359"
+    },
+    {
+      "config_name": "pysentry-osv",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 1.8542912006378174,
+        "peak_memory_mb": 40.91796875,
+        "avg_memory_mb": 21.09560032894737,
+        "cpu_percent": 20.44736842105263,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:10.345202"
+    },
+    {
+      "config_name": "pysentry-pypi",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 1.6781971454620361,
+        "peak_memory_mb": 43.875,
+        "avg_memory_mb": 21.437270220588236,
+        "cpu_percent": 25.805882352941175,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:12.055676"
+    },
+    {
+      "config_name": "pysentry-all-sources",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 2.6196582317352295,
+        "peak_memory_mb": 107.4375,
+        "avg_memory_mb": 40.45500578703704,
+        "cpu_percent": 36.17777777777778,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:14.768687"
+    },
+    {
+      "config_name": "pip-audit-default",
+      "tool_name": "pip-audit",
+      "dataset_name": "large_requirements",
+      "cache_type": "cold",
+      "metrics": {
+        "execution_time": 18.813427925109863,
+        "peak_memory_mb": 48.5625,
+        "avg_memory_mb": 44.27019614361702,
+        "cpu_percent": 3.397340425531914,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:33.626167"
+    },
+    {
+      "config_name": "pysentry-pypa",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 2.3823742866516113,
+        "peak_memory_mb": 83.75390625,
+        "avg_memory_mb": 18.466959635416668,
+        "cpu_percent": 23.679166666666664,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:38.764039"
+    },
+    {
+      "config_name": "pysentry-osv",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 1.3518531322479248,
+        "peak_memory_mb": 12.89453125,
+        "avg_memory_mb": 9.458426339285714,
+        "cpu_percent": 2.85,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:41.981765"
+    },
+    {
+      "config_name": "pysentry-pypi",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 1.0569114685058594,
+        "peak_memory_mb": 14.34765625,
+        "avg_memory_mb": 8.842329545454545,
+        "cpu_percent": 8.163636363636364,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:44.595580"
+    },
+    {
+      "config_name": "pysentry-all-sources",
+      "tool_name": "pysentry",
+      "dataset_name": "large_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 2.708226442337036,
+        "peak_memory_mb": 86.57421875,
+        "avg_memory_mb": 19.286747685185187,
+        "cpu_percent": 25.46666666666667,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:54:50.020519"
+    },
+    {
+      "config_name": "pip-audit-default",
+      "tool_name": "pip-audit",
+      "dataset_name": "large_requirements",
+      "cache_type": "hot",
+      "metrics": {
+        "execution_time": 15.801709413528442,
+        "peak_memory_mb": 48.0546875,
+        "avg_memory_mb": 43.896929390822784,
+        "cpu_percent": 3.0303797468354428,
+        "exit_code": 0
+      },
+      "timestamp": "2026-04-14T20:55:23.026470"
+    }
+  ],
+  "start_time": "2026-04-14T20:53:22.361318",
+  "end_time": "2026-04-14T20:55:23.026514",
+  "total_duration": 120.665196,
+  "pysentry_version": "0.4.5"
+}
