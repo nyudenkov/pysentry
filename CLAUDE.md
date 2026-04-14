@@ -37,6 +37,13 @@ These override defaults. Violations cause production bugs, panics, or security i
 **Key Modules:**
 - `src/main.rs` - CLI entry point
 - `src/lib.rs` - `AuditEngine` API (high-level audit orchestrator)
+- `src/audit/` - Audit orchestration (split from `cli.rs` in v0.4.5)
+  - `merge.rs` - CLI arg / config merging, dependency stats calculation
+  - `pipeline.rs` - Main audit pipeline execution
+- `src/commands/` - CLI command handlers (split from `cli.rs` in v0.4.5)
+  - `config.rs` - `config_init`, `config_validate`, `config_show`
+  - `resolvers.rs` - `check_resolvers`
+  - `version.rs` - `check_version`
 - `src/cache/` - Multi-tier caching
   - `audit.rs` - `AuditCache` interface
   - `storage.rs` - `CacheEntry` abstraction
@@ -44,11 +51,13 @@ These override defaults. Violations cause production bugs, panics, or security i
   - `scanner.rs` - `DependencyScanner` (main orchestration)
   - `resolvers/uv.rs` - UV resolver (preferred, Rust-based)
   - `resolvers/pip_tools.rs` - pip-compile fallback
+  - `resolvers/shared.rs` - Shared resolver utilities
 - `src/parsers/` - 7 parsers with priority system
   - Priority 1: `lock.rs` (uv.lock), `poetry_lock.rs`, `pipfile_lock.rs`, `pylock.rs`
   - Priority 3: `pyproject.rs` (requires external resolver)
   - Priority 4: `pipfile.rs` (requires external resolver)
   - Priority 5: `requirements.rs` (requires external resolver)
+  - `manifest_reader.rs` - Reads direct deps from companion manifests (pyproject.toml, Pipfile)
   - See `ParserTrait::priority()` for implementation details
 - `src/providers/` - PyPA, PyPI, OSV.dev integrations
 - `src/vulnerability/` - Matching engine + database
@@ -88,7 +97,7 @@ These override defaults. Violations cause production bugs, panics, or security i
 **Config Discovery:** `.pysentry.toml` (project) → `~/.config/pysentry/config.toml` (user) → `/etc/pysentry/config.toml` (system)
 **Override Env Vars:** `PYSENTRY_CONFIG` (path override), `PYSENTRY_NO_CONFIG` (disable all config)
 
-**CLI Structure:** See `src/cli.rs` and `src/main.rs`
+**CLI Structure:** See `src/cli.rs` (arg definitions), `src/audit/pipeline.rs` (audit execution), `src/commands/` (subcommand handlers), `src/main.rs` (dispatch)
 - Main: `pysentry [options] [path]`
 - Subcommands: `resolvers`, `check-version`, `config {init|show|validate}`
 
