@@ -18,7 +18,7 @@ Common issues and their solutions.
 ls pyproject.toml uv.lock poetry.lock pylock.toml requirements.txt
 
 # Or specify the path explicitly
-pysentry /path/to/python/project
+pysentry-rs /path/to/python/project
 ```
 
 ### Requirements.txt files not being detected
@@ -28,10 +28,10 @@ pysentry /path/to/python/project
 ls requirements.txt
 
 # Specify path explicitly
-pysentry /path/to/python/project
+pysentry-rs /path/to/python/project
 
 # Include additional requirements files
-pysentry --requirements-files requirements-dev.txt requirements-test.txt
+pysentry-rs --requirements-files requirements-dev.txt requirements-test.txt
 
 # Check if higher-priority files exist (they take precedence)
 ls uv.lock poetry.lock Pipfile.lock pyproject.toml Pipfile requirements.txt
@@ -55,7 +55,7 @@ pip-compile --version
 # If using virtual environments, ensure resolver is installed there
 source venv/bin/activate
 pip install uv
-pysentry /path/to/project
+pysentry-rs /path/to/project
 ```
 
 ### "uv resolver not available"
@@ -79,15 +79,15 @@ export PATH="$PATH:$(python -m site --user-base)/bin"
 cat requirements.txt
 
 # Try different resolver
-pysentry --resolver pip-tools  # if uv fails
-pysentry --resolver uv         # if pip-tools fails
+pysentry-rs --resolver pip-tools  # if uv fails
+pysentry-rs --resolver uv         # if pip-tools fails
 
 # Ensure you're in correct environment
 which python
 which uv  # or which pip-compile
 
 # Debug with verbose output
-pysentry -vvv /path/to/project
+pysentry-rs -vvv /path/to/project
 ```
 
 ## Network Issues
@@ -99,8 +99,8 @@ pysentry -vvv /path/to/project
 curl -I https://api.osv.dev/v1
 
 # Try with different or fewer sources
-pysentry --sources pypi
-pysentry --sources pypa,osv
+pysentry-rs --sources pypi
+pysentry-rs --sources pypa,osv
 ```
 
 ### Network timeout errors
@@ -117,7 +117,7 @@ retry_max_backoff = 120 # Longer backoff delays (default: 60)
 
 ```bash
 # Then run again
-pysentry
+pysentry-rs
 ```
 
 ### Resolver timeout errors
@@ -129,7 +129,7 @@ If you see `UvTimeout` or `PipToolsTimeout` errors, the resolver is taking too l
 uv lock
 
 # Then scan the lock file
-pysentry /path/to/project
+pysentry-rs /path/to/project
 ```
 
 ### Rate limiting (HTTP 429 errors)
@@ -150,7 +150,7 @@ retry_max_backoff = 300      # Up to 5 minute backoff
 
 ```bash
 # Use faster uv resolver instead of pip-tools
-pysentry --resolver uv
+pysentry-rs --resolver uv
 
 # Install uv for better performance (2-10x faster)
 pip install uv
@@ -165,21 +165,21 @@ uvx pysentry-rs --resolver uv /path/to/project
 # Clear all caches and retry
 rm -rf ~/.cache/pysentry      # Linux
 rm -rf ~/Library/Caches/pysentry  # macOS
-pysentry
+pysentry-rs
 
 # Clear only resolution cache (if vulnerability cache is working)
 rm -rf ~/.cache/pysentry/dependency-resolution/      # Linux
 rm -rf ~/Library/Caches/pysentry/dependency-resolution/  # macOS
-pysentry
+pysentry-rs
 
 # Clear resolution cache via CLI
-pysentry --clear-resolution-cache
+pysentry-rs --clear-resolution-cache
 
 # Use verbose mode to identify bottlenecks
-pysentry -vvv
+pysentry-rs -vvv
 
 # Disable caching to isolate issues
-pysentry --no-cache
+pysentry-rs --no-cache
 ```
 
 ## Cache Issues
@@ -188,13 +188,13 @@ pysentry --no-cache
 
 ```bash
 # Clear stale resolution cache after environment changes
-pysentry --clear-resolution-cache
+pysentry-rs --clear-resolution-cache
 
 # Disable resolution cache if causing issues
-pysentry --no-resolution-cache
+pysentry-rs --no-resolution-cache
 
 # Force fresh resolution (ignores cache)
-pysentry --clear-resolution-cache --no-resolution-cache
+pysentry-rs --clear-resolution-cache --no-resolution-cache
 ```
 
 ### Cache corruption
@@ -202,20 +202,20 @@ pysentry --clear-resolution-cache --no-resolution-cache
 ```bash
 # Delete all caches and rebuild
 rm -rf ~/.cache/pysentry/
-pysentry /path/to/project
+pysentry-rs /path/to/project
 ```
 
 ### Extend cache TTL for stable environments
 
 ```bash
-pysentry --resolution-cache-ttl 168  # 1 week
+pysentry-rs --resolution-cache-ttl 168  # 1 week
 ```
 
 ### Check cache usage
 
 ```bash
 # Verbose output shows cache hits/misses
-pysentry -vv
+pysentry-rs -vv
 ```
 
 ## Configuration Issues
@@ -224,26 +224,26 @@ pysentry -vv
 
 ```bash
 # Check configuration paths
-pysentry config path
+pysentry-rs config path
 
 # Validate configuration
-pysentry config validate
+pysentry-rs config validate
 
 # Show effective configuration
-pysentry config show
+pysentry-rs config show
 
 # Override configuration path
-PYSENTRY_CONFIG=/path/to/.pysentry.toml pysentry
+PYSENTRY_CONFIG=/path/to/.pysentry.toml pysentry-rs
 
 # Disable configuration files
-PYSENTRY_NO_CONFIG=1 pysentry
+PYSENTRY_NO_CONFIG=1 pysentry-rs
 ```
 
 ### Invalid configuration syntax
 
 ```bash
 # Validate your configuration file
-pysentry config validate
+pysentry-rs config validate
 
 # Check TOML syntax
 cat .pysentry.toml
@@ -259,10 +259,10 @@ By default, unknown severity vulnerabilities cause a non-zero exit code (same as
 
 ```bash
 # Don't fail on unknown severity vulnerabilities
-pysentry --no-fail-on-unknown
+pysentry-rs --no-fail-on-unknown
 
 # Combine with fail-on to only fail on high+ but still report unknowns
-pysentry --fail-on high --no-fail-on-unknown
+pysentry-rs --fail-on high --no-fail-on-unknown
 ```
 
 ### Why are some vulnerabilities showing UNKNOWN?
@@ -286,7 +286,7 @@ PySentry auto-detects GitHub Actions via the `GITHUB_ACTIONS` environment variab
 # Check your .pysentry.toml for no_ci_detect = true
 
 # Run with verbose output to see CI detection
-pysentry -vv
+pysentry-rs -vv
 ```
 
 ### Disabling CI behavior
@@ -295,7 +295,7 @@ If CI auto-detection interferes with your workflow:
 
 ```bash
 # Disable via CLI flag
-pysentry --no-ci-detect
+pysentry-rs --no-ci-detect
 
 # Or via configuration
 # .pysentry.toml
@@ -313,18 +313,18 @@ PySentry automatically suppresses feedback and survey messages in detected CI en
 
 ```bash
 # Check if quiet mode is enabled
-pysentry  # Without -q flag
+pysentry-rs  # Without -q flag
 
 # Enable verbose output
-pysentry -v
+pysentry-rs -v
 ```
 
 ### Output format issues
 
 ```bash
 # Explicitly specify format
-pysentry --format human
-pysentry --format json --output results.json
+pysentry-rs --format human
+pysentry-rs --format json --output results.json
 ```
 
 ## Pre-commit Issues
@@ -354,48 +354,48 @@ pre-commit install --install-hooks
 ### Check available resolvers
 
 ```bash
-pysentry resolvers
+pysentry-rs resolvers
 ```
 
 ### Show configuration
 
 ```bash
-pysentry config show
+pysentry-rs config show
 ```
 
 ### Validate configuration
 
 ```bash
-pysentry config validate
+pysentry-rs config validate
 ```
 
 ### Verbose debugging
 
 ```bash
 # Warnings
-pysentry -v
+pysentry-rs -v
 
 # Info (recommended for troubleshooting)
-pysentry -vv
+pysentry-rs -vv
 
 # Debug (detailed)
-pysentry -vvv
+pysentry-rs -vvv
 
 # Trace (maximum verbosity)
-pysentry -vvvv
+pysentry-rs -vvvv
 ```
 
 ### Module-specific debugging
 
 ```bash
 # Debug dependency resolution
-RUST_LOG=pysentry::dependency=debug pysentry /path/to/project
+RUST_LOG=pysentry::dependency=debug pysentry-rs /path/to/project
 
 # Debug parser selection
-RUST_LOG=pysentry::parsers=debug pysentry /path/to/project
+RUST_LOG=pysentry::parsers=debug pysentry-rs /path/to/project
 
 # Debug caching
-RUST_LOG=pysentry::cache=debug pysentry /path/to/project
+RUST_LOG=pysentry::cache=debug pysentry-rs /path/to/project
 ```
 
 ## Getting Help
@@ -403,6 +403,6 @@ RUST_LOG=pysentry::cache=debug pysentry /path/to/project
 If these solutions don't resolve your issue:
 
 1. **Check existing issues**: [GitHub Issues](https://github.com/nyudenkov/pysentry/issues)
-2. **Open a new issue**: Include verbose output (`pysentry -vvv`)
+2. **Open a new issue**: Include verbose output (`pysentry-rs -vvv`)
 3. **Join discussions**: [GitHub Discussions](https://github.com/nyudenkov/pysentry/discussions)
 4. **Email support**: nikita@pysentry.com

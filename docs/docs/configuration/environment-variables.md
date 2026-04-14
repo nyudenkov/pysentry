@@ -19,17 +19,17 @@ PySentry supports environment variables for configuration and debugging.
 
 ```bash
 # Use a specific configuration file
-PYSENTRY_CONFIG=/path/to/.pysentry.toml pysentry
+PYSENTRY_CONFIG=/path/to/.pysentry.toml pysentry-rs
 
 # Use pyproject.toml from a different location
-PYSENTRY_CONFIG=/path/to/pyproject.toml pysentry
+PYSENTRY_CONFIG=/path/to/pyproject.toml pysentry-rs
 ```
 
 ### Disable Configuration Files
 
 ```bash
 # Run with only CLI arguments, ignore all config files
-PYSENTRY_NO_CONFIG=1 pysentry --fail-on high
+PYSENTRY_NO_CONFIG=1 pysentry-rs --fail-on high
 ```
 
 ## Color Control
@@ -51,32 +51,32 @@ For fine-grained logging control, use the `RUST_LOG` environment variable. When 
 
 ```bash
 # Enable debug logging for all pysentry modules
-RUST_LOG=pysentry=debug pysentry /path/to/project
+RUST_LOG=pysentry=debug pysentry-rs /path/to/project
 
 # Enable trace logging for specific modules
-RUST_LOG=pysentry::parsers=trace pysentry /path/to/project
+RUST_LOG=pysentry::parsers=trace pysentry-rs /path/to/project
 
 # Combine multiple module filters
-RUST_LOG=pysentry=info,pysentry::dependency=debug pysentry /path/to/project
+RUST_LOG=pysentry=info,pysentry::dependency=debug pysentry-rs /path/to/project
 ```
 
 ### Common Patterns
 
 ```bash
 # Debug dependency resolution
-RUST_LOG=pysentry::dependency=debug pysentry /path/to/project
+RUST_LOG=pysentry::dependency=debug pysentry-rs /path/to/project
 
 # Debug vulnerability matching
-RUST_LOG=pysentry::vulnerability=debug pysentry /path/to/project
+RUST_LOG=pysentry::vulnerability=debug pysentry-rs /path/to/project
 
 # Debug parser selection
-RUST_LOG=pysentry::parsers=debug pysentry /path/to/project
+RUST_LOG=pysentry::parsers=debug pysentry-rs /path/to/project
 
 # Debug caching behavior
-RUST_LOG=pysentry::cache=debug pysentry /path/to/project
+RUST_LOG=pysentry::cache=debug pysentry-rs /path/to/project
 
 # Full trace output (very verbose)
-RUST_LOG=pysentry=trace pysentry /path/to/project
+RUST_LOG=pysentry=trace pysentry-rs /path/to/project
 ```
 
 ### Use Cases
@@ -127,5 +127,5 @@ PySentry respects standard cache directory environment variables:
 Override with `--cache-dir` flag:
 
 ```bash
-pysentry --cache-dir /custom/cache/path
+pysentry-rs --cache-dir /custom/cache/path
 ```

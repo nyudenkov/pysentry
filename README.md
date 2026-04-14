@@ -39,24 +39,26 @@ See [Installation Guide](https://docs.pysentry.com/getting-started/installation)
 
 ## Quick Start
 
+> **Note:** Examples use `pysentry-rs`. If you installed via `cargo install pysentry` or a binary release, replace it with `pysentry` throughout.
+
 ```bash
 # Scan current directory
-pysentry
+pysentry-rs
 
 # Scan specific project
-pysentry /path/to/project
+pysentry-rs /path/to/project
 
 # Filter by severity
-pysentry --severity high
+pysentry-rs --severity high
 
 # Output to JSON
-pysentry --format json --output report.json
+pysentry-rs --format json --output report.json
 
 # Fail on critical vulnerabilities only
-pysentry --fail-on critical
+pysentry-rs --fail-on critical
 
 # Block quarantined packages (malware protection)
-pysentry --forbid-quarantined
+pysentry-rs --forbid-quarantined
 ```
 
 See [Quickstart Guide](https://docs.pysentry.com/getting-started/quickstart) for more examples.

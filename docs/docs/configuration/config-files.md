@@ -212,13 +212,13 @@ quiet = false
 Use the built-in command to generate a configuration file:
 
 ```bash
-pysentry config init --output .pysentry.toml
+pysentry-rs config init --output .pysentry.toml
 
 # Generate minimal configuration
-pysentry config init --minimal --output .pysentry.toml
+pysentry-rs config init --minimal --output .pysentry.toml
 
 # Overwrite existing file
-pysentry config init --force --output .pysentry.toml
+pysentry-rs config init --force --output .pysentry.toml
 ```
 
 This creates a configuration file with default values that you can customize.
