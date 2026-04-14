@@ -1,4 +1,7 @@
-# <img src="assets/logo.svg" alt="PySentry logo" width="48" height="48" style="vertical-align:middle;margin-right:8px"> PySentry
+<table><tr valign="middle">
+  <td><img src="assets/logo.svg" alt="PySentry logo" width="52" height="52"></td>
+  <td><h1>PySentry</h1></td>
+</tr></table>
 
 [![PyPI Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
 
