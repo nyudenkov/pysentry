@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -360,5 +361,15 @@ class BenchmarkRunner:
             f.write(markdown_content)
 
         print(f"Report saved to: {report_path}")
+
+        json_path = self.results_dir / f"{version}.json"
+        suite_dict = suite.to_dict()
+        suite_dict["pysentry_version"] = version
+        for result in suite_dict.get("results", []):
+            result.get("metrics", {}).pop("stdout", None)
+            result.get("metrics", {}).pop("stderr", None)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(suite_dict, f, indent=2)
+        print(f"JSON data saved to: {json_path}")
 
         return report_path

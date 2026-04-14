@@ -1,6 +1,6 @@
 [package]
 name = "pysentry"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
@@ -23,22 +23,22 @@ hotpath = ["dep:hotpath", "hotpath/hotpath"]
 hotpath-alloc = ["dep:hotpath", "hotpath/hotpath-alloc"]
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 async-trait = "0.1.89"
-chrono = { version = "0.4.43", features = ["serde"] }
-clap = { version = "4.5.54", features = ["derive"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.5.61", features = ["derive"] }
 dirs = "6.0.0"
-fs-err = "3.2.2"
-futures = "0.3.31"
-indicatif = "0.18.3"
+fs-err = "3.3.0"
+futures = "0.3.32"
+indicatif = "0.18.4"
 owo-colors = { version = "4.2.3", features = ["supports-colors"] }
 enable-ansi-support = "0.2.1"
 pep440_rs = "0.7.3"
 polycvss = "0.3"
 pyo3 = { version = "0.26.0", features = ["extension-module"], optional = true }
-regex = "1.12.2"
+regex = "1.12.3"
 reqwest = { version = "0.12.28", features = ["json", "stream", "rustls-tls-native-roots"], default-features = false }
-rustc-hash = "2.1.1"
+rustc-hash = "2.1.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde-sarif = "0.8"
@@ -46,12 +46,12 @@ tabled = { version = "0.20", features = ["ansi"] }
 terminal_size = "0.4"
 serde_yaml = "0.9.34"
 sha2 = "0.10.9"
-tempfile = "3.24.0"
+tempfile = "3.27.0"
 thiserror = "2.0.18"
-tokio = { version = "1.49.0", features = ["fs", "io-util", "rt-multi-thread", "macros", "process"] }
-toml = "0.9.11"
+tokio = { version = "1.51.1", features = ["fs", "io-util", "rt-multi-thread", "macros", "process"] }
+toml = "0.9.12"
 clap-verbosity-flag = { version = "3.0", default-features = false, features = ["tracing"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zip = { version = "5.1.1", default-features = false, features = ["deflate"] }
-hotpath = { version = "0.9", optional = true }
+hotpath = { version = "0.15", optional = true }

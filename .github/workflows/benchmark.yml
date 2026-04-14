@@ -95,6 +95,11 @@ jobs:
           if [ -f "$LATEST_FILE" ]; then
             cp "$LATEST_FILE" results/latest.md
             echo "Created latest.md from: $LATEST_FILE"
+            JSON_FILE="${LATEST_FILE%.md}.json"
+            if [ -f "$JSON_FILE" ]; then
+              cp "$JSON_FILE" results/latest.json
+              echo "Created latest.json from: $JSON_FILE"
+            fi
           else
             echo "Warning: No benchmark files found to create latest.md"
           fi

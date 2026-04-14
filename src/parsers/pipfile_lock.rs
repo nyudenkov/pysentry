@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-use super::{DependencySource, DependencyType, ParsedDependency, ProjectParser, SkippedPackage};
+use super::{manifest_reader, DependencySource, ParsedDependency, ProjectParser, SkippedPackage};
 use crate::{
     types::{PackageName, Version},
     AuditError, Result,
@@ -149,7 +149,6 @@ impl ProjectParser for PipfileLockParser {
         1 // Same priority as other lock files with exact versions
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -157,6 +156,9 @@ impl ProjectParser for PipfileLockParser {
         include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("pipfile_lock::parse_dependencies", false, false);
         let lock_path = project_path.join("Pipfile.lock");
         debug!("Reading Pipfile lock file: {}", lock_path.display());
 
@@ -164,8 +166,7 @@ impl ProjectParser for PipfileLockParser {
             .await
             .map_err(|e| AuditError::DependencyRead(Box::new(e)))?;
 
-        let lock: PipfileLock = serde_json::from_str(&content)
-            .map_err(|e| AuditError::other(format!("Failed to parse Pipfile.lock: {e}")))?;
+        let lock: PipfileLock = Self::deserialize_pipfile_lock(&content)?;
 
         let total_packages = lock.default_packages.len() + lock.develop_packages.len();
         if total_packages == 0 {
@@ -175,9 +176,11 @@ impl ProjectParser for PipfileLockParser {
 
         debug!("Found {} packages in Pipfile.lock", total_packages);
 
-        if direct_only {
+        let companion_set =
+            manifest_reader::read_direct_deps_from_pipfile(&project_path.join("Pipfile")).await?;
+        if companion_set.is_none() {
             warn!(
-                "--direct-only flag is ignored for Pipfile.lock files (scanning all dependencies)"
+                "No Pipfile found alongside Pipfile.lock — cannot determine direct dependencies, treating all as direct"
             );
         }
 
@@ -185,24 +188,30 @@ impl ProjectParser for PipfileLockParser {
         let mut seen_packages = HashSet::new();
 
         for (package_name, package_info) in &lock.default_packages {
-            if let Some(dependency) = self.process_package(
-                package_name,
-                package_info,
-                DependencyType::Main,
-                &mut seen_packages,
-            )? {
+            let is_direct = companion_set.as_ref().map_or(true, |set| {
+                set.is_empty() || set.contains(&PackageName::new(package_name))
+            });
+            if direct_only && !is_direct {
+                continue;
+            }
+            if let Some(dependency) =
+                self.process_package(package_name, package_info, is_direct, &mut seen_packages)?
+            {
                 dependencies.push(dependency);
             }
         }
 
         if include_optional {
             for (package_name, package_info) in &lock.develop_packages {
-                if let Some(dependency) = self.process_package(
-                    package_name,
-                    package_info,
-                    DependencyType::Optional,
-                    &mut seen_packages,
-                )? {
+                let is_direct = companion_set.as_ref().map_or(true, |set| {
+                    set.is_empty() || set.contains(&PackageName::new(package_name))
+                });
+                if direct_only && !is_direct {
+                    continue;
+                }
+                if let Some(dependency) =
+                    self.process_package(package_name, package_info, is_direct, &mut seen_packages)?
+                {
                     dependencies.push(dependency);
                 }
             }
@@ -246,11 +255,18 @@ impl ProjectParser for PipfileLockParser {
 }
 
 impl PipfileLockParser {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn deserialize_pipfile_lock(content: &str) -> Result<PipfileLock> {
+        serde_json::from_str(content)
+            .map_err(|e| AuditError::other(format!("Failed to parse Pipfile.lock: {e}")))
+    }
+
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn process_package(
         &self,
         package_name: &str,
         package_info: &PipfileLockPackage,
-        dependency_type: DependencyType,
+        is_direct: bool,
         seen_packages: &mut HashSet<PackageName>,
     ) -> Result<Option<ParsedDependency>> {
         let package_name_obj = PackageName::new(package_name);
@@ -291,15 +307,12 @@ impl PipfileLockParser {
             None
         };
 
-        let is_direct = true;
-
         let dependency = ParsedDependency {
             name: package_name_obj,
             version,
             is_direct,
             source,
             path,
-            dependency_type,
             source_file: Some("Pipfile.lock".to_string()),
         };
 
@@ -324,5 +337,94 @@ impl PipfileLockParser {
         }
 
         DependencySource::Registry
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    async fn create_test_pipfile_lock(content: &str) -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let lock_path = temp_dir.path().join("Pipfile.lock");
+        let project_path = temp_dir.path().to_path_buf();
+        tokio::fs::write(&lock_path, content).await.unwrap();
+        (temp_dir, project_path)
+    }
+
+    const LOCK_CONTENT: &str = r#"
+{
+    "default": {
+        "django": {"version": "==4.2.0"},
+        "certifi": {"version": "==2024.1.1"}
+    },
+    "develop": {}
+}
+"#;
+
+    const PIPFILE_CONTENT: &str = r#"
+[packages]
+django = ">=4.2"
+"#;
+
+    #[tokio::test]
+    async fn test_pipfile_lock_is_direct_with_companion() {
+        let (temp_dir, project_path) = create_test_pipfile_lock(LOCK_CONTENT).await;
+        tokio::fs::write(temp_dir.path().join("Pipfile"), PIPFILE_CONTENT)
+            .await
+            .unwrap();
+
+        let parser = PipfileLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let django = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("django"))
+            .unwrap();
+        let certifi = deps
+            .iter()
+            .find(|d| d.name == PackageName::new("certifi"))
+            .unwrap();
+        assert!(django.is_direct, "django should be direct");
+        assert!(!certifi.is_direct, "certifi should be transitive");
+    }
+
+    #[tokio::test]
+    async fn test_pipfile_lock_direct_only_filters_transitive() {
+        let (temp_dir, project_path) = create_test_pipfile_lock(LOCK_CONTENT).await;
+        tokio::fs::write(temp_dir.path().join("Pipfile"), PIPFILE_CONTENT)
+            .await
+            .unwrap();
+
+        let parser = PipfileLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, true)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, PackageName::new("django"));
+    }
+
+    #[tokio::test]
+    async fn test_pipfile_lock_no_companion_all_marked_direct() {
+        let (_temp_dir, project_path) = create_test_pipfile_lock(LOCK_CONTENT).await;
+
+        let parser = PipfileLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(deps.len(), 2, "all packages should be returned");
+        assert!(
+            deps.iter().all(|d| d.is_direct),
+            "all packages should be marked direct when no Pipfile companion"
+        );
     }
 }

@@ -4,6 +4,40 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.5
+
+### ✨ New Features
+
+#### `--direct-only` Now Works for All Lock File Formats
+
+`--direct-only` now correctly identifies direct dependencies when used with any lock file format — `uv.lock`, `Pipfile.lock`, `poetry.lock`, and `pylock.toml`.
+
+PySentry reads the companion manifest alongside the lock file (pyproject.toml, Pipfile) to determine which packages are declared as direct dependencies. When no companion manifest is found, it falls back to lock-graph inference.
+
+```bash
+pysentry-rs --direct-only
+```
+
+### ⚠️ Breaking Changes
+
+#### `--severity` Flag Removed
+
+The `--severity` display filter, deprecated since v0.4.3, has been removed. Use `--fail-on` to control exit behavior based on severity level.
+
+#### `severity` Config Field Removed
+
+The `severity` field in `[defaults]` (`.pysentry.toml` / `[tool.pysentry]` in `pyproject.toml`) has been removed alongside the CLI flag. Remove it from your config if present.
+
+#### `--all` / `--all-extras` Flags Removed
+
+The hidden `--all` and `--all-extras` flags have been removed. Extra dependencies are included by default; use `--exclude-extra` to opt out.
+
+---
+
+**Full Changelog**: https://github.com/nyudenkov/pysentry/compare/v0.4.4...v0.4.5
+
+---
+
 ## v0.4.4
 
 ### ✨ New Features
@@ -13,8 +47,8 @@ sidebar_position: 5
 The new `--no-resolver` flag lets you audit `requirements.txt` files that are already fully pinned without invoking an external resolver (uv or pip-compile):
 
 ```bash
-pysentry --no-resolver
-pysentry --no-resolver --requirements-files requirements.txt requirements-prod.txt
+pysentry-rs --no-resolver
+pysentry-rs --no-resolver --requirements-files requirements.txt requirements-prod.txt
 ```
 
 Only `package==version` lines are processed. Unpinned entries (`requests>=2.0`), URL dependencies, and editable installs are skipped and reported. Include directives (`-r other.txt`) are also skipped with a warning — pass those files explicitly via `--requirements-files`.
@@ -52,9 +86,9 @@ Resolves [#148](https://github.com/nyudenkov/pysentry/issues/148).
 PySentry now has a `--color` global flag for explicit control over ANSI color output:
 
 ```bash
-pysentry --color auto    # Default: auto-detect from terminal and environment
-pysentry --color always  # Force colors even when piping to a file or CI log
-pysentry --color never   # Disable colors entirely
+pysentry-rs --color auto    # Default: auto-detect from terminal and environment
+pysentry-rs --color always  # Force colors even when piping to a file or CI log
+pysentry-rs --color never   # Disable colors entirely
 ```
 
 `auto` (default) follows terminal standards: it respects `NO_COLOR` (any value disables colors), `FORCE_COLOR`, `CI`, `TERM=dumb`, and whether stdout is a TTY. Windows ANSI color output is now also enabled automatically.
@@ -64,9 +98,9 @@ pysentry --color never   # Disable colors entirely
 Compact output can now render structured tables, making it easier to scan vulnerability data at a glance:
 
 ```bash
-pysentry --compact                 # Table layout (default)
-pysentry --compact --display table # Explicit table layout
-pysentry --compact --display text  # Traditional indented text layout
+pysentry-rs --compact                 # Table layout (default)
+pysentry-rs --compact --display table # Explicit table layout
+pysentry-rs --compact --display text  # Traditional indented text layout
 ```
 
 Tables adapt to terminal width automatically. The display mode can be set in config:

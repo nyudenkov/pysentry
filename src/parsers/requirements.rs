@@ -5,9 +5,7 @@
 //! This parser can work with any dependency resolver (UV, pip-tools)
 //! through the DependencyResolver trait, providing better separation of concerns.
 
-use super::{
-    DependencySource, DependencyType, ParsedDependency, ProjectParser, SkipReason, SkippedPackage,
-};
+use super::{DependencySource, ParsedDependency, ProjectParser, SkipReason, SkippedPackage};
 use crate::{
     dependency::resolvers::{DependencyResolver, ResolverRegistry},
     types::{PackageName, ResolverType, Version},
@@ -190,7 +188,6 @@ impl RequirementsParser {
                             is_direct,
                             source: DependencySource::Registry, // Most resolvers work with PyPI
                             path: None,
-                            dependency_type: DependencyType::Main, // We'll refine this based on file patterns later
                             source_file: source_file.clone(),
                         });
                     }
@@ -500,7 +497,6 @@ impl RequirementsParser {
                             is_direct: true,
                             source: DependencySource::Registry,
                             path: None,
-                            dependency_type: DependencyType::Main,
                             source_file: source_file.clone(),
                         });
                     }
@@ -588,7 +584,6 @@ impl ProjectParser for RequirementsParser {
         7 // Medium priority - after lock files and pyproject.toml, before simple parsers
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn parse_dependencies(
         &self,
         project_path: &Path,
@@ -596,6 +591,9 @@ impl ProjectParser for RequirementsParser {
         _include_optional: bool,
         direct_only: bool,
     ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
+        #[cfg(feature = "hotpath")]
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("requirements::parse_dependencies", false, false);
         info!(
             "Parsing requirements.txt files with {} resolver",
             self.resolver.name()

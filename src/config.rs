@@ -51,10 +51,6 @@ pub struct DefaultConfig {
     #[serde(default = "default_format")]
     pub format: String,
 
-    /// Deprecated: will be removed in v0.5. Still parsed for backward compatibility.
-    #[serde(default = "default_severity", skip_serializing)]
-    pub severity: String,
-
     #[serde(default = "default_fail_on")]
     pub fail_on: String,
 
@@ -530,8 +526,7 @@ impl Config {
             ),
         }
 
-        self.validate_severity(&self.defaults.severity, "defaults.severity")?;
-        self.validate_severity(&self.defaults.fail_on, "defaults.fail_on")?;
+        self.validate_level(&self.defaults.fail_on, "defaults.fail_on")?;
 
         if self.defaults.compact && self.defaults.detailed {
             anyhow::bail!(
@@ -606,12 +601,12 @@ impl Config {
         Ok(())
     }
 
-    fn validate_severity(&self, severity: &str, field_name: &str) -> Result<()> {
-        match severity {
+    fn validate_level(&self, level: &str, field_name: &str) -> Result<()> {
+        match level {
             "low" | "medium" | "high" | "critical" => Ok(()),
             _ => anyhow::bail!(
-                "Invalid severity '{}' in {}. Valid severities: low, medium, high, critical",
-                severity,
+                "Invalid level '{}' in {}. Valid levels: low, medium, high, critical",
+                level,
                 field_name
             ),
         }
@@ -645,7 +640,6 @@ impl Default for DefaultConfig {
     fn default() -> Self {
         Self {
             format: default_format(),
-            severity: default_severity(),
             fail_on: default_fail_on(),
             scope: default_scope(),
             direct_only: false,
@@ -718,9 +712,6 @@ fn default_version() -> u32 {
 }
 fn default_format() -> String {
     "human".to_string()
-}
-fn default_severity() -> String {
-    "low".to_string()
 }
 fn default_fail_on() -> String {
     "medium".to_string()
@@ -804,7 +795,6 @@ version = 1
 
 [defaults]
 format = "markdown"
-severity = "medium"
 fail_on = "low"
 
 [sources]
@@ -819,7 +809,6 @@ enabled = false
         let loader = ConfigLoader::load_from_file(&config_path).unwrap();
 
         assert_eq!(loader.config.defaults.format, "markdown");
-        assert_eq!(loader.config.defaults.severity, "medium");
         assert_eq!(loader.config.defaults.fail_on, "low");
         assert_eq!(loader.config.sources.enabled, vec!["pypa", "pypi", "osv"]);
         assert!(!loader.config.cache.enabled);
@@ -832,7 +821,6 @@ enabled = false
 
         assert_eq!(config.version, 1);
         assert_eq!(config.defaults.format, "human");
-        assert_eq!(config.defaults.severity, "low");
         assert_eq!(config.defaults.fail_on, "medium");
         assert_eq!(config.sources.enabled, vec!["pypa", "pypi", "osv"]);
         assert!(config.cache.enabled);
@@ -849,11 +837,6 @@ enabled = false
         config.defaults.format = "invalid".to_string();
         assert!(config.validate().is_err());
         config.defaults.format = "human".to_string();
-
-        // Invalid severity
-        config.defaults.severity = "invalid".to_string();
-        assert!(config.validate().is_err());
-        config.defaults.severity = "low".to_string();
 
         // Invalid source
         config.sources.enabled = vec!["invalid".to_string()];
@@ -896,7 +879,6 @@ version = 1
 
 [tool.pysentry.defaults]
 format = "json"
-severity = "high"
 
 [tool.pysentry.sources]
 enabled = ["pypa", "osv"]
@@ -907,7 +889,6 @@ enabled = ["pypa", "osv"]
         let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
 
         assert_eq!(loader.config.defaults.format, "json");
-        assert_eq!(loader.config.defaults.severity, "high");
         assert_eq!(loader.config.sources.enabled, vec!["pypa", "osv"]);
         assert_eq!(loader.config_source, ConfigSource::PyProjectToml);
     }
@@ -976,7 +957,6 @@ format = "json"
 
         assert_eq!(loader.config.defaults.format, "json");
         // These should be defaults
-        assert_eq!(loader.config.defaults.severity, "low");
         assert_eq!(loader.config.defaults.fail_on, "medium");
         assert_eq!(loader.config.sources.enabled, vec!["pypa", "pypi", "osv"]);
     }
@@ -1049,7 +1029,6 @@ version = 1
 
 [tool.pysentry.defaults]
 format = "sarif"
-severity = "medium"
 fail_on = "high"
 scope = "main"
 direct_only = true
@@ -1076,7 +1055,6 @@ while_no_fix = ["GHSA-abc123"]
         let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
 
         assert_eq!(loader.config.defaults.format, "sarif");
-        assert_eq!(loader.config.defaults.severity, "medium");
         assert_eq!(loader.config.defaults.fail_on, "high");
         assert_eq!(loader.config.defaults.scope, "main");
         assert!(loader.config.defaults.direct_only);
@@ -1146,7 +1124,6 @@ version = 1
 
 [tool.pysentry.defaults]
 format = "markdown"
-severity = "critical"
 "#;
 
         fs::write(&pyproject_path, content).unwrap();
@@ -1161,7 +1138,6 @@ severity = "critical"
 
         let loader = result.unwrap();
         assert_eq!(loader.config.defaults.format, "markdown");
-        assert_eq!(loader.config.defaults.severity, "critical");
         assert_eq!(loader.config_source, ConfigSource::PyProjectToml);
     }
 
@@ -1207,7 +1183,6 @@ format = "sarif"
 name = "test-project"
 
 [tool.pysentry.defaults]
-severity = "high"
 fail_on = "high"
 
 [tool.pysentry.sources]
@@ -1218,7 +1193,6 @@ enabled = ["pypa", "osv"]
 
         let loader = ConfigLoader::load_from_file(&pyproject_path).unwrap();
 
-        assert_eq!(loader.config.defaults.severity, "high");
         assert_eq!(loader.config.defaults.fail_on, "high");
         assert_eq!(loader.config.sources.enabled, vec!["pypa", "osv"]);
         // Unspecified fields should use defaults

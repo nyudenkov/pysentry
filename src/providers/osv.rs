@@ -730,7 +730,6 @@ impl VulnerabilityProvider for OsvSource {
         "osv"
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn fetch_vulnerabilities(
         &self,
         packages: &[(String, String)],
@@ -738,6 +737,9 @@ impl VulnerabilityProvider for OsvSource {
         use crate::cache::Freshness;
         use std::time::Duration;
 
+        #[cfg(feature = "hotpath")]
+        let _hp_wall =
+            hotpath::MeasurementGuardSync::new("osv::fetch_vulnerabilities", false, false);
         let cache_entry = self.cache_entry(packages);
         let ttl = Duration::from_secs(self.vulnerability_ttl * 3600);
 

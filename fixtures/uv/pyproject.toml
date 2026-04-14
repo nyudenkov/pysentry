@@ -1,0 +1,207 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "platform-backend"
+version = "0.0.0"
+description = "FastAPI platform backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.117.0",
+    "uvicorn[standard]>=0.37.0",
+    "gunicorn>=23.0.0",
+    "pydantic[email]>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "python-decouple>=3.8",
+    "sqlalchemy>=2.0.0",
+    "sqlmodel<1.0.0,>=0.0.21",
+    "alembic>=1.13.0",
+    "asyncpg>=0.29.0",
+    "psycopg[binary,pool]>=3.2.10",
+    "redis>=7.0.0",
+    "authlib>=1.3.0",
+    "httpx>=0.27.2",
+    "cryptography>=43.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "celery>=5.3.0",
+    "kafka-python>=2.0.2",
+    "aiokafka>=0.11.0",
+    "greenlet>=3.0.0",
+    "python-ulid>=2.7.0",
+    "tenacity>=9.1.2",
+    "aioboto3>=13.3.0",
+    "python-multipart>=0.0.20",
+    "botocore>=1.40.49",
+    "werkzeug>=3.1.3",
+    "langchain>=1.1.0,<2",
+    "langchain-core>=1.1.0,<2",
+    "langchain-openai>=1.1.0,<2",
+    "langchain-community>=0.4.1,<1",
+    "langgraph>=1.0.2,<2",
+    "langgraph-checkpoint-postgres>=3.0.0,<4",
+    "pillow>=12.0.0",
+    "pillow-heif>=1.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing tools
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "factory-boy>=3.3.0",
+    "faker>=30.0.0",
+    # Linting tools
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "types-redis>=4.6.0",
+    "types-python-jose>=3.3.4",
+]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.4.0",
+    "mkdocstrings[python]>=0.24.0",
+]
+
+[project.scripts]
+runserver = "app.scripts.dev:main"
+lint = "app.scripts.lint:main"
+test = "app.scripts.test:main"
+runbff = "bff.__main__:main"
+
+[dependency-groups]
+test = [
+    # Testing tools
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "factory-boy>=3.3.0",
+    "faker>=30.0.0",
+    "fakeredis>=2.32.0",
+]
+lint = [
+    # Linting tools
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "types-redis>=4.6.0",
+    "types-python-jose>=3.3.4",
+    "types-aiobotocore-s3>=2.15.0",
+]
+dev = [
+    # Testing tools
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "factory-boy>=3.3.0",
+    "faker>=30.0.0",
+    # Linting tools
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "types-redis>=4.6.0",
+    "types-python-jose>=3.3.4",
+    "types-aiobotocore-s3>=2.15.0",
+    # Documentation
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.6.0",
+    "mkdocstrings[python]>=0.30.0",
+    "pre-commit>=4.3.0",
+    "pytest-memray>=1.8.0",
+]
+
+workers-base = [
+    "pydantic-settings>=2.6.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.11.9",
+    "sqlmodel>=0.0.25",
+    "loguru>=0.7.3",
+    "tenacity>=9.1.2",
+]
+
+workers-model-catalog-sync = [{ include-group = "workers-base" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app", "src/bff", "src/shared"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = false
+disallow_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "app.tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+warn_unused_ignores = false
+# Allow flexibility in test code for mock setups
+disable_error_code = ["arg-type", "index"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = "fastapi.*"
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "app.modules.users.models"
+# SQLModel's "table=True" triggers a spurious call-arg error in mypy
+disable_error_code = ["call-arg"]
+
+[[tool.mypy.overrides]]
+module = "app.modules.groups.models"
+disable_error_code = ["call-arg"]
+
+[[tool.mypy.overrides]]
+module = "app.modules.providers.models"
+disable_error_code = ["call-arg"]
+
+[[tool.mypy.overrides]]
+module = "app.modules.*.repositories.*"
+# SQLAlchemy 2.0 type stubs are overly strict for common patterns
+disable_error_code = ["arg-type", "call-overload"]
+
+[[tool.mypy.overrides]]
+module = "app.alembic.versions.*"
+# Alembic migration files are auto-generated and don't need type checking
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "app.scripts.*"
+# Scripts are utility scripts with relaxed type checking
+disable_error_code = ["no-any-return"]
+
+[tool.coverage.run]
+source_pkgs = ["app", "tests"]
+branch = true
+parallel = true
+omit = ["src/app/__about__.py"]
+
+[tool.coverage.paths]
+app = ["src/app", "*/platform-backend/src/app"]
+tests = ["tests", "*/platform-backend/tests"]
+
+[tool.coverage.report]
+exclude_lines = ["no cov", "if __name__ == .__main__.:", "if TYPE_CHECKING:"]
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_storage: marks tests as requiring MinIO/S3 storage (deselect with '-m \"not requires_storage\"')",
+]

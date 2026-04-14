@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-use crate::cli::{config_init, config_path, config_show, config_validate, ConfigCommands};
+use crate::cli::ConfigCommands;
+use crate::commands::config::{config_init, config_path, config_show, config_validate};
+use crate::commands::version::check_version;
 use crate::logging;
 use anyhow::Result;
 use pyo3::exceptions::PyRuntimeError;
@@ -35,7 +37,9 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
 
         rt.block_on(async {
-            use crate::cli::{audit, check_resolvers, check_version, Cli, Commands};
+            use crate::audit::pipeline::audit;
+            use crate::cli::{Cli, Commands};
+            use crate::commands::resolvers::check_resolvers;
             use clap::Parser;
             let _ = enable_ansi_support::enable_ansi_support();
 

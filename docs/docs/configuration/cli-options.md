@@ -26,7 +26,6 @@ Complete reference for all PySentry command line options.
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--severity` | **Deprecated** (will be removed in v0.5). Minimum severity to display in report | `low` |
 | `--fail-on` | Fail (exit non-zero) on vulnerabilities >= severity | `medium` |
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
@@ -40,9 +39,6 @@ Complete reference for all PySentry command line options.
 `--compact` and `--detailed` are mutually exclusive. Using both together will cause an error.
 :::
 
-:::note
-`--severity` is a post-hoc **display filter only**. It never affects which vulnerabilities are evaluated against `--fail-on`. For example, with `--severity high --fail-on medium`, medium+ vulnerabilities are still evaluated for exit-code purposes, but only high+ are shown in the report. Use `--fail-on` to control exit behavior; `--severity` will be removed in v0.5.
-:::
 
 ## Ignore Options
 
@@ -91,7 +87,7 @@ Complete reference for all PySentry command line options.
 ### Config Subcommand
 
 ```bash
-pysentry config <COMMAND>
+pysentry-rs config <COMMAND>
 ```
 
 | Command | Description |
@@ -104,7 +100,7 @@ pysentry config <COMMAND>
 #### Config Init Options
 
 ```bash
-pysentry config init [OPTIONS]
+pysentry-rs config init [OPTIONS]
 ```
 
 | Option | Description |
@@ -118,7 +114,7 @@ pysentry config init [OPTIONS]
 Check available dependency resolvers:
 
 ```bash
-pysentry resolvers
+pysentry-rs resolvers
 ```
 
 Shows which resolvers (`uv`, `pip-tools`) are installed and available for requirements resolution.
@@ -128,140 +124,144 @@ Shows which resolvers (`uv`, `pip-tools`) are installed and available for requir
 Check for newer PySentry versions:
 
 ```bash
-pysentry check-version
+pysentry-rs check-version
 ```
 
 Compares installed version with the latest available release.
 
 ## Usage Examples
 
+:::note
+Examples use `pysentry-rs`. If you installed via `cargo install pysentry` or a binary release, replace it with `pysentry` throughout.
+:::
+
 ### Basic Scanning
 
 ```bash
 # Scan current directory
-pysentry
+pysentry-rs
 
 # Scan specific project
-pysentry /path/to/project
+pysentry-rs /path/to/project
 
 # Scan with JSON output
-pysentry --format json --output results.json
+pysentry-rs --format json --output results.json
 ```
 
 ### Filtering
 
 ```bash
 # Only fail on critical vulnerabilities
-pysentry --fail-on critical
+pysentry-rs --fail-on critical
 
 # Use specific vulnerability sources
-pysentry --sources pypa --sources osv
+pysentry-rs --sources pypa --sources osv
 ```
 
 ### Ignoring Vulnerabilities
 
 ```bash
 # Ignore specific vulnerabilities
-pysentry --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
+pysentry-rs --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
 
 # Ignore vulnerabilities without fixes
-pysentry --ignore-while-no-fix CVE-2025-8869
+pysentry-rs --ignore-while-no-fix CVE-2025-8869
 ```
 
 ### Cache Control
 
 ```bash
 # Disable all caching
-pysentry --no-cache
+pysentry-rs --no-cache
 
 # Clear resolution cache before scanning
-pysentry --clear-resolution-cache
+pysentry-rs --clear-resolution-cache
 
 # Use custom cache directory
-pysentry --cache-dir /tmp/pysentry-cache
+pysentry-rs --cache-dir /tmp/pysentry-cache
 ```
 
 ### Requirements.txt
 
 ```bash
 # Specify requirements files explicitly (disables auto-discovery)
-pysentry --requirements-files requirements-dev.txt requirements-test.txt
+pysentry-rs --requirements-files requirements-dev.txt requirements-test.txt
 
 # Force specific resolver
-pysentry --resolver uv
+pysentry-rs --resolver uv
 
 # Audit pinned requirements without invoking an external resolver
-pysentry --no-resolver
-pysentry --no-resolver --requirements-files requirements.txt requirements-prod.txt
+pysentry-rs --no-resolver
+pysentry-rs --no-resolver --requirements-files requirements.txt requirements-prod.txt
 ```
 
 ### Output Detail
 
 ```bash
 # Default output: summary + one-liner per vulnerability + fix suggestions
-pysentry
+pysentry-rs
 
 # Compact output with table layout (default)
-pysentry --compact
+pysentry-rs --compact
 
 # Compact output with traditional text layout
-pysentry --compact --display text
+pysentry-rs --compact --display text
 
 # Detailed output: full vulnerability descriptions included
-pysentry --detailed
+pysentry-rs --detailed
 ```
 
 ### Color Control
 
 ```bash
 # Auto-detect colors from terminal (default)
-pysentry --color auto
+pysentry-rs --color auto
 
 # Force colors even when piping to a file or CI
-pysentry --color always
+pysentry-rs --color always
 
 # Disable colors entirely (same effect as NO_COLOR=1)
-pysentry --color never
+pysentry-rs --color never
 ```
 
 ### Maintenance Checks
 
 ```bash
 # Fail on quarantined packages only
-pysentry --forbid-quarantined
+pysentry-rs --forbid-quarantined
 
 # Fail on any unmaintained package
-pysentry --forbid-unmaintained
+pysentry-rs --forbid-unmaintained
 
 # Check only direct dependencies
-pysentry --forbid-unmaintained --maintenance-direct-only
+pysentry-rs --forbid-unmaintained --maintenance-direct-only
 ```
 
 ### CI/CD
 
 ```bash
 # PySentry auto-detects GitHub Actions and emits native annotations
-# No extra flags needed — just run pysentry
+# No extra flags needed — just run pysentry-rs
 
 # Disable CI detection (run as if locally)
-pysentry --no-ci-detect
+pysentry-rs --no-ci-detect
 
 # Don't fail on unknown severity vulnerabilities
-pysentry --no-fail-on-unknown
+pysentry-rs --no-fail-on-unknown
 ```
 
 ### Debugging
 
 ```bash
 # Verbose output (warnings)
-pysentry -v
+pysentry-rs -v
 
 # More verbose (info level)
-pysentry -vv
+pysentry-rs -vv
 
 # Debug output
-pysentry -vvv
+pysentry-rs -vvv
 
 # Maximum verbosity (trace)
-pysentry -vvvv
+pysentry-rs -vvvv
 ```
