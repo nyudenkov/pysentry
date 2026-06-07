@@ -67,7 +67,7 @@ fn extract_best_cvss_score<'a>(
         return None;
     }
 
-    tagged.sort_by(|a, b| b.0.cmp(&a.0));
+    tagged.sort_by_key(|b| std::cmp::Reverse(b.0));
 
     let mut current_version = tagged[0].0;
     let mut best_score: Option<f32> = None;

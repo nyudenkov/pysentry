@@ -938,7 +938,6 @@ mod tests {
             fix_suggestions: vec![],
         };
 
-        use crate::maintenance::{MaintenanceIssue, MaintenanceIssueType};
         let maintenance_issue = MaintenanceIssue::new(
             PackageName::from_str("old-pkg").unwrap(),
             Version::from_str("1.0.0").unwrap(),

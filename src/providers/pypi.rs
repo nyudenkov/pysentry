@@ -27,6 +27,9 @@ pub struct PypiSource {
     vulnerability_ttl: u64,
 }
 
+/// Maximum number of concurrent PyPI vulnerability detail requests.
+const PYPI_MAX_CONCURRENT_REQUESTS: usize = 15;
+
 impl PypiSource {
     /// Create a new PyPI source with HTTP configuration
     pub fn new(
@@ -262,8 +265,7 @@ impl VulnerabilityProvider for PypiSource {
         };
 
         // Fetch vulnerabilities for all packages concurrently with rate limiting
-        const MAX_CONCURRENT_REQUESTS: usize = 15; // Limit to avoid overwhelming PyPI API
-
+        // (cap defined by PYPI_MAX_CONCURRENT_REQUESTS).
         let mut futures = FuturesUnordered::new();
         let mut package_iter = packages.iter().cloned();
         let mut successful_fetches = 0;
@@ -271,7 +273,7 @@ impl VulnerabilityProvider for PypiSource {
         let mut vuln_map = HashMap::new();
 
         // Start initial batch of requests
-        for _ in 0..MAX_CONCURRENT_REQUESTS.min(packages.len()) {
+        for _ in 0..PYPI_MAX_CONCURRENT_REQUESTS.min(packages.len()) {
             if let Some((name, version)) = package_iter.next() {
                 futures.push(self.fetch_package_future(name, version));
             }
