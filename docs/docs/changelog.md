@@ -55,7 +55,13 @@ PySentry now reports every matched vulnerability regardless of `fail_on`, and us
 If you run PySentry with `fail_on` set above `low` (via `--fail-on` or config), affected vulnerabilities were missing from your reports while the audit may have exited successfully. Re-run your audit on this release.
 :::
 
-Regression introduced in v0.4.5; the original decoupling shipped in v0.4.3 ([#11](https://github.com/nyudenkov/pysentry/issues/11)).
+Regression introduced in v0.4.5; the original decoupling shipped in v0.4.3.
+
+#### Shared PyPA Cache Crashed Older PySentry Versions
+
+v0.4.5 changed the on-disk format of the cached PyPA advisory database from a raw ZIP archive to JSON, but kept writing it to the same cache file. When an older PySentry (`<= 0.4.4`) then read that file, it tried to parse the JSON as a ZIP and crashed with `Cache operation failed: invalid Zip archive: Could not find EOCD`. This bit anyone running multiple PySentry versions against the same cache — for example a project that pins an older `pysentry-rs` in a dependency group while a newer one is installed elsewhere.
+
+The PyPA database now uses a version-tagged cache file, so different formats never collide. New and old versions keep separate cache files and stop corrupting each other's reads. Already-released versions cannot be retro-fixed; if you are still on `<= 0.4.4` and hit this, run once with `--no-cache` or clear `pysentry/vulnerability-db` from your cache directory.
 
 #### `scope = "main"` / `--exclude-extra` Ignored Dependency Groups (uv.lock)
 
