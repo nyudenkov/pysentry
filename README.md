@@ -1,12 +1,18 @@
+<div align="center">
+
+<img src="assets/logo.svg" alt="PySentry logo" width="96" height="96">
+
 # PySentry
+
+**A fast, reliable security vulnerability scanner for Python projects, written in Rust.**
 
 [![PyPI Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
 
 [Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12) · [Participate in pysentry usage survey](https://tally.so/r/mYNPNv)
 
-Please, send feedback to nikita@pysentry.com
+</div>
 
-A fast, reliable security vulnerability scanner for Python projects, written in Rust.
+Please, send feedback to nikita@pysentry.com
 
 PySentry audits Python projects for known security vulnerabilities by analyzing dependency files and cross-referencing them against multiple vulnerability databases.
 
@@ -68,7 +74,7 @@ See [Quickstart Guide](https://docs.pysentry.com/getting-started/quickstart) for
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.4.5
+    rev: v0.4.6
     hooks:
       - id: pysentry
         # Use compact mode for minimal pre-commit output

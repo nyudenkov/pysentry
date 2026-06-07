@@ -110,8 +110,10 @@ struct Package {
     files: Vec<serde_json::Value>,
     #[serde(default)]
     dependencies: HashMap<String, serde::de::IgnoredAny>,
+    // Maps an extra name (e.g. "http2") to the PEP 508 strings it activates
+    // (e.g. ["h2 (>=3,<5)"]). Used to fold extras-activated transitives into the
+    // reachability closure under `--group`.
     #[serde(default)]
-    #[allow(dead_code)]
     extras: HashMap<String, Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_markers")]
     #[allow(dead_code)]
@@ -134,7 +136,9 @@ struct PoetrySource {
 }
 
 /// Poetry lock file parser
-pub struct PoetryLockParser;
+pub struct PoetryLockParser {
+    groups: Option<HashSet<String>>,
+}
 
 impl Default for PoetryLockParser {
     fn default() -> Self {
@@ -144,7 +148,12 @@ impl Default for PoetryLockParser {
 
 impl PoetryLockParser {
     pub fn new() -> Self {
-        Self
+        Self { groups: None }
+    }
+
+    pub(crate) fn with_groups(mut self, groups: Option<HashSet<String>>) -> Self {
+        self.groups = groups;
+        self
     }
 }
 
@@ -191,20 +200,28 @@ impl ProjectParser for PoetryLockParser {
 
         debug!("Found {} packages in poetry lock file", lock.packages.len());
 
-        let direct_set: HashSet<PackageName> =
-            match manifest_reader::read_direct_deps_from_pyproject(
-                &project_path.join("pyproject.toml"),
-            )
-            .await?
-            {
-                Some(names) if !names.is_empty() => names,
-                _ => {
-                    warn!(
+        // See lock.rs for the rationale: with `--group`, Some(empty) is a legitimate
+        // narrow-to-nothing signal, not a "missing pyproject" fallback. We use the
+        // with-extras variant so `mypkg[extra]` entries (PEP 508 syntax or Poetry's
+        // `extras = [...]` table form) preserve their activation for the reachability
+        // closure below.
+        let (direct_set, requested_extras): (
+            HashSet<PackageName>,
+            HashMap<PackageName, HashSet<String>>,
+        ) = match manifest_reader::read_direct_deps_with_extras_from_pyproject(
+            &project_path.join("pyproject.toml"),
+            self.groups.as_ref(),
+        )
+        .await?
+        {
+            Some((names, extras)) => (names, extras),
+            None => {
+                warn!(
                     "No pyproject.toml found alongside poetry.lock — using graph inference for is_direct (diamond dependencies may be misclassified)"
                 );
-                    Self::infer_direct_deps(&lock.packages)
-                }
-            };
+                (Self::infer_direct_deps(&lock.packages), HashMap::new())
+            }
+        };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
@@ -254,6 +271,50 @@ impl ProjectParser for PoetryLockParser {
             };
 
             dependencies.push(dependency);
+        }
+
+        if self.groups.is_some() {
+            let seeds = direct_set.clone();
+            // For each package, start with its main dependency names, then fold in any
+            // extras the project requested on that package. Poetry's lock encodes
+            // [package.extras] as a table of PEP 508 strings (e.g. "h2 (>=3,<5)"), so
+            // we use manifest_reader::extract_package_name to recover the bare name.
+            let edges: HashMap<PackageName, HashSet<PackageName>> = lock
+                .packages
+                .iter()
+                .map(|pkg| {
+                    let key = PackageName::new(&pkg.name);
+                    let mut vals: HashSet<PackageName> = pkg
+                        .dependencies
+                        .keys()
+                        .map(|n| PackageName::new(n))
+                        .collect();
+                    if let Some(extras) = requested_extras.get(&key) {
+                        for extra in extras {
+                            // `extra` is normalized (PEP 685); match the lock's [package.extras]
+                            // keys by normalized form so a non-normalized lock key still resolves.
+                            let pep508_entries = pkg
+                                .extras
+                                .iter()
+                                .find(|(name, _)| {
+                                    manifest_reader::normalize_group_name(name.as_str()) == *extra
+                                })
+                                .map(|(_, entries)| entries);
+                            if let Some(pep508_entries) = pep508_entries {
+                                for entry in pep508_entries {
+                                    if let Some(name) = manifest_reader::extract_package_name(entry)
+                                    {
+                                        vals.insert(name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (key, vals)
+                })
+                .collect();
+            let reachable = crate::parsers::reachability::reachable_closure(&seeds, &edges);
+            dependencies.retain(|d| reachable.contains(&d.name));
         }
 
         debug!(
@@ -498,6 +559,246 @@ files = []
         assert!(
             !certifi.is_direct,
             "certifi should be inferred as transitive"
+        );
+    }
+
+    // a -> b; c -> d. Seed = {a}. Reachable = {a, b}. Unreachable = {c, d}.
+    #[tokio::test]
+    async fn test_poetry_lock_reachability_closure_drops_unreachable() {
+        let lock_content = r#"
+[[package]]
+name = "a"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+b = ">=1.0"
+
+[[package]]
+name = "b"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[[package]]
+name = "c"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+d = ">=1.0"
+
+[[package]]
+name = "d"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PoetryLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"), "a must be included (direct seed)");
+        assert!(names.contains("b"), "b must be included (reachable from a)");
+        assert!(!names.contains("c"), "c must be dropped (unreachable)");
+        assert!(!names.contains("d"), "d must be dropped (unreachable)");
+    }
+
+    // a -> b -> c (linear chain). All reachable from seed {a}.
+    #[tokio::test]
+    async fn test_poetry_lock_reachability_includes_transitive() {
+        let lock_content = r#"
+[[package]]
+name = "a"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+b = ">=1.0"
+
+[[package]]
+name = "b"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+c = ">=1.0"
+
+[[package]]
+name = "c"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PoetryLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert!(names.contains("c"));
+    }
+
+    // Regression for bug_005 in poetry.lock: an extras-activated transitive declared
+    // under [package.extras] (e.g. httpx[http2] -> h2) must be reachable from the seed
+    // under --group. Without the fix, only httpx's [package.dependencies] are walked
+    // and h2 is silently dropped.
+    #[tokio::test]
+    async fn test_poetry_lock_extras_activate_optional_deps() {
+        let lock_content = r#"
+[[package]]
+name = "httpx"
+version = "0.27.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+anyio = ">=3.0"
+
+[package.extras]
+http2 = ["h2 (>=3,<5)"]
+
+[[package]]
+name = "anyio"
+version = "4.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[[package]]
+name = "h2"
+version = "4.1.0"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = []
+
+[dependency-groups]
+prod = ["httpx[http2]>=0.27"]
+"#;
+
+        let (temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PoetryLockParser::new().with_groups(Some(HashSet::from(["prod".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(
+            names.contains("httpx"),
+            "httpx must be present (direct seed)"
+        );
+        assert!(
+            names.contains("anyio"),
+            "anyio must be present (main transitive of httpx)"
+        );
+        assert!(
+            names.contains("h2"),
+            "h2 must be present — activated via httpx[http2] extras, got: {names:?}"
+        );
+    }
+
+    // groups=None: reachability block skipped; all packages returned.
+    #[tokio::test]
+    async fn test_poetry_lock_groups_none_unchanged_behavior() {
+        let lock_content = r#"
+[[package]]
+name = "a"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+b = ">=1.0"
+
+[[package]]
+name = "b"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+
+[[package]]
+name = "c"
+version = "1.0.0"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        // groups=None: no reachability filtering applied
+        let parser = PoetryLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert!(
+            names.contains("c"),
+            "c must not be dropped when groups=None"
         );
     }
 }

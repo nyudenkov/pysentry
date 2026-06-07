@@ -178,7 +178,9 @@ struct PyLockWheelSource {
     hashes: HashMap<String, String>,
 }
 
-pub struct PyLockParser;
+pub struct PyLockParser {
+    groups: Option<HashSet<String>>,
+}
 
 impl Default for PyLockParser {
     fn default() -> Self {
@@ -188,7 +190,12 @@ impl Default for PyLockParser {
 
 impl PyLockParser {
     pub fn new() -> Self {
-        Self
+        Self { groups: None }
+    }
+
+    pub(crate) fn with_groups(mut self, groups: Option<HashSet<String>>) -> Self {
+        self.groups = groups;
+        self
     }
 
     fn is_pylock_file(filename: &str) -> bool {
@@ -335,14 +342,17 @@ impl ProjectParser for PyLockParser {
 
         debug!("Found {} packages in pylock file", lock.packages.len());
 
+        // See lock.rs for the rationale: with `--group`, Some(empty) is a legitimate
+        // narrow-to-nothing signal, not a "missing pyproject" fallback.
         let direct_set: HashSet<PackageName> =
             match manifest_reader::read_direct_deps_from_pyproject(
                 &project_path.join("pyproject.toml"),
+                self.groups.as_ref(),
             )
             .await?
             {
-                Some(names) if !names.is_empty() => names,
-                _ => {
+                Some(names) => names,
+                None => {
                     warn!(
                     "No pyproject.toml found alongside pylock.toml — using graph inference for is_direct (diamond dependencies may be misclassified)"
                 );
@@ -418,6 +428,31 @@ impl ProjectParser for PyLockParser {
             };
 
             dependencies.push(dependency);
+        }
+
+        if self.groups.is_some() {
+            let seeds = direct_set.clone();
+            // PEP 751 does not encode per-package optional-dependencies tables. Unlike
+            // uv.lock (bug_005 fix in lock.rs) and poetry.lock (bug_005 fix in
+            // poetry_lock.rs), there is no authoritative place to look up which
+            // transitives a `mypkg[extra]` declaration activates, so extras-only
+            // transitives cannot be recovered at reachability time. Edges therefore
+            // only include each package's main dependencies.
+            let edges: HashMap<PackageName, HashSet<PackageName>> = lock
+                .packages
+                .iter()
+                .map(|pkg| {
+                    let key = PackageName::new(&pkg.name);
+                    let vals: HashSet<PackageName> = pkg
+                        .dependencies
+                        .iter()
+                        .map(|d| PackageName::new(&d.name))
+                        .collect();
+                    (key, vals)
+                })
+                .collect();
+            let reachable = crate::parsers::reachability::reachable_closure(&seeds, &edges);
+            dependencies.retain(|d| reachable.contains(&d.name));
         }
 
         debug!(
@@ -921,6 +956,146 @@ version = "2024.1.1"
         assert!(
             !certifi.is_direct,
             "certifi should be inferred as transitive"
+        );
+    }
+
+    // a -> b; c -> d. Seed = {a}. Reachable = {a, b}. Unreachable = {c, d}.
+    #[tokio::test]
+    async fn test_pylock_reachability_closure_drops_unreachable() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+dependencies = [{name = "b"}]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+
+[[package]]
+name = "c"
+version = "1.0.0"
+dependencies = [{name = "d"}]
+
+[[package]]
+name = "d"
+version = "1.0.0"
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PyLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"), "a must be included (direct seed)");
+        assert!(names.contains("b"), "b must be included (reachable from a)");
+        assert!(!names.contains("c"), "c must be dropped (unreachable)");
+        assert!(!names.contains("d"), "d must be dropped (unreachable)");
+    }
+
+    // a -> b -> c (linear chain). All reachable from seed {a}.
+    #[tokio::test]
+    async fn test_pylock_reachability_includes_transitive() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+dependencies = [{name = "b"}]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+dependencies = [{name = "c"}]
+
+[[package]]
+name = "c"
+version = "1.0.0"
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = PyLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert!(names.contains("c"));
+    }
+
+    // groups=None: reachability block skipped; all packages returned.
+    #[tokio::test]
+    async fn test_pylock_groups_none_unchanged_behavior() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+dependencies = [{name = "b"}]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+
+[[package]]
+name = "c"
+version = "1.0.0"
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        // groups=None: no reachability filtering applied
+        let parser = PyLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert!(
+            names.contains("c"),
+            "c must not be dropped when groups=None"
         );
     }
 }

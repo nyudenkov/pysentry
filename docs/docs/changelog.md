@@ -4,6 +4,91 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.6
+
+### ✨ New Features
+
+#### Audit a Single Dependency Group (`--group`)
+
+The new `--group` flag scopes an audit to specific dependency groups instead of the whole dependency tree. It is supported for uv (`uv.lock`), Poetry (`poetry.lock`), and PEP 751 (`pylock.toml`) projects. PySentry audits your main dependencies (`[project].dependencies` / `[tool.poetry.dependencies]`) plus the selected group(s) and their transitive closure, leaving the rest out:
+
+```bash
+# Audit main dependencies + the "dev" group only
+pysentry-rs --group dev
+
+# Multiple groups (repeatable or comma-separated)
+pysentry-rs --group dev --group docs
+pysentry-rs --group dev,docs
+```
+
+Group names are read from any of the standard locations:
+
+- PEP 735 `[dependency-groups]` (with `include-group` recursion)
+- PEP 621 `[project.optional-dependencies]`
+- Poetry `[tool.poetry.group.*]`
+
+Names are matched using PEP 735 normalization, so `--group typing-test` matches a declared `typing_test`. An unknown name fails with the list of available groups.
+
+**`--group` requires a lock file.** Group filtering relies on a group-aware lock file — `uv.lock`, `poetry.lock`, or `pylock.toml` (including named `pylock.<name>.toml` variants) — alongside your `pyproject.toml`. On a project without one, PySentry fails fast with a clear error instead of silently auditing the full dependency set. (`Pipfile.lock` is not supported — Pipfile has no dependency-group concept.)
+
+`--group` cannot be combined with `--exclude-extra` (or config `scope = "main"`), `--requirements-files`, or `--no-resolver`. It can also be set in config:
+
+```toml
+# .pysentry.toml
+[defaults]
+groups = ["dev", "docs"]
+```
+
+Resolves [#151](https://github.com/nyudenkov/pysentry/issues/151).
+
+### 🐛 Bug Fixes
+
+#### `fail_on` Silently Hid Vulnerabilities Below Its Threshold
+
+`fail_on` (CLI `--fail-on`, config `defaults.fail_on`) is meant to control **only the exit code** — the severity at which an audit is considered a failure. A regression in v0.4.5 instead wired it into the matcher as a minimum-severity filter, so any vulnerability below the `fail_on` level was dropped from the report entirely rather than just being excluded from the pass/fail decision.
+
+The effect scaled with the threshold. With the default `fail_on = "medium"`, low-severity findings disappeared from the report. With `fail_on = "critical"`, a project could contain many real high- and medium-severity vulnerabilities and still print `✓ No vulnerabilities found!` with a clean exit. On one real `uv.lock` project (90 packages), v0.4.5 reported **0** vulnerabilities under `fail_on = "critical"` while the project actually had **31**, several of them high severity.
+
+PySentry now reports every matched vulnerability regardless of `fail_on`, and uses `fail_on` strictly to decide the exit code.
+
+:::warning
+If you run PySentry with `fail_on` set above `low` (via `--fail-on` or config), affected vulnerabilities were missing from your reports while the audit may have exited successfully. Re-run your audit on this release.
+:::
+
+Regression introduced in v0.4.5; the original decoupling shipped in v0.4.3.
+
+#### Shared PyPA Cache Crashed Older PySentry Versions
+
+v0.4.5 changed the on-disk format of the cached PyPA advisory database from a raw ZIP archive to JSON, but kept writing it to the same cache file. When an older PySentry (`<= 0.4.4`) then read that file, it tried to parse the JSON as a ZIP and crashed with `Cache operation failed: invalid Zip archive: Could not find EOCD`. This bit anyone running multiple PySentry versions against the same cache — for example a project that pins an older `pysentry-rs` in a dependency group while a newer one is installed elsewhere.
+
+The PyPA database now uses a version-tagged cache file, so different formats never collide. New and old versions keep separate cache files and stop corrupting each other's reads. Already-released versions cannot be retro-fixed; if you are still on `<= 0.4.4` and hit this, run once with `--no-cache` or clear `pysentry/vulnerability-db` from your cache directory.
+
+#### `scope = "main"` / `--exclude-extra` Ignored Dependency Groups (uv.lock)
+
+On a `uv.lock` project, `--exclude-extra` (or config `scope = "main"`) did not exclude PEP 735 `[dependency-groups]` such as `dev` — every group member was still scanned, so a vulnerability in a dev-only tool like `pytest` was reported even though you asked for main dependencies only. uv records group members in `uv.lock` without marking *why* they were pulled in, and PySentry did not yet read those group tables.
+
+PySentry now recognizes uv's group encoding and treats `[dependency-groups]` members as optional, so `--exclude-extra` and `scope = "main"` correctly narrow the audit to your main dependencies and their transitive closure.
+
+Resolves [#158](https://github.com/nyudenkov/pysentry/issues/158).
+
+#### Shared Transitive Dependencies Skipped Under `--exclude-extra` (uv.lock)
+
+When auditing a `uv.lock` project with `--exclude-extra` (or config `scope = "main"`), a transitive dependency shared between your main dependencies and an optional dependency (a `[project.optional-dependencies]` extra) — for example a package like `certifi` reached by both — could be misclassified as optional and excluded from the scan.
+
+:::warning
+Because an excluded package is never checked, any vulnerabilities in it were silently missed while the audit still reported clean. If you rely on `--exclude-extra` or `scope = "main"` with a `uv.lock` project, re-run your audit on this release.
+:::
+
+PySentry now computes the set of packages reachable from `[project].dependencies` and subtracts it from the optional set, so a shared transitive stays in scope as long as a main dependency reaches it. Packages reachable *only* through an extra are still excluded, exactly as before.
+
+This affects `uv.lock` projects with a companion `pyproject.toml`; other lock formats already relied on their native optional markers.
+
+---
+
+**Full Changelog**: https://github.com/nyudenkov/pysentry/compare/v0.4.5...v0.4.6
+
+---
+
 ## v0.4.5
 
 ### ✨ New Features

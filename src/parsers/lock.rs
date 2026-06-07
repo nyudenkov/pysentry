@@ -54,11 +54,14 @@ struct Package {
     #[serde(default)]
     dependencies: Vec<Dependency>, // Used for dependency graph analysis
     #[serde(default, rename = "optional-dependencies")]
-    #[allow(dead_code)] // Used for deserialization
     optional_dependencies: HashMap<String, Vec<Dependency>>,
-    #[serde(default)]
-    #[allow(dead_code)] // Used for deserialization
-    dev_dependencies: Vec<Dependency>,
+    // Real uv.lock encodes PEP 735 [dependency-groups] as a table keyed by group name under
+    // [package.dev-dependencies] on the root virtual package. This field mirrors that shape so
+    // `identify_optional_packages` can treat declared groups as optional under --exclude-extra.
+    // The explicit rename is required because TOML uses kebab-case and serde does not convert
+    // automatically — match the `optional-dependencies` pattern above.
+    #[serde(default, rename = "dev-dependencies")]
+    dev_dependencies: HashMap<String, Vec<Dependency>>,
 }
 
 /// Dependency specification
@@ -79,7 +82,9 @@ struct Dependency {
 // PyProject.toml support removed - lock parser now only works with lock file structure
 
 /// UV lock file parser
-pub struct UvLockParser;
+pub struct UvLockParser {
+    groups: Option<HashSet<String>>,
+}
 
 impl Default for UvLockParser {
     fn default() -> Self {
@@ -89,7 +94,12 @@ impl Default for UvLockParser {
 
 impl UvLockParser {
     pub fn new() -> Self {
-        Self
+        Self { groups: None }
+    }
+
+    pub(crate) fn with_groups(mut self, groups: Option<HashSet<String>>) -> Self {
+        self.groups = groups;
+        self
     }
 }
 
@@ -135,10 +145,23 @@ impl ProjectParser for UvLockParser {
         // Identify packages that come from optional dependency groups.
         // Skipped when include_optional=true — the result is only used to filter packages
         // out, so an empty set produces identical behaviour when nothing is being filtered.
+        //
+        // `main_roots_seed` is the set of packages declared in [project].dependencies /
+        // [tool.poetry.dependencies] — the project's production deps, with NO groups
+        // included. It's fed into identify_optional_packages so shared transitives between
+        // main and optional groups are not mis-classified as optional. Passing an empty
+        // groups filter works because manifest_reader always includes main deps regardless
+        // of the filter — see read_direct_deps_from_pyproject's doc comment.
+        let main_roots_seed: Option<HashSet<PackageName>> =
+            manifest_reader::read_direct_deps_from_pyproject(
+                &project_path.join("pyproject.toml"),
+                Some(&HashSet::new()),
+            )
+            .await?;
         let optional_packages = if include_optional {
             HashSet::new()
         } else {
-            let set = self.identify_optional_packages(&lock);
+            let set = self.identify_optional_packages(&lock, main_roots_seed.as_ref());
             debug!(
                 "Identified {} optional packages (direct and transitive)",
                 set.len()
@@ -146,20 +169,33 @@ impl ProjectParser for UvLockParser {
             set
         };
 
-        let direct_set: HashSet<PackageName> =
-            match manifest_reader::read_direct_deps_from_pyproject(
-                &project_path.join("pyproject.toml"),
-            )
-            .await?
-            {
-                Some(names) if !names.is_empty() => names,
-                _ => {
-                    warn!(
+        // When `groups` is set, an empty result from the manifest reader is meaningful:
+        // it means the selected group legitimately resolved to nothing (empty group,
+        // include-group pointing at a missing group, etc.). Trust it and keep direct_set
+        // empty — the reachability closure below will then correctly narrow to nothing.
+        // Only fall through to graph inference when pyproject.toml is actually absent.
+        //
+        // We use the with-extras variant so `httpx[http2]`-style entries preserve their
+        // `[http2]` activation — needed to fold pkg.optional_dependencies[extra] into
+        // the reachability edge map below (otherwise extras-only transitives like `h2`
+        // are silently dropped).
+        let (direct_set, requested_extras): (
+            HashSet<PackageName>,
+            HashMap<PackageName, HashSet<String>>,
+        ) = match manifest_reader::read_direct_deps_with_extras_from_pyproject(
+            &project_path.join("pyproject.toml"),
+            self.groups.as_ref(),
+        )
+        .await?
+        {
+            Some((names, extras)) => (names, extras),
+            None => {
+                warn!(
                     "No pyproject.toml found alongside uv.lock — using graph inference for is_direct (diamond dependencies may be misclassified)"
                 );
-                    Self::infer_direct_deps(&lock.packages)
-                }
-            };
+                (Self::infer_direct_deps(&lock.packages), HashMap::new())
+            }
+        };
 
         let mut dependencies = Vec::new();
         let mut seen_packages = HashSet::new();
@@ -265,6 +301,48 @@ impl ProjectParser for UvLockParser {
             dependencies.push(dependency);
         }
 
+        if self.groups.is_some() {
+            let seeds = direct_set.clone();
+            // For each package, the edge set contains its main dependencies PLUS the
+            // `optional-dependencies[<extra>]` entries for any extra the project
+            // explicitly requested on that package (e.g. `httpx[http2]` in a group
+            // declaration activates `httpx`'s `http2` extra, pulling `h2` into reach).
+            let edges: HashMap<PackageName, HashSet<PackageName>> = lock
+                .packages
+                .iter()
+                .map(|pkg| {
+                    let key = PackageName::new(&pkg.name);
+                    let mut vals: HashSet<PackageName> = pkg
+                        .dependencies
+                        .iter()
+                        .map(|d| PackageName::new(&d.name))
+                        .collect();
+                    if let Some(extras) = requested_extras.get(&key) {
+                        for extra in extras {
+                            // `extra` is normalized (PEP 685); match the lock's
+                            // optional-dependencies keys by normalized form too, so an extra
+                            // requested as `my_extra` still resolves a `my-extra` lock key.
+                            let opt_deps = pkg
+                                .optional_dependencies
+                                .iter()
+                                .find(|(name, _)| {
+                                    manifest_reader::normalize_group_name(name.as_str()) == *extra
+                                })
+                                .map(|(_, deps)| deps);
+                            if let Some(opt_deps) = opt_deps {
+                                for d in opt_deps {
+                                    vals.insert(PackageName::new(&d.name));
+                                }
+                            }
+                        }
+                    }
+                    (key, vals)
+                })
+                .collect();
+            let reachable = crate::parsers::reachability::reachable_closure(&seeds, &edges);
+            dependencies.retain(|d| reachable.contains(&d.name));
+        }
+
         debug!("Scanned {} dependencies from lock file", dependencies.len());
         if !skipped_packages.is_empty() {
             debug!(
@@ -306,16 +384,37 @@ impl UvLockParser {
         toml::from_str(content).map_err(AuditError::LockFileParse)
     }
 
-    /// Identify packages that come from optional dependency groups (and their transitive deps)
+    /// Identify packages that come from optional dependency groups (and their transitive deps).
+    ///
+    /// `main_roots_seed` is the set of packages declared in pyproject's main dependency
+    /// sections ([project].dependencies / [tool.poetry.dependencies]). When present, it
+    /// is used to compute the "main-reachable" closure that shared transitives are
+    /// subtracted from. The virtual-root heuristic is only used when pyproject.toml is
+    /// absent (seed is None) — that heuristic fails for library projects whose root is
+    /// source = { editable = "." } or a registry package.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn identify_optional_packages(&self, lock: &Lock) -> HashSet<PackageName> {
+    fn identify_optional_packages(
+        &self,
+        lock: &Lock,
+        main_roots_seed: Option<&HashSet<PackageName>>,
+    ) -> HashSet<PackageName> {
         let mut optional_packages = HashSet::new();
         let mut to_process = Vec::new();
 
-        // First, collect all direct optional dependencies
+        // First, collect all direct optional dependencies. PEP 621 [project.optional-dependencies]
+        // show up here as `optional_dependencies`; PEP 735 [dependency-groups] show up as
+        // `dev_dependencies` (uv's lock-file encoding keys the table by group name). Both are
+        // "extras" from --exclude-extra's perspective and should be filtered identically.
         for package in &lock.packages {
             for optional_deps in package.optional_dependencies.values() {
                 for dep in optional_deps {
+                    let dep_name = PackageName::new(&dep.name);
+                    optional_packages.insert(dep_name.clone());
+                    to_process.push(dep_name);
+                }
+            }
+            for group_deps in package.dev_dependencies.values() {
+                for dep in group_deps {
                     let dep_name = PackageName::new(&dep.name);
                     optional_packages.insert(dep_name.clone());
                     to_process.push(dep_name);
@@ -345,8 +444,31 @@ impl UvLockParser {
             }
         }
 
+        // A package reachable from a main dep is a legitimate main dep and must NOT be
+        // filtered out by --exclude-extra, even if it is ALSO reachable from an optional
+        // group. Shared transitives belong to the more-permissive classification.
+        //
+        // Prefer the caller-supplied seed (derived from pyproject's [project].dependencies
+        // / [tool.poetry.dependencies]) because it works for any workspace shape. Fall
+        // back to the virtual-root heuristic only when pyproject.toml is absent — that
+        // heuristic misses library projects whose root is editable or a registry entry.
+        let main_roots: HashSet<PackageName> = match main_roots_seed {
+            Some(seed) => seed.clone(),
+            None => lock
+                .packages
+                .iter()
+                .filter(|p| self.is_virtual_package(p))
+                .flat_map(|p| p.dependencies.iter().map(|d| PackageName::new(&d.name)))
+                .collect(),
+        };
+        if !main_roots.is_empty() {
+            let main_reachable =
+                crate::parsers::reachability::reachable_closure(&main_roots, &dep_graph);
+            optional_packages.retain(|p| !main_reachable.contains(p));
+        }
+
         debug!(
-            "Identified {} optional packages (including transitive)",
+            "Identified {} optional packages (including transitive, excluding main-reachable)",
             optional_packages.len()
         );
         optional_packages
@@ -385,41 +507,24 @@ impl UvLockParser {
 
     /// Build dependency graph from uv.lock file including both main and optional dependencies
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn build_dependency_graph(&self, lock: &Lock) -> HashMap<PackageName, Vec<PackageName>> {
-        let mut graph = HashMap::new();
+    fn build_dependency_graph(&self, lock: &Lock) -> HashMap<PackageName, HashSet<PackageName>> {
+        let mut graph: HashMap<PackageName, HashSet<PackageName>> = HashMap::new();
 
         for package in &lock.packages {
             let package_name = PackageName::new(&package.name);
-            let mut deps = Vec::new();
+            // Merge dependencies across same-name packages with different versions/markers;
+            // the HashSet dedupes overlapping edges automatically.
+            let deps = graph.entry(package_name).or_default();
 
             // Parse main dependencies from the package
             for dep in &package.dependencies {
-                let dep_name = PackageName::new(&dep.name);
-                deps.push(dep_name);
+                deps.insert(PackageName::new(&dep.name));
             }
 
             // Parse optional dependencies from all groups
             for optional_deps in package.optional_dependencies.values() {
                 for dep in optional_deps {
-                    let dep_name = PackageName::new(&dep.name);
-                    deps.push(dep_name);
-                }
-            }
-
-            // Insert all package entries, including same name with different versions/markers
-            // Use entry().or_insert() to avoid overwriting, but this means we keep first occurrence
-            // TODO: Consider if we need to merge dependencies from multiple versions of same package
-            if let std::collections::hash_map::Entry::Vacant(e) = graph.entry(package_name.clone())
-            {
-                e.insert(deps);
-            } else {
-                // Package already exists, merge dependencies
-                if let Some(existing_deps) = graph.get_mut(&package_name) {
-                    for dep in deps {
-                        if !existing_deps.contains(&dep) {
-                            existing_deps.push(dep);
-                        }
-                    }
+                    deps.insert(PackageName::new(&dep.name));
                 }
             }
         }
@@ -791,7 +896,7 @@ source = { registry = "https://pypi.org/simple" }
             resolution_markers: None,
             dependencies: vec![],
             optional_dependencies: HashMap::new(),
-            dev_dependencies: vec![],
+            dev_dependencies: HashMap::new(),
         };
 
         assert!(parser.is_virtual_package(&virtual_package));
@@ -805,7 +910,7 @@ source = { registry = "https://pypi.org/simple" }
             resolution_markers: None,
             dependencies: vec![],
             optional_dependencies: HashMap::new(),
-            dev_dependencies: vec![],
+            dev_dependencies: HashMap::new(),
         };
 
         assert!(!parser.is_virtual_package(&editable_package));
@@ -819,9 +924,488 @@ source = { registry = "https://pypi.org/simple" }
             resolution_markers: None,
             dependencies: vec![],
             optional_dependencies: HashMap::new(),
-            dev_dependencies: vec![],
+            dev_dependencies: HashMap::new(),
         };
 
         assert!(!parser.is_virtual_package(&registry_package));
+    }
+
+    // Lock: root (virtual) -> a -> b; c -> d; e (standalone).
+    // With group filter active and a as the only direct dep,
+    // reachability keeps {a, b} and drops {c, d, e}.
+    #[tokio::test]
+    async fn test_uv_lock_reachability_closure_drops_unreachable() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "root"
+source = { virtual = "." }
+dependencies = [{ name = "a" }]
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "b" }]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "c"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "d" }]
+
+[[package]]
+name = "d"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "e"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = UvLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"), "a must be included (direct seed)");
+        assert!(names.contains("b"), "b must be included (reachable from a)");
+        assert!(!names.contains("c"), "c must be dropped (unreachable)");
+        assert!(!names.contains("d"), "d must be dropped (unreachable)");
+        assert!(!names.contains("e"), "e must be dropped (unreachable)");
+    }
+
+    // Lock: a -> b -> c (linear chain). All three are reachable from seed {a}.
+    #[tokio::test]
+    async fn test_uv_lock_reachability_includes_transitive() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "b" }]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "c" }]
+
+[[package]]
+name = "c"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = UvLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert!(names.contains("c"));
+    }
+
+    // groups=None: reachability block is skipped entirely; all packages returned.
+    #[tokio::test]
+    async fn test_uv_lock_groups_none_unchanged_behavior() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "b" }]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "c"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        // groups=None: no reachability filtering applied
+        let parser = UvLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert!(
+            names.contains("c"),
+            "c must not be dropped when groups=None"
+        );
+    }
+
+    // Regression for bug_007: an empty group resolution must NOT fall through to
+    // infer_direct_deps (which would seed from graph roots and close over the whole
+    // main tree). With pyproject present and BOTH main deps and the requested group
+    // legitimately empty, the direct_set stays empty and reachability yields nothing.
+    // Note: `[project].dependencies` is always included regardless of group filter, so
+    // an empty-group scenario that produces an empty result requires main deps to be
+    // empty too (otherwise main deps are correctly included — that's the semantic).
+    #[tokio::test]
+    async fn test_uv_lock_empty_group_stays_empty() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "root"
+source = { virtual = "." }
+dependencies = [{ name = "django" }]
+
+[[package]]
+name = "django"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "certifi" }]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        // pyproject declares group `ci = []` legitimately empty and NO main deps.
+        // Without the bug_007 fix, `Some(empty)` falls through to infer_direct_deps,
+        // seeds from graph roots (including the virtual project root), and the
+        // reachability closure covers the entire main tree. With the fix, the empty
+        // set is trusted and reachability yields nothing.
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+
+[dependency-groups]
+ci = []
+dev = ["pytest"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        // include_optional=true mirrors the real --group path (which conflicts with
+        // --exclude-extra). We want to verify the reachability closure alone produces
+        // an empty result — not accidentally get a pass because of optional-filtering.
+        let parser = UvLockParser::new().with_groups(Some(HashSet::from(["ci".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        assert!(
+            deps.is_empty(),
+            "empty group ci with no main deps must produce empty scan, got: {:?}",
+            deps.iter().map(|d| d.name.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    // Regression for bug_005: an extras-activated transitive (e.g. httpx[http2] -> h2)
+    // must be reachable from the seed under --group. Without the fix, only httpx's
+    // main dependencies are walked and h2 is silently dropped.
+    #[tokio::test]
+    async fn test_uv_lock_extras_activate_optional_deps() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "root"
+source = { virtual = "." }
+dependencies = [{ name = "httpx" }]
+
+[[package]]
+name = "httpx"
+version = "0.27.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "anyio" }]
+
+[package.optional-dependencies]
+http2 = [{ name = "h2" }]
+
+[[package]]
+name = "anyio"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "h2"
+version = "4.1.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = []
+
+[dependency-groups]
+prod = ["httpx[http2]>=0.27"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        // --group conflicts with --exclude-extra, so include_optional=true in the
+        // real call path. Mirror that here so the optional-package pre-filter (which
+        // triggers only when include_optional=false) does not mask the reachability
+        // step we are actually testing.
+        let parser = UvLockParser::new().with_groups(Some(HashSet::from(["prod".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(
+            names.contains("httpx"),
+            "httpx must be present (direct seed)"
+        );
+        assert!(
+            names.contains("anyio"),
+            "anyio must be present (main transitive of httpx)"
+        );
+        assert!(
+            names.contains("h2"),
+            "h2 must be present — activated via httpx[http2] extras, got: {names:?}"
+        );
+    }
+
+    // P2 regression: an extra requested with a non-normalized separator (`my_extra`) must
+    // still resolve a lock optional-dependencies key written in normalized form (`my-extra`).
+    // Before PEP 685 normalization of extras, the raw HashMap lookup missed and the
+    // extras-only transitive (h2) was silently dropped from the reachable closure.
+    #[tokio::test]
+    async fn test_uv_lock_extras_normalized_separator_mismatch() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "root"
+source = { virtual = "." }
+dependencies = [{ name = "httpx" }]
+
+[[package]]
+name = "httpx"
+version = "0.27.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "anyio" }]
+
+[package.optional-dependencies]
+my-extra = [{ name = "h2" }]
+
+[[package]]
+name = "anyio"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "h2"
+version = "4.1.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = []
+
+[dependency-groups]
+prod = ["httpx[my_extra]>=0.27"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = UvLockParser::new().with_groups(Some(HashSet::from(["prod".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, true, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(
+            names.contains("h2"),
+            "h2 must resolve via httpx[my_extra] matching the normalized my-extra lock key, got: {names:?}"
+        );
+    }
+
+    // Regression for bug_006: shared transitives between [project].dependencies and a
+    // PEP 735 dev group must NOT be filtered out under --exclude-extra when the root
+    // is encoded as `editable` (library project), not `virtual`.
+    #[tokio::test]
+    async fn test_uv_lock_library_root_shared_transitive_kept() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "mylib"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [{ name = "requests" }]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "requests" },
+]
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "certifi" }]
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "pytest"
+version = "8.0.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let pyproject_content = r#"
+[project]
+name = "mylib"
+dependencies = ["requests>=2.31"]
+
+[dependency-groups]
+dev = ["pytest>=8", "requests>=2.31"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        // include_optional = false reproduces --exclude-extra behavior.
+        let parser = UvLockParser::new();
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(
+            names.contains("requests"),
+            "requests is in [project].dependencies; must be kept even with an editable root and shared dev membership"
+        );
+        assert!(
+            names.contains("certifi"),
+            "certifi is reachable from requests (main transitive); must be kept, got: {names:?}"
+        );
+        assert!(
+            !names.contains("pytest"),
+            "pytest is dev-only; must be filtered under --exclude-extra"
+        );
+    }
+
+    // Lock: a -> b -> a (cycle). Reachability terminates without looping.
+    #[tokio::test]
+    async fn test_uv_lock_reachability_handles_cycle() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "b" }]
+
+[[package]]
+name = "b"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "a" }]
+"#;
+        let pyproject_content = r#"
+[project]
+name = "myapp"
+dependencies = ["a>=1.0"]
+"#;
+
+        let (temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        tokio::fs::write(temp_dir.path().join("pyproject.toml"), pyproject_content)
+            .await
+            .unwrap();
+
+        let parser = UvLockParser::new().with_groups(Some(HashSet::from(["dev".to_string()])));
+        let (deps, _) = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await
+            .unwrap();
+
+        let names: HashSet<String> = deps.iter().map(|d| d.name.to_string()).collect();
+        assert!(names.contains("a"));
+        assert!(names.contains("b"));
+        assert_eq!(
+            names.len(),
+            2,
+            "cycle must not cause duplicates or extra entries"
+        );
     }
 }

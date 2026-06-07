@@ -280,7 +280,11 @@ impl PypaSource {
 
     /// Get cache entry for `PyPA` database
     fn cache_entry(&self) -> CacheEntry {
-        self.cache.database_entry("pypa")
+        // Versioned key: v0.4.5 changed this cache from a raw ZIP to JSON. Released versions
+        // <= 0.4.4 read the unversioned "pypa" path as a ZIP and crash ("Could not find EOCD")
+        // on JSON content. The "-v2" suffix gives the JSON format its own file so old and new
+        // versions never collide on a shared cache; bump it again on any future format change.
+        self.cache.database_entry("pypa-v2")
     }
 
     /// Download and parse `PyPA` advisory database, returning a pre-built VulnerabilityDatabase.

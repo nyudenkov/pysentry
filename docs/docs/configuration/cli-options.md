@@ -29,6 +29,7 @@ Complete reference for all PySentry command line options.
 | `--fail-on` | Fail (exit non-zero) on vulnerabilities >= severity | `medium` |
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
+| `--group` | Audit only the named dependency group(s) plus main dependencies (repeatable, comma-separated). Requires a lock file. Conflicts with `--exclude-extra` | `[]` |
 | `--direct-only` | Check only direct dependencies | `false` |
 | `--detailed` | Show full vulnerability descriptions (summary + full text) | `false` |
 | `--compact` | Compact output: summary line + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
@@ -38,6 +39,30 @@ Complete reference for all PySentry command line options.
 ::: note
 `--compact` and `--detailed` are mutually exclusive. Using both together will cause an error.
 :::
+
+### Dependency Group Filtering (`--group`)
+
+`--group` scopes the audit to specific dependency groups instead of the entire dependency tree. It is supported for uv (`uv.lock`), Poetry (`poetry.lock`), and PEP 751 (`pylock.toml`) projects. The audit covers your main dependencies (`[project].dependencies` / `[tool.poetry.dependencies]`) plus the selected group(s) and their transitive closure.
+
+```bash
+pysentry-rs --group dev                 # main + the "dev" group
+pysentry-rs --group dev --group docs    # multiple groups (repeatable)
+pysentry-rs --group dev,docs            # or comma-separated
+```
+
+Group names are resolved from any of:
+
+- PEP 735 `[dependency-groups]` (with `include-group` recursion)
+- PEP 621 `[project.optional-dependencies]`
+- Poetry `[tool.poetry.group.*]`
+
+Names match by PEP 735 normalization (`--group typing-test` matches a declared `typing_test`). An unknown name fails with the list of available groups.
+
+:::warning Requires a lock file
+`--group` needs a group-aware lock file — `uv.lock`, `poetry.lock`, or `pylock.toml` (including named `pylock.<name>.toml` variants) — next to your `pyproject.toml`. Without one, PySentry exits with an error rather than silently auditing every dependency. `Pipfile.lock` is **not** supported (Pipfile has no dependency-group concept).
+:::
+
+`--group` cannot be combined with `--exclude-extra` (or config `scope = "main"`), `--requirements-files`, or `--no-resolver`. It can also be set in config via `[defaults] groups` — see [Configuration Files](./config-files.md).
 
 
 ## Ignore Options
@@ -156,6 +181,9 @@ pysentry-rs --fail-on critical
 
 # Use specific vulnerability sources
 pysentry-rs --sources pypa --sources osv
+
+# Audit only the "dev" group plus main deps (requires a lock file)
+pysentry-rs --group dev
 ```
 
 ### Ignoring Vulnerabilities

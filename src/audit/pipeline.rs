@@ -9,7 +9,9 @@ use crate::notifications::display::{
     display_notification, fetch_remote_notifications_silent, mark_notification_shown,
 };
 use crate::output::generate_report;
+use crate::parsers::manifest_reader;
 use crate::parsers::requirements::RequirementsParser;
+use crate::parsers::ParserRegistry;
 use crate::types::ResolverType;
 use crate::{
     AuditCache, AuditReport, DependencyScanner, MatcherConfig, Severity, VulnerabilityDatabase,
@@ -17,6 +19,7 @@ use crate::{
 };
 use anyhow::Result;
 use futures::future::try_join_all;
+use std::collections::HashSet;
 use std::path::Path;
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -206,6 +209,22 @@ pub async fn audit(
     }
 }
 
+/// Build the vulnerability matcher configuration for an audit.
+///
+/// The matcher threshold is fixed at `Low` so every matched severity reaches the report.
+/// `fail_on` deliberately never enters here — it selects the exit condition only (see
+/// `evaluate_fail_condition`). Gating the matcher on `fail_on` once silently dropped real
+/// vulnerabilities below the threshold from the report; this separation guards against it.
+fn build_matcher_config(audit_args: &AuditArgs) -> MatcherConfig {
+    MatcherConfig::new(
+        crate::SeverityLevel::Low,
+        audit_args.ignore_ids.to_vec(),
+        audit_args.ignore_while_no_fix.to_vec(),
+        audit_args.direct_only,
+        audit_args.include_withdrawn,
+    )
+}
+
 /// Evaluate whether any match triggers the fail_on exit condition.
 /// Returns (matches, should_fail).
 pub(crate) fn evaluate_fail_condition(
@@ -239,6 +258,77 @@ async fn perform_audit(
     ci_env: &crate::ci::CiEnvironment,
 ) -> Result<(AuditReport, bool)> {
     std::fs::create_dir_all(cache_dir)?;
+
+    // --group is only meaningful for pyproject.toml-based parsers (uv.lock, poetry.lock,
+    // pylock.toml). Reject combinations that bypass pyproject.toml parsing up-front so the
+    // user sees a clear error before any scanning begins.
+    if !audit_args.groups.is_empty() {
+        if !audit_args.requirements_files.is_empty() || audit_args.no_resolver {
+            return Err(anyhow::anyhow!(
+                "--group cannot be combined with --requirements-files or --no-resolver. \
+                 requirements.txt has no dependency-group concept. \
+                 Use pyproject.toml with [dependency-groups], \
+                 [project.optional-dependencies], or [tool.poetry.group.*] to declare groups."
+            ));
+        }
+        if !audit_args.path.join("pyproject.toml").exists() {
+            return Err(anyhow::anyhow!(
+                "--group requires a pyproject.toml in the project directory, but none was found at {}. \
+                 requirements.txt has no dependency-group concept. \
+                 Use pyproject.toml with [dependency-groups], \
+                 [project.optional-dependencies], or [tool.poetry.group.*] to declare groups.",
+                audit_args.path.display()
+            ));
+        }
+        if audit_args.exclude_extra {
+            return Err(anyhow::anyhow!(
+                "--group cannot be combined with --exclude-extra (or config `scope = \"main\"`). \
+                 --group already narrows which groups are scanned; --exclude-extra would then \
+                 strip those same groups as optional. Remove one of them."
+            ));
+        }
+        // --group narrows scope via the reachability closure in the group-aware lock
+        // parsers: uv.lock, poetry.lock, pylock.toml. Without one of them the registry
+        // would fall through to PyProjectParser, which does not accept `groups` and
+        // would silently audit the entire dependency tree. Pipfile.lock is deliberately
+        // excluded — PipfileLockParser rejects --group outright (Pipfile has no group
+        // concept), so listing it here would only delay the error and make the message
+        // less actionable. Fail fast with a clear remediation instead.
+        // PEP 751 allows named pylock variants (pylock.<name>.toml), which the parser
+        // accepts via PyLockParser::can_parse. has_group_aware_lock reuses that detection
+        // instead of hardcoding the canonical filename, so a project carrying only e.g.
+        // pylock.production.toml is not falsely rejected.
+        if !crate::parsers::has_group_aware_lock(&audit_args.path) {
+            return Err(anyhow::anyhow!(
+                "--group requires a lock file (uv.lock, poetry.lock, or pylock.toml) \
+                 alongside pyproject.toml at {}. Generate one first (e.g. `uv lock` or \
+                 `poetry lock`) and re-run. Note: Pipfile.lock is not supported — \
+                 Pipfile has no dependency-group concept.",
+                audit_args.path.display()
+            ));
+        }
+        let pyproject_path = audit_args.path.join("pyproject.toml");
+        let available = manifest_reader::list_group_names(&pyproject_path).await?;
+        // PEP 735 group names compare by normalized form, so a user's `--group typing-test`
+        // must match a declared `typing_test`. Match on normalized names while still
+        // displaying the original spellings in the error.
+        let available_normalized: HashSet<String> = available
+            .iter()
+            .map(|name| manifest_reader::normalize_group_name(name))
+            .collect();
+        for name in &audit_args.groups {
+            if !available_normalized.contains(&manifest_reader::normalize_group_name(name)) {
+                let mut sorted: Vec<&str> = available.iter().map(String::as_str).collect();
+                sorted.sort();
+                return Err(anyhow::anyhow!(
+                    "group \"{}\" not found; available groups: {}",
+                    name,
+                    sorted.join(", ")
+                ));
+            }
+        }
+    }
+
     let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
     let vuln_sources: Vec<_> = source_types
@@ -324,8 +414,12 @@ async fn perform_audit(
         let parse_dev = audit_args.include_dev();
         let parse_optional = audit_args.include_optional();
 
-        use crate::parsers::ParserRegistry;
-        let parser_registry = ParserRegistry::new(Some(resolver_type));
+        let groups_option: Option<HashSet<String>> = if audit_args.groups.is_empty() {
+            None
+        } else {
+            Some(audit_args.groups.iter().cloned().collect())
+        };
+        let parser_registry = ParserRegistry::new(Some(resolver_type), groups_option);
         let (raw_parsed_deps, skipped_packages, parser_name) = parser_registry
             .parse_project(
                 &audit_args.path,
@@ -369,6 +463,7 @@ async fn perform_audit(
             audit_args.include_optional(),
             audit_args.direct_only,
             None,
+            None,
         );
         scanner.get_stats(&dependencies)
     };
@@ -388,6 +483,7 @@ async fn perform_audit(
             audit_args.include_dev(),
             audit_args.include_optional(),
             audit_args.direct_only,
+            None,
             None,
         );
         scanner.validate_dependencies(&dependencies, &skipped_packages, &detected_parser_name)
@@ -476,13 +572,7 @@ async fn perform_audit(
         eprintln!("Matching against vulnerability database...");
     }
     let fail_on_level: crate::SeverityLevel = audit_args.fail_on.clone().into();
-    let matcher_config = MatcherConfig::new(
-        fail_on_level.clone(),
-        audit_args.ignore_ids.to_vec(),
-        audit_args.ignore_while_no_fix.to_vec(),
-        audit_args.direct_only,
-        audit_args.include_withdrawn,
-    );
+    let matcher_config = build_matcher_config(audit_args);
     let matcher = VulnerabilityMatcher::new(database, matcher_config);
 
     let matches = matcher.find_vulnerabilities(&dependencies)?;
@@ -564,6 +654,106 @@ mod tests {
     use crate::{Severity, VulnerabilityMatch};
     use std::str::FromStr;
 
+    // Calling --group on a project with no pyproject.toml must return a clear error
+    // before any dependency scanning begins.
+    #[tokio::test]
+    async fn test_requirements_txt_with_group_errors_clearly() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        tokio::fs::write(
+            temp_dir.path().join("requirements.txt"),
+            b"requests==2.28.0\n",
+        )
+        .await
+        .unwrap();
+
+        let project_path_str = temp_dir.path().to_str().unwrap();
+        let audit_args =
+            AuditArgs::try_parse_from(["pysentry", "--group", "polars", project_path_str]).unwrap();
+
+        let cache_dir = temp_dir.path().join("cache");
+        let result = super::perform_audit(
+            &audit_args,
+            &cache_dir,
+            crate::config::HttpConfig::default(),
+            3600,
+            &[],
+            &crate::ci::CiEnvironment::None,
+        )
+        .await;
+
+        assert!(result.is_err(), "expected error when no pyproject.toml");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("requirements.txt has no dependency-group concept"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    // A user who passes BOTH --group and explicit --requirements-files is asking for two
+    // contradictory things: "filter by named group" AND "ignore pyproject.toml, use these
+    // requirements.txt files." Even if a pyproject.toml is present, --requirements-files
+    // bypasses it, so --group has nothing to filter. Fail fast with a distinct error that
+    // names the flag combination rather than pointing at a missing file.
+    #[tokio::test]
+    async fn test_group_with_explicit_requirements_files_errors_clearly() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        // A valid pyproject.toml exists — the error must fire because of the flag combo,
+        // not because pyproject is missing.
+        tokio::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"x\"\n\n[dependency-groups]\nprod = [\"httpx>=0.27\"]\n",
+        )
+        .await
+        .unwrap();
+        let req_path = temp_dir.path().join("req.txt");
+        tokio::fs::write(&req_path, b"requests==2.28.0\n")
+            .await
+            .unwrap();
+
+        let project_path_str = temp_dir.path().to_str().unwrap();
+        let req_path_str = req_path.to_str().unwrap();
+        let audit_args = AuditArgs::try_parse_from([
+            "pysentry",
+            "--group",
+            "prod",
+            "--requirements-files",
+            req_path_str,
+            project_path_str,
+        ])
+        .unwrap();
+
+        let cache_dir = temp_dir.path().join("cache");
+        let result = super::perform_audit(
+            &audit_args,
+            &cache_dir,
+            crate::config::HttpConfig::default(),
+            3600,
+            &[],
+            &crate::ci::CiEnvironment::None,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "expected error when combining --group with --requirements-files"
+        );
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--group cannot be combined with --requirements-files or --no-resolver"),
+            "error must name the flag combination, got: {msg}"
+        );
+    }
+
     fn make_match(vuln_level: Severity) -> VulnerabilityMatch {
         VulnerabilityMatch {
             package_name: crate::types::PackageName::from_str("test-pkg").unwrap(),
@@ -598,5 +788,166 @@ mod tests {
         let (display, fail) = evaluate_fail_condition(matches, &crate::SeverityLevel::Medium, true);
         assert!(fail, "Unknown causes failure when fail_on_unknown=true");
         assert_eq!(display.len(), 1, "match is returned");
+    }
+
+    // Regression guard: fail_on must never narrow the matcher. A v0.4.5 refactor wired fail_on
+    // into the matcher's min_severity, so `--fail-on critical` silently dropped every non-critical
+    // vulnerability from the report. The matcher threshold must stay Low for every fail_on level.
+    #[test]
+    fn test_fail_on_never_filters_matcher() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+
+        for level in ["low", "medium", "high", "critical"] {
+            let audit_args =
+                AuditArgs::try_parse_from(["pysentry", "--fail-on", level, "."]).unwrap();
+            let config = super::build_matcher_config(&audit_args);
+            assert_eq!(
+                config.min_severity,
+                crate::SeverityLevel::Low,
+                "matcher threshold must stay Low so --fail-on {level} reports all severities"
+            );
+        }
+    }
+
+    // Simulates the post-merge state produced when the user passes --group on the CLI
+    // and a .pysentry.toml has `scope = "main"` (which sets exclude_extra=true after merge).
+    // Clap's conflicts_with only catches the CLI-only combo; this tests the config-path.
+    #[tokio::test]
+    async fn test_group_with_exclude_extra_errors_clearly() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        tokio::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"x\"\n\n[dependency-groups]\nprod = [\"httpx>=0.27\"]\n",
+        )
+        .await
+        .unwrap();
+
+        let project_path_str = temp_dir.path().to_str().unwrap();
+        let mut audit_args =
+            AuditArgs::try_parse_from(["pysentry", "--group", "prod", project_path_str]).unwrap();
+        audit_args.exclude_extra = true;
+
+        let cache_dir = temp_dir.path().join("cache");
+        let result = super::perform_audit(
+            &audit_args,
+            &cache_dir,
+            crate::config::HttpConfig::default(),
+            3600,
+            &[],
+            &crate::ci::CiEnvironment::None,
+        )
+        .await;
+
+        assert!(result.is_err(), "expected error for groups + exclude_extra");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("--exclude-extra"),
+            "error must mention --exclude-extra, got: {err}"
+        );
+    }
+
+    // A named PEP 751 lock file (pylock.<name>.toml, with no canonical pylock.toml) must
+    // satisfy the --group lock-file preflight, since PyLockParser handles named variants.
+    // We pass a non-existent group so the check proceeds offline to group-name validation:
+    // the error must be "group not found", NOT "requires a lock file" — proving the named
+    // pylock was detected rather than falsely rejected.
+    #[tokio::test]
+    async fn test_group_accepts_named_pylock_variant() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        tokio::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"x\"\n\n[dependency-groups]\nprod = [\"httpx>=0.27\"]\n",
+        )
+        .await
+        .unwrap();
+        // Named variant only — no canonical pylock.toml. Content is irrelevant here; the
+        // preflight only checks for the file's presence.
+        tokio::fs::write(
+            temp_dir.path().join("pylock.production.toml"),
+            b"lock-version = \"1.0\"\ncreated-by = \"test\"\n",
+        )
+        .await
+        .unwrap();
+
+        let project_path_str = temp_dir.path().to_str().unwrap();
+        let audit_args =
+            AuditArgs::try_parse_from(["pysentry", "--group", "missing", project_path_str])
+                .unwrap();
+
+        let cache_dir = temp_dir.path().join("cache");
+        let result = super::perform_audit(
+            &audit_args,
+            &cache_dir,
+            crate::config::HttpConfig::default(),
+            3600,
+            &[],
+            &crate::ci::CiEnvironment::None,
+        )
+        .await;
+
+        assert!(result.is_err(), "expected group-not-found error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            !msg.contains("requires a lock file"),
+            "named pylock variant must satisfy the lock-file preflight, got: {msg}"
+        );
+        assert!(
+            msg.contains("not found") && msg.contains("available groups"),
+            "expected group-not-found error, got: {msg}"
+        );
+    }
+
+    // P3: a manifest whose group names collide after PEP 735 normalization is ambiguous.
+    // perform_audit must surface that error from the preflight — offline, before any
+    // scanning. A uv.lock is present so the lock-file gate passes and we reach the
+    // group-name validation where list_group_names rejects the collision.
+    #[tokio::test]
+    async fn test_group_rejects_ambiguous_normalized_groups() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        tokio::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"x\"\n\n[dependency-groups]\ntyping_test = [\"mypy>=1\"]\ntyping-test = [\"pyright>=1\"]\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(temp_dir.path().join("uv.lock"), b"version = 1\n")
+            .await
+            .unwrap();
+
+        let project_path_str = temp_dir.path().to_str().unwrap();
+        let audit_args =
+            AuditArgs::try_parse_from(["pysentry", "--group", "typing-test", project_path_str])
+                .unwrap();
+
+        let cache_dir = temp_dir.path().join("cache");
+        let result = super::perform_audit(
+            &audit_args,
+            &cache_dir,
+            crate::config::HttpConfig::default(),
+            3600,
+            &[],
+            &crate::ci::CiEnvironment::None,
+        )
+        .await;
+
+        assert!(result.is_err(), "ambiguous normalized groups must error");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("normalize to the same"),
+            "preflight must surface the ambiguity error, got: {msg}"
+        );
     }
 }

@@ -146,6 +146,11 @@ impl AuditArgs {
             merged.no_ci_detect = true;
         }
 
+        // CLI groups (non-empty) wins; otherwise fall back to config defaults.groups
+        if merged.groups.is_empty() && !config.defaults.groups.is_empty() {
+            merged.groups = config.defaults.groups.clone();
+        }
+
         merged
     }
 }
@@ -303,5 +308,64 @@ mod tests {
         let config = crate::config::Config::default();
         let merged = args.merge_with_config(&config);
         assert!(merged.no_resolver);
+    }
+
+    #[test]
+    fn test_merge_groups_cli_overrides_config() {
+        let args = parse_audit_args(&["--group", "polars", "."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.groups = vec!["dev".to_string()];
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.groups, vec!["polars"]);
+    }
+
+    #[test]
+    fn test_merge_groups_config_fallback() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.groups = vec!["polars".to_string()];
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.groups, vec!["polars"]);
+    }
+
+    #[test]
+    fn test_merge_groups_both_empty_is_none() {
+        let args = parse_audit_args(&["."]);
+        let config = crate::config::Config::default();
+        let merged = args.merge_with_config(&config);
+        assert!(merged.groups.is_empty());
+    }
+
+    #[test]
+    fn test_group_from_cli_does_not_force_direct_only() {
+        let args = parse_audit_args(&["--group", "polars", "."]);
+        let config = crate::config::Config::default();
+        let merged = args.merge_with_config(&config);
+        assert!(!merged.direct_only);
+    }
+
+    #[test]
+    fn test_group_from_config_does_not_force_direct_only() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.groups = vec!["polars".to_string()];
+        let merged = args.merge_with_config(&config);
+        assert!(!merged.direct_only);
+    }
+
+    #[test]
+    fn test_group_plus_explicit_direct_only_idempotent() {
+        let args = parse_audit_args(&["--group", "polars", "--direct-only", "."]);
+        let config = crate::config::Config::default();
+        let merged = args.merge_with_config(&config);
+        assert!(merged.direct_only);
+    }
+
+    #[test]
+    fn test_empty_groups_does_not_force_direct_only() {
+        let args = parse_audit_args(&["."]);
+        let config = crate::config::Config::default();
+        let merged = args.merge_with_config(&config);
+        assert!(!merged.direct_only);
     }
 }

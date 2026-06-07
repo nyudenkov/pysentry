@@ -20,6 +20,10 @@ use crate::{
 
 /// The OSV API base URL for fetching vulnerability data
 const OSV_API_BASE: &str = "https://api.osv.dev/v1";
+/// Maximum number of vulnerabilities per OSV batch query (OSV API hard limit).
+const OSV_BATCH_SIZE: usize = 1000;
+/// Maximum number of concurrent OSV vulnerability detail requests.
+const OSV_MAX_CONCURRENT_REQUESTS: usize = 10;
 
 /// An OSV (Open Source Vulnerabilities) advisory record
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -783,12 +787,11 @@ impl VulnerabilityProvider for OsvSource {
 
         debug!("Built {} OSV queries total", queries.len());
 
-        // Split into batches of 1000 (OSV API limit)
-        const BATCH_SIZE: usize = 1000;
+        // Split into batches (OSV API limit defined by OSV_BATCH_SIZE).
         let mut all_vulnerability_ids = Vec::new();
         let mut package_vuln_mapping: HashMap<String, HashSet<String>> = HashMap::new();
 
-        let batches: Vec<_> = queries.chunks(BATCH_SIZE).collect();
+        let batches: Vec<_> = queries.chunks(OSV_BATCH_SIZE).collect();
         let total_batches = batches.len();
 
         // Create progress bar for batch queries if enabled
@@ -885,13 +888,12 @@ impl VulnerabilityProvider for OsvSource {
             None
         };
 
-        // Create concurrent futures with rate limiting
-        const MAX_CONCURRENT_REQUESTS: usize = 10; // Limit concurrent requests to avoid overwhelming OSV API
+        // Create concurrent futures with rate limiting (cap defined by OSV_MAX_CONCURRENT_REQUESTS).
         let mut futures = FuturesUnordered::new();
         let mut vuln_iter = all_vulnerability_ids.clone().into_iter();
 
         // Start initial batch of requests
-        for _ in 0..MAX_CONCURRENT_REQUESTS.min(all_vulnerability_ids.len()) {
+        for _ in 0..OSV_MAX_CONCURRENT_REQUESTS.min(all_vulnerability_ids.len()) {
             if let Some(vuln_id) = vuln_iter.next() {
                 futures.push(self.fetch_vulnerability_future(vuln_id));
             }

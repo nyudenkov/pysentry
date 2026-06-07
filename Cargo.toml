@@ -1,6 +1,6 @@
 [package]
 name = "pysentry"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
@@ -55,3 +55,10 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zip = { version = "5.1.1", default-features = false, features = ["deflate"] }
 hotpath = { version = "0.15", optional = true }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[lints.clippy]
+items_after_statements = "warn"

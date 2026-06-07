@@ -138,6 +138,7 @@ quiet = false
 | `format` | string | Output format: `human`, `json`, `sarif`, `markdown` | `human` |
 | `fail_on` | string | Minimum severity to cause non-zero exit | `medium` |
 | `scope` | string | Dependency scope: `all` or `main` | `all` |
+| `groups` | array | Audit only the named dependency group(s) plus main dependencies. Requires a lock file. Conflicts with `scope = "main"` | `[]` |
 | `direct_only` | bool | Only check direct dependencies | `false` |
 | `detailed` | bool | Enable detailed output with full vulnerability descriptions | `false` |
 | `compact` | bool | Compact output: summary + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
@@ -147,6 +148,10 @@ quiet = false
 
 :::note
 `compact` and `detailed` are mutually exclusive. Setting both to `true` in your configuration file will cause a validation error.
+:::
+
+:::note
+`groups` and `scope = "main"` cannot be used together — `groups` already narrows scope, and `scope = "main"` would strip the very groups you selected. `groups` also requires a group-aware lock file (`uv.lock`, `poetry.lock`, or `pylock.toml`, including named `pylock.<name>.toml` variants). See [`--group`](./cli-options.md#dependency-group-filtering---group) for the full rules.
 :::
 
 ### `[sources]`

@@ -53,6 +53,9 @@ pysentry-rs --fail-on critical
 # Extras included by default
 pysentry-rs --sources pypa,osv --direct-only
 
+# Audit only the "dev" dependency group plus main deps (requires a lock file)
+pysentry-rs --group dev
+
 # Ignore specific vulnerabilities
 pysentry-rs --ignore CVE-2023-12345 --ignore GHSA-xxxx-yyyy-zzzz
 
