@@ -462,12 +462,8 @@ impl UvLockParser {
                 .collect(),
         };
         if !main_roots.is_empty() {
-            let dep_graph_set: HashMap<PackageName, HashSet<PackageName>> = dep_graph
-                .iter()
-                .map(|(k, v)| (k.clone(), v.iter().cloned().collect()))
-                .collect();
             let main_reachable =
-                crate::parsers::reachability::reachable_closure(&main_roots, &dep_graph_set);
+                crate::parsers::reachability::reachable_closure(&main_roots, &dep_graph);
             optional_packages.retain(|p| !main_reachable.contains(p));
         }
 
@@ -511,41 +507,24 @@ impl UvLockParser {
 
     /// Build dependency graph from uv.lock file including both main and optional dependencies
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn build_dependency_graph(&self, lock: &Lock) -> HashMap<PackageName, Vec<PackageName>> {
-        let mut graph = HashMap::new();
+    fn build_dependency_graph(&self, lock: &Lock) -> HashMap<PackageName, HashSet<PackageName>> {
+        let mut graph: HashMap<PackageName, HashSet<PackageName>> = HashMap::new();
 
         for package in &lock.packages {
             let package_name = PackageName::new(&package.name);
-            let mut deps = Vec::new();
+            // Merge dependencies across same-name packages with different versions/markers;
+            // the HashSet dedupes overlapping edges automatically.
+            let deps = graph.entry(package_name).or_default();
 
             // Parse main dependencies from the package
             for dep in &package.dependencies {
-                let dep_name = PackageName::new(&dep.name);
-                deps.push(dep_name);
+                deps.insert(PackageName::new(&dep.name));
             }
 
             // Parse optional dependencies from all groups
             for optional_deps in package.optional_dependencies.values() {
                 for dep in optional_deps {
-                    let dep_name = PackageName::new(&dep.name);
-                    deps.push(dep_name);
-                }
-            }
-
-            // Insert all package entries, including same name with different versions/markers
-            // Use entry().or_insert() to avoid overwriting, but this means we keep first occurrence
-            // TODO: Consider if we need to merge dependencies from multiple versions of same package
-            if let std::collections::hash_map::Entry::Vacant(e) = graph.entry(package_name.clone())
-            {
-                e.insert(deps);
-            } else {
-                // Package already exists, merge dependencies
-                if let Some(existing_deps) = graph.get_mut(&package_name) {
-                    for dep in deps {
-                        if !existing_deps.contains(&dep) {
-                            existing_deps.push(dep);
-                        }
-                    }
+                    deps.insert(PackageName::new(&dep.name));
                 }
             }
         }

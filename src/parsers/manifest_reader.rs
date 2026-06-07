@@ -30,116 +30,9 @@ pub async fn read_direct_deps_from_pyproject(
     path: &Path,
     groups: Option<&HashSet<String>>,
 ) -> Result<Option<HashSet<PackageName>>> {
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
-    let doc: toml::Value = toml::from_str(&content)?;
-
-    let mut names = HashSet::new();
-
-    // PEP 621: [project].dependencies — array of PEP 508 strings
-    if let Some(project) = doc.get("project") {
-        if let Some(deps) = project.get("dependencies").and_then(|v| v.as_array()) {
-            for dep in deps {
-                if let Some(dep_str) = dep.as_str() {
-                    if let Some(name) = extract_package_name(dep_str) {
-                        names.insert(name);
-                    }
-                }
-            }
-        }
-
-        // PEP 621: [project.optional-dependencies] — table of string arrays, filtered by groups
-        if let Some(optional) = project
-            .get("optional-dependencies")
-            .and_then(|v| v.as_table())
-        {
-            for (group_name, group_deps) in optional {
-                if !group_passes_filter(groups, group_name) {
-                    continue;
-                }
-                if let Some(dep_arr) = group_deps.as_array() {
-                    for dep in dep_arr {
-                        if let Some(dep_str) = dep.as_str() {
-                            if let Some(name) = extract_package_name(dep_str) {
-                                names.insert(name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // PEP 735: [dependency-groups] — table of mixed arrays (strings + {include-group} tables),
-    // filtered by groups
-    if let Some(dep_groups) = doc.get("dependency-groups") {
-        if let Some(table) = dep_groups.as_table() {
-            let mut resolved = Vec::new();
-            for (group_name, entries) in table {
-                if !group_passes_filter(groups, group_name) {
-                    continue;
-                }
-                if let Some(entry_arr) = entries.as_array() {
-                    let mut current_path = Vec::new();
-                    collect_group_deps(entry_arr, dep_groups, &mut current_path, &mut resolved)?;
-                }
-            }
-            for dep_str in resolved {
-                if let Some(name) = extract_package_name(&dep_str) {
-                    names.insert(name);
-                }
-            }
-        }
-    }
-
-    // Poetry: [tool.poetry.*] and uv: [tool.uv.dev-dependencies]
-    if let Some(tool) = doc.get("tool") {
-        if let Some(poetry) = tool.get("poetry") {
-            if let Some(deps) = poetry.get("dependencies").and_then(|v| v.as_table()) {
-                names.extend(collect_poetry_table_deps(deps, groups.is_some()));
-            }
-            // Legacy Poetry dev-dependencies are an implicit "dev" bucket — treat them
-            // like a named group and exclude under any explicit --group filter.
-            if groups.is_none() {
-                if let Some(dev_deps) = poetry.get("dev-dependencies").and_then(|v| v.as_table()) {
-                    names.extend(collect_poetry_table_deps(dev_deps, false));
-                }
-            }
-            // [tool.poetry.group.*] — filtered by groups
-            if let Some(poetry_groups) = poetry.get("group").and_then(|v| v.as_table()) {
-                for (group_name, group_val) in poetry_groups {
-                    if !group_passes_filter(groups, group_name) {
-                        continue;
-                    }
-                    if let Some(group_deps) =
-                        group_val.get("dependencies").and_then(|v| v.as_table())
-                    {
-                        names.extend(collect_poetry_table_deps(group_deps, false));
-                    }
-                }
-            }
-        }
-        // Legacy [tool.uv.dev-dependencies] is an implicit "dev" bucket — same rule as
-        // [tool.poetry.dev-dependencies]. Excluded under any explicit --group filter.
-        if groups.is_none() {
-            if let Some(uv) = tool.get("uv") {
-                if let Some(dev_deps) = uv.get("dev-dependencies").and_then(|v| v.as_array()) {
-                    for dep in dev_deps {
-                        if let Some(dep_str) = dep.as_str() {
-                            if let Some(name) = extract_package_name(dep_str) {
-                                names.insert(name);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(Some(names))
+    Ok(read_direct_deps_with_extras_from_pyproject(path, groups)
+        .await?
+        .map(|(names, _)| names))
 }
 
 /// Like `read_direct_deps_from_pyproject`, but additionally returns the set of extras
@@ -302,13 +195,13 @@ fn collect_poetry_table_deps_with_extras(
     extras_map: &mut HashMap<PackageName, HashSet<String>>,
 ) {
     for (key, val) in table {
-        if key == "python" {
+        let name = PackageName::new(key);
+        if name.as_str() == "python" {
             continue;
         }
         if exclude_optional && is_optional_poetry_dep(val) {
             continue;
         }
-        let name = PackageName::new(key);
         // Poetry encodes extras as `mypkg = { extras = ["a", "b"] }`. A plain string
         // value is just a version constraint and has no extras to record.
         if let Some(spec) = val.as_table() {
@@ -543,25 +436,6 @@ pub async fn list_group_names(path: &Path) -> Result<HashSet<String>> {
     }
 
     Ok(raw_names.into_iter().collect())
-}
-
-fn collect_poetry_table_deps(
-    table: &toml::map::Map<String, toml::Value>,
-    exclude_optional: bool,
-) -> Vec<PackageName> {
-    table
-        .iter()
-        .filter_map(|(key, val)| {
-            let name = PackageName::new(key);
-            if name.as_str() == "python" {
-                return None;
-            }
-            if exclude_optional && is_optional_poetry_dep(val) {
-                return None;
-            }
-            Some(name)
-        })
-        .collect()
 }
 
 #[cfg(test)]
