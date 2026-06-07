@@ -4,6 +4,71 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.6
+
+### ✨ New Features
+
+#### Audit a Single Dependency Group (`--group`)
+
+The new `--group` flag scopes an audit to specific dependency groups instead of the whole dependency tree. It is supported for uv (`uv.lock`), Poetry (`poetry.lock`), and PEP 751 (`pylock.toml`) projects. PySentry audits your main dependencies (`[project].dependencies` / `[tool.poetry.dependencies]`) plus the selected group(s) and their transitive closure, leaving the rest out:
+
+```bash
+# Audit main dependencies + the "dev" group only
+pysentry-rs --group dev
+
+# Multiple groups (repeatable or comma-separated)
+pysentry-rs --group dev --group docs
+pysentry-rs --group dev,docs
+```
+
+Group names are read from any of the standard locations:
+
+- PEP 735 `[dependency-groups]` (with `include-group` recursion)
+- PEP 621 `[project.optional-dependencies]`
+- Poetry `[tool.poetry.group.*]`
+
+Names are matched using PEP 735 normalization, so `--group typing-test` matches a declared `typing_test`. An unknown name fails with the list of available groups.
+
+**`--group` requires a lock file.** Group filtering relies on a group-aware lock file — `uv.lock`, `poetry.lock`, or `pylock.toml` (including named `pylock.<name>.toml` variants) — alongside your `pyproject.toml`. On a project without one, PySentry fails fast with a clear error instead of silently auditing the full dependency set. (`Pipfile.lock` is not supported — Pipfile has no dependency-group concept.)
+
+`--group` cannot be combined with `--exclude-extra` (or config `scope = "main"`), `--requirements-files`, or `--no-resolver`. It can also be set in config:
+
+```toml
+# .pysentry.toml
+[defaults]
+groups = ["dev", "docs"]
+```
+
+Resolves [#151](https://github.com/nyudenkov/pysentry/issues/151).
+
+### 🐛 Bug Fixes
+
+#### `scope = "main"` / `--exclude-extra` Ignored Dependency Groups (uv.lock)
+
+On a `uv.lock` project, `--exclude-extra` (or config `scope = "main"`) did not exclude PEP 735 `[dependency-groups]` such as `dev` — every group member was still scanned, so a vulnerability in a dev-only tool like `pytest` was reported even though you asked for main dependencies only. uv records group members in `uv.lock` without marking *why* they were pulled in, and PySentry did not yet read those group tables.
+
+PySentry now recognizes uv's group encoding and treats `[dependency-groups]` members as optional, so `--exclude-extra` and `scope = "main"` correctly narrow the audit to your main dependencies and their transitive closure.
+
+Resolves [#158](https://github.com/nyudenkov/pysentry/issues/158).
+
+#### Shared Transitive Dependencies Skipped Under `--exclude-extra` (uv.lock)
+
+When auditing a `uv.lock` project with `--exclude-extra` (or config `scope = "main"`), a transitive dependency shared between your main dependencies and an optional dependency (a `[project.optional-dependencies]` extra) — for example a package like `certifi` reached by both — could be misclassified as optional and excluded from the scan.
+
+:::warning
+Because an excluded package is never checked, any vulnerabilities in it were silently missed while the audit still reported clean. If you rely on `--exclude-extra` or `scope = "main"` with a `uv.lock` project, re-run your audit on this release.
+:::
+
+PySentry now computes the set of packages reachable from `[project].dependencies` and subtracts it from the optional set, so a shared transitive stays in scope as long as a main dependency reaches it. Packages reachable *only* through an extra are still excluded, exactly as before.
+
+This affects `uv.lock` projects with a companion `pyproject.toml`; other lock formats already relied on their native optional markers.
+
+---
+
+**Full Changelog**: https://github.com/nyudenkov/pysentry/compare/v0.4.5...v0.4.6
+
+---
+
 ## v0.4.5
 
 ### ✨ New Features

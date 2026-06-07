@@ -28,6 +28,7 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
 - **Comprehensive Filtering**:
   - Severity levels (low, medium, high, critical, unknown)
   - Dependency scopes (main only vs all dependencies)
+  - Specific dependency groups (PEP 735, optional, and Poetry groups) via `--group`
   - Direct vs. transitive dependencies
 - **CI/CD Ready**: Exit codes, JSON output, and GitHub Actions annotations for pipeline integration
 
