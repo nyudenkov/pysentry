@@ -209,6 +209,22 @@ pub async fn audit(
     }
 }
 
+/// Build the vulnerability matcher configuration for an audit.
+///
+/// The matcher threshold is fixed at `Low` so every matched severity reaches the report.
+/// `fail_on` deliberately never enters here — it selects the exit condition only (see
+/// `evaluate_fail_condition`). Gating the matcher on `fail_on` once silently dropped real
+/// vulnerabilities below the threshold from the report; this separation guards against it.
+fn build_matcher_config(audit_args: &AuditArgs) -> MatcherConfig {
+    MatcherConfig::new(
+        crate::SeverityLevel::Low,
+        audit_args.ignore_ids.to_vec(),
+        audit_args.ignore_while_no_fix.to_vec(),
+        audit_args.direct_only,
+        audit_args.include_withdrawn,
+    )
+}
+
 /// Evaluate whether any match triggers the fail_on exit condition.
 /// Returns (matches, should_fail).
 pub(crate) fn evaluate_fail_condition(
@@ -556,13 +572,7 @@ async fn perform_audit(
         eprintln!("Matching against vulnerability database...");
     }
     let fail_on_level: crate::SeverityLevel = audit_args.fail_on.clone().into();
-    let matcher_config = MatcherConfig::new(
-        fail_on_level.clone(),
-        audit_args.ignore_ids.to_vec(),
-        audit_args.ignore_while_no_fix.to_vec(),
-        audit_args.direct_only,
-        audit_args.include_withdrawn,
-    );
+    let matcher_config = build_matcher_config(audit_args);
     let matcher = VulnerabilityMatcher::new(database, matcher_config);
 
     let matches = matcher.find_vulnerabilities(&dependencies)?;
@@ -778,6 +788,26 @@ mod tests {
         let (display, fail) = evaluate_fail_condition(matches, &crate::SeverityLevel::Medium, true);
         assert!(fail, "Unknown causes failure when fail_on_unknown=true");
         assert_eq!(display.len(), 1, "match is returned");
+    }
+
+    // Regression guard: fail_on must never narrow the matcher. A v0.4.5 refactor wired fail_on
+    // into the matcher's min_severity, so `--fail-on critical` silently dropped every non-critical
+    // vulnerability from the report. The matcher threshold must stay Low for every fail_on level.
+    #[test]
+    fn test_fail_on_never_filters_matcher() {
+        use crate::cli::AuditArgs;
+        use clap::Parser;
+
+        for level in ["low", "medium", "high", "critical"] {
+            let audit_args =
+                AuditArgs::try_parse_from(["pysentry", "--fail-on", level, "."]).unwrap();
+            let config = super::build_matcher_config(&audit_args);
+            assert_eq!(
+                config.min_severity,
+                crate::SeverityLevel::Low,
+                "matcher threshold must stay Low so --fail-on {level} reports all severities"
+            );
+        }
     }
 
     // Simulates the post-merge state produced when the user passes --group on the CLI

@@ -43,6 +43,20 @@ Resolves [#151](https://github.com/nyudenkov/pysentry/issues/151).
 
 ### 🐛 Bug Fixes
 
+#### `fail_on` Silently Hid Vulnerabilities Below Its Threshold
+
+`fail_on` (CLI `--fail-on`, config `defaults.fail_on`) is meant to control **only the exit code** — the severity at which an audit is considered a failure. A regression in v0.4.5 instead wired it into the matcher as a minimum-severity filter, so any vulnerability below the `fail_on` level was dropped from the report entirely rather than just being excluded from the pass/fail decision.
+
+The effect scaled with the threshold. With the default `fail_on = "medium"`, low-severity findings disappeared from the report. With `fail_on = "critical"`, a project could contain many real high- and medium-severity vulnerabilities and still print `✓ No vulnerabilities found!` with a clean exit. On one real `uv.lock` project (90 packages), v0.4.5 reported **0** vulnerabilities under `fail_on = "critical"` while the project actually had **31**, several of them high severity.
+
+PySentry now reports every matched vulnerability regardless of `fail_on`, and uses `fail_on` strictly to decide the exit code.
+
+:::warning
+If you run PySentry with `fail_on` set above `low` (via `--fail-on` or config), affected vulnerabilities were missing from your reports while the audit may have exited successfully. Re-run your audit on this release.
+:::
+
+Regression introduced in v0.4.5; the original decoupling shipped in v0.4.3 ([#11](https://github.com/nyudenkov/pysentry/issues/11)).
+
 #### `scope = "main"` / `--exclude-extra` Ignored Dependency Groups (uv.lock)
 
 On a `uv.lock` project, `--exclude-extra` (or config `scope = "main"`) did not exclude PEP 735 `[dependency-groups]` such as `dev` — every group member was still scanned, so a vulnerability in a dev-only tool like `pytest` was reported even though you asked for main dependencies only. uv records group members in `uv.lock` without marking *why* they were pulled in, and PySentry did not yet read those group tables.
