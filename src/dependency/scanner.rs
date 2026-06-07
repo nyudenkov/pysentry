@@ -3,6 +3,7 @@
 pub use crate::parsers::DependencyStats;
 use crate::parsers::{ParsedDependency, ParserRegistry, SkippedPackage};
 use crate::Result;
+use std::collections::HashSet;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -12,6 +13,7 @@ pub struct DependencyScanner {
     include_dev: bool,
     include_optional: bool,
     direct_only: bool,
+    has_groups: bool,
 }
 
 impl DependencyScanner {
@@ -21,12 +23,15 @@ impl DependencyScanner {
         include_optional: bool,
         direct_only: bool,
         resolver: Option<crate::types::ResolverType>,
+        groups: Option<HashSet<String>>,
     ) -> Self {
+        let has_groups = groups.is_some();
         Self {
-            parser_registry: ParserRegistry::new(resolver),
+            parser_registry: ParserRegistry::new(resolver, groups),
             include_dev,
             include_optional,
             direct_only,
+            has_groups,
         }
     }
 
@@ -36,6 +41,35 @@ impl DependencyScanner {
         &self,
         project_dir: &Path,
     ) -> Result<(Vec<ScannedDependency>, Vec<SkippedPackage>, String)> {
+        // The CLI rejects `--group` + `--exclude-extra` in perform_audit, but library callers
+        // reach this constructor directly. Enforce the same invariant here: group filtering
+        // already narrows scope via the reachability closure, and dropping optional
+        // dependencies on top would strip the very groups being selected, silently producing
+        // a narrower result than intended.
+        if self.has_groups && !self.include_optional {
+            return Err(crate::AuditError::other(
+                "group filtering cannot be combined with include_optional = false: the group \
+                 reachability filter already narrows scope, and excluding optional dependencies \
+                 would strip the selected groups. Enable include_optional or drop the groups.",
+            ));
+        }
+
+        // Only the group-aware lock parsers (uv.lock, poetry.lock, pylock.toml) apply the group
+        // reachability filter. Without one of them the registry falls through to a non-group-aware
+        // parser (pyproject.toml, Pipfile, requirements.txt) that would silently scan the full
+        // dependency set, ignoring `groups` entirely. The CLI rejects this in perform_audit; mirror
+        // it here so library callers get the same fail-fast behavior instead of a wrong result.
+        // Only the lock-file presence check is mirrored — that is what prevents the unfiltered scan.
+        // Group-name existence validation (perform_audit's list_group_names check) stays CLI-only by
+        // design: an unknown group yields a narrow/empty result, not a silently-broadened one.
+        if self.has_groups && !crate::parsers::has_group_aware_lock(project_dir) {
+            return Err(crate::AuditError::other(
+                "group filtering requires a lock file (uv.lock, poetry.lock, or pylock.toml) in the \
+                 project directory; without one, the selected parser cannot apply the group filter \
+                 and would scan the full dependency set. Generate a lock file or drop the groups.",
+            ));
+        }
+
         debug!("Scanning dependencies in: {}", project_dir.display());
 
         // Use parser registry to automatically select and parse with the best parser
@@ -182,7 +216,7 @@ impl From<DependencySource> for crate::parsers::DependencySource {
 
 impl Default for DependencyScanner {
     fn default() -> Self {
-        Self::new(false, false, false, None)
+        Self::new(false, false, false, None, None)
     }
 }
 
@@ -193,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_dependency_scanner_creation() {
-        let scanner = DependencyScanner::new(true, true, false, None);
+        let scanner = DependencyScanner::new(true, true, false, None, None);
         assert!(scanner.include_dev);
         assert!(scanner.include_optional);
         assert!(!scanner.direct_only);
@@ -315,6 +349,56 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("pip freeze") || w.contains("editable")),
             "Expected guidance about editable packages, got: {warnings:?}"
+        );
+    }
+
+    // Library callers bypass the CLI's perform_audit guard, so scan_project must reject the
+    // groups + include_optional=false combo itself. The guard fires before any filesystem
+    // access, so an empty temp dir is enough to exercise it.
+    #[tokio::test]
+    async fn test_scan_project_rejects_groups_without_optional() {
+        let groups: HashSet<String> = ["dev".to_string()].into();
+        let scanner = DependencyScanner::new(false, false, false, None, Some(groups));
+        let temp_dir = tempfile::TempDir::new().unwrap();
+
+        let result = scanner.scan_project(temp_dir.path()).await;
+
+        assert!(
+            result.is_err(),
+            "groups + include_optional=false must be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("include_optional"),
+            "error must explain the incompatible flags, got: {msg}"
+        );
+    }
+
+    // groups + include_optional=true clears the first guard, but a project with no group-aware
+    // lock file would fall through to a non-group-aware parser that silently ignores `groups`.
+    // scan_project must reject this up-front, mirroring the CLI's perform_audit preflight, so a
+    // library caller gets a clear error instead of an unfiltered scan.
+    #[tokio::test]
+    async fn test_scan_project_rejects_groups_without_lock_file() {
+        let groups: HashSet<String> = ["dev".to_string()].into();
+        let scanner = DependencyScanner::new(false, true, false, None, Some(groups));
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"x\"\n\n[dependency-groups]\ndev = [\"httpx>=0.27\"]\n",
+        )
+        .unwrap();
+
+        let result = scanner.scan_project(temp_dir.path()).await;
+
+        assert!(
+            result.is_err(),
+            "groups without a group-aware lock file must be rejected"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("lock file"),
+            "error must point at the missing lock file, got: {msg}"
         );
     }
 }

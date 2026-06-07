@@ -271,6 +271,16 @@ pub struct AuditArgs {
     /// Unpinned packages are skipped. Implies --direct-only.
     #[arg(long)]
     pub no_resolver: bool,
+
+    /// Include only the named dependency group(s). Repeatable. Conflicts with --exclude-extra.
+    #[arg(
+        long = "group",
+        value_name = "NAME",
+        action = clap::ArgAction::Append,
+        value_delimiter = ',',
+        conflicts_with = "exclude_extra"
+    )]
+    pub groups: Vec<String>,
 }
 
 impl AuditArgs {
@@ -335,11 +345,13 @@ impl AuditArgs {
         }
     }
 
-    pub fn scope_description(&self) -> &'static str {
-        if self.include_all_dependencies() {
-            "all (main + dev,optional,prod,etc)"
+    pub fn scope_description(&self) -> String {
+        if !self.groups.is_empty() {
+            format!("main + groups [{}]", self.groups.join(", "))
+        } else if self.include_all_dependencies() {
+            "all (main + dev,optional,prod,etc)".to_string()
         } else {
-            "main only (extras excluded)"
+            "main only (extras excluded)".to_string()
         }
     }
 
@@ -612,5 +624,35 @@ mod tests {
         let args = parse_audit_args(&["--no-resolver", "--requirements-files", "req.txt", "."]);
         assert!(!args.requirements_files.is_empty());
         assert!(args.no_resolver);
+    }
+
+    #[test]
+    fn test_group_flag_empty() {
+        let args = parse_audit_args(&["."]);
+        assert!(args.groups.is_empty());
+    }
+
+    #[test]
+    fn test_group_flag_single() {
+        let args = parse_audit_args(&["--group", "polars", "."]);
+        assert_eq!(args.groups, vec!["polars"]);
+    }
+
+    #[test]
+    fn test_group_flag_repeat() {
+        let args = parse_audit_args(&["--group", "polars", "--group", "extras", "."]);
+        assert_eq!(args.groups, vec!["polars", "extras"]);
+    }
+
+    #[test]
+    fn test_group_flag_comma_separated() {
+        let args = parse_audit_args(&["--group", "polars,extras", "."]);
+        assert_eq!(args.groups, vec!["polars", "extras"]);
+    }
+
+    #[test]
+    fn test_group_conflicts_with_exclude_extra() {
+        let result = Cli::try_parse_from(["pysentry", "--group", "polars", "--exclude-extra", "."]);
+        assert!(result.is_err());
     }
 }

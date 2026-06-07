@@ -121,7 +121,9 @@ struct PipfileLockPackage {
     editable: bool,
 }
 
-pub struct PipfileLockParser;
+pub struct PipfileLockParser {
+    groups: Option<HashSet<String>>,
+}
 
 impl Default for PipfileLockParser {
     fn default() -> Self {
@@ -131,7 +133,12 @@ impl Default for PipfileLockParser {
 
 impl PipfileLockParser {
     pub fn new() -> Self {
-        Self
+        Self { groups: None }
+    }
+
+    pub(crate) fn with_groups(mut self, groups: Option<HashSet<String>>) -> Self {
+        self.groups = groups;
+        self
     }
 }
 
@@ -159,6 +166,14 @@ impl ProjectParser for PipfileLockParser {
         #[cfg(feature = "hotpath")]
         let _hp_wall =
             hotpath::MeasurementGuardSync::new("pipfile_lock::parse_dependencies", false, false);
+        if self.groups.is_some() {
+            return Err(AuditError::DependencyRead(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--group is not supported for Pipfile.lock: Pipfile format has no \
+                 named-group concept (only [packages] / [dev-packages]). \
+                 Remove --group, or use pyproject.toml with [dependency-groups].",
+            ))));
+        }
         let lock_path = project_path.join("Pipfile.lock");
         debug!("Reading Pipfile lock file: {}", lock_path.display());
 
@@ -425,6 +440,29 @@ django = ">=4.2"
         assert!(
             deps.iter().all(|d| d.is_direct),
             "all packages should be marked direct when no Pipfile companion"
+        );
+    }
+
+    // Pipfile.lock has no named-group concept. --group must be rejected immediately
+    // with a message that explains the limitation rather than silently returning
+    // unfiltered output (old behaviour: groups field was dead code).
+    #[tokio::test]
+    async fn test_pipfile_lock_rejects_group_flag() {
+        let (_temp_dir, project_path) = create_test_pipfile_lock(LOCK_CONTENT).await;
+
+        let parser = PipfileLockParser::new().with_groups(Some(["dev".to_string()].into()));
+        let result = parser
+            .parse_dependencies(&project_path, false, false, false)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "expected error when groups set for Pipfile.lock"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("no named-group concept"),
+            "error must explain Pipfile.lock limitation, got: {msg}"
         );
     }
 }

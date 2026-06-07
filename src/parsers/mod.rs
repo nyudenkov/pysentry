@@ -3,6 +3,7 @@
 use crate::types::{PackageName, Version};
 use crate::{AuditError, Result};
 use async_trait::async_trait;
+use std::collections::HashSet;
 use std::path::Path;
 
 pub mod lock;
@@ -12,6 +13,7 @@ pub mod pipfile_lock;
 pub mod poetry_lock;
 pub mod pylock;
 pub mod pyproject;
+pub mod reachability;
 pub mod requirements;
 
 #[derive(Debug, Clone)]
@@ -129,6 +131,20 @@ pub trait ProjectParser: Send + Sync {
     }
 }
 
+/// Returns true if `project_path` contains a lock file whose parser applies the group
+/// reachability filter: uv.lock, poetry.lock, or any PEP 751 pylock variant. Pipfile.lock is
+/// intentionally excluded — Pipfile has no dependency-group concept and PipfileLockParser
+/// rejects groups outright. Without one of these, the registry would fall through to a
+/// non-group-aware parser (pyproject.toml, Pipfile, requirements.txt) that silently scans the
+/// full dependency set. Both the CLI preflight (`perform_audit`) and the library path
+/// (`DependencyScanner::scan_project`) gate group filtering on this check so they cannot drift.
+pub fn has_group_aware_lock(project_path: &Path) -> bool {
+    let has_fixed_lock = ["uv.lock", "poetry.lock"]
+        .iter()
+        .any(|f| project_path.join(f).exists());
+    has_fixed_lock || pylock::PyLockParser::new().can_parse(project_path)
+}
+
 /// Registry for managing multiple project parsers
 pub struct ParserRegistry {
     parsers: Vec<Box<dyn ProjectParser>>,
@@ -136,14 +152,22 @@ pub struct ParserRegistry {
 
 impl ParserRegistry {
     /// Create a new parser registry
-    pub fn new(resolver: Option<crate::types::ResolverType>) -> Self {
+    pub fn new(
+        resolver: Option<crate::types::ResolverType>,
+        groups: Option<HashSet<String>>,
+    ) -> Self {
+        let uv_parser = lock::UvLockParser::new().with_groups(groups.clone());
+        let poetry_parser = poetry_lock::PoetryLockParser::new().with_groups(groups.clone());
+        let pipfile_lock_parser =
+            pipfile_lock::PipfileLockParser::new().with_groups(groups.clone());
+        let pylock_parser = pylock::PyLockParser::new().with_groups(groups);
         match resolver {
             Some(resolver_type) => {
                 let parsers: Vec<Box<dyn ProjectParser>> = vec![
-                    Box::new(lock::UvLockParser::new()),
-                    Box::new(poetry_lock::PoetryLockParser::new()),
-                    Box::new(pipfile_lock::PipfileLockParser::new()),
-                    Box::new(pylock::PyLockParser::new()),
+                    Box::new(uv_parser),
+                    Box::new(poetry_parser),
+                    Box::new(pipfile_lock_parser),
+                    Box::new(pylock_parser),
                     Box::new(pyproject::PyProjectParser::new(Some(resolver_type))),
                     Box::new(pipfile::PipfileParser::new(Some(resolver_type))),
                     Box::new(requirements::RequirementsParser::new(Some(resolver_type))),
@@ -152,10 +176,10 @@ impl ParserRegistry {
             }
             None => {
                 let parsers: Vec<Box<dyn ProjectParser>> = vec![
-                    Box::new(lock::UvLockParser::new()),
-                    Box::new(poetry_lock::PoetryLockParser::new()),
-                    Box::new(pipfile_lock::PipfileLockParser::new()),
-                    Box::new(pylock::PyLockParser::new()),
+                    Box::new(uv_parser),
+                    Box::new(poetry_parser),
+                    Box::new(pipfile_lock_parser),
+                    Box::new(pylock_parser),
                     Box::new(pyproject::PyProjectParser::new(None)),
                     Box::new(pipfile::PipfileParser::new(None)),
                     Box::new(requirements::RequirementsParser::new(None)),
@@ -248,7 +272,7 @@ impl ParserRegistry {
 
 impl Default for ParserRegistry {
     fn default() -> Self {
-        Self::new(None)
+        Self::new(None, None)
     }
 }
 

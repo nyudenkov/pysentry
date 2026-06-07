@@ -74,6 +74,9 @@ pub struct DefaultConfig {
 
     #[serde(default)]
     pub no_ci_detect: bool,
+
+    #[serde(default)]
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -648,6 +651,7 @@ impl Default for DefaultConfig {
             display: default_display(),
             include_withdrawn: false,
             no_ci_detect: false,
+            groups: Vec::new(),
         }
     }
 }
@@ -1264,5 +1268,21 @@ format = "json"
         config.defaults.display = "invalid".to_string();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("Invalid display mode"));
+    }
+
+    #[test]
+    fn test_config_parses_groups_field() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".pysentry.toml");
+
+        let content = r#"
+version = 1
+
+[defaults]
+groups = ["polars"]
+"#;
+        fs::write(&config_path, content).unwrap();
+        let loader = ConfigLoader::load_from_file(&config_path).unwrap();
+        assert_eq!(loader.config.defaults.groups, vec!["polars"]);
     }
 }
