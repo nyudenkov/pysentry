@@ -578,6 +578,10 @@ async fn perform_audit(
     let matches = matcher.find_vulnerabilities(&dependencies)?;
     let filtered_matches = matcher.filter_matches(matches);
 
+    for ignore_id in matcher.unmatched_ignore_ids() {
+        tracing::warn!("ignore ID '{}' did not match any finding", ignore_id);
+    }
+
     let (display_matches, fail_vulns) = evaluate_fail_condition(
         filtered_matches,
         &fail_on_level,
