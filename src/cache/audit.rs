@@ -10,6 +10,13 @@ use std::collections::HashMap;
 use std::hash::Hasher;
 use std::time::Duration;
 
+/// Format version embedded in resolution cache filenames. The cached payload is a
+/// `ResolutionCacheEntry` serialized as JSON; releases with an incompatible shape would
+/// otherwise read each other's files as a silent miss. Versioning the name gives each
+/// format its own file so old and new binaries never collide on a shared cache. Bump this
+/// on any change to `ResolutionCacheEntry`'s serialized form.
+const RESOLUTION_CACHE_FORMAT_VERSION: &str = "v1";
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DatabaseMetadata {
     pub last_updated: DateTime<Utc>,
@@ -110,7 +117,7 @@ impl AuditCache {
     pub fn resolution_entry(&self, cache_key: &str) -> CacheEntry {
         self.cache.entry(
             CacheBucket::DependencyResolution,
-            &format!("{cache_key}.resolution"),
+            &format!("{cache_key}.{RESOLUTION_CACHE_FORMAT_VERSION}.resolution"),
         )
     }
 
@@ -405,6 +412,50 @@ mod tests {
             &environment_markers,
         );
         assert_ne!(key1, key3);
+    }
+
+    #[tokio::test]
+    async fn test_resolution_cache_ignores_unversioned_entry() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+
+        let cache_key = "uv-py3.12-linux-x86_64-deadbeef";
+
+        // A pre-versioning release wrote resolution files at "{key}.resolution.cache". Recreate
+        // that old-format file directly and confirm the versioned reader never picks it up.
+        let old_entry = cache.cache.entry(
+            CacheBucket::DependencyResolution,
+            &format!("{cache_key}.resolution"),
+        );
+        old_entry
+            .write(b"{ legacy resolution payload that no longer deserializes }")
+            .await
+            .unwrap();
+        assert!(old_entry.path().exists());
+
+        assert!(cache
+            .read_resolution_cache(cache_key)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(cache.should_refresh_resolution(cache_key, 24).unwrap());
+        assert_ne!(cache.resolution_entry(cache_key).path(), old_entry.path());
+    }
+
+    #[tokio::test]
+    async fn test_database_entry_versioned_key_ignores_old_name() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+
+        // Releases <= 0.4.4 stored a raw ZIP under "pypa-database.cache". Writing that old-format
+        // file must stay invisible to the versioned "pypa-v2" entry the current code reads.
+        let old_entry = cache.database_entry("pypa");
+        old_entry.write(b"PK\x03\x04 old zip bytes").await.unwrap();
+        assert!(old_entry.path().exists());
+
+        let versioned_entry = cache.database_entry("pypa-v2");
+        assert_ne!(versioned_entry.path(), old_entry.path());
+        assert!(!versioned_entry.path().exists());
     }
 
     #[tokio::test]

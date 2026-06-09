@@ -83,6 +83,7 @@ These override defaults. Violations cause production bugs, panics, or security i
 - Write failures only logged at WARN level, NEVER retried - retry storms corrupt the cache
 - Resolution cache: 24h TTL, content-based keys (requirements + resolver + Python version)
 - Vuln DB cache: 24h TTL
+- **Versioned cache keys:** any change to a cached payload's serialization format MUST bump that cache's version marker so old and new binaries never read each other's files. Vuln DB: the source string passed to `database_entry` (e.g. `pypa-v2`). Resolution: `RESOLUTION_CACHE_FORMAT_VERSION` in `src/cache/audit.rs`. The PyPA case is why this rule exists — releases ≤0.4.4 read JSON as a ZIP and panicked in `ZipArchive::new`.
 
 **Cache Locations:** `~/.cache/pysentry/vulnerability-db/`, `~/.cache/pysentry/dependency-resolution/`
 
