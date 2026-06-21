@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 use super::storage::{Cache, CacheBucket, CacheEntry, Freshness};
-use crate::types::{ResolutionCacheEntry, ResolverType};
+use crate::types::{PackageName, ResolutionCacheEntry, ResolverType};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hasher;
+use std::str::FromStr;
 use std::time::Duration;
 
 /// Format version embedded in resolution cache filenames. The cached payload is a
@@ -260,10 +261,10 @@ pub struct ResolutionCacheStats {
     pub pip_tools_entries: usize,
 }
 
-/// Normalize package name per PEP 503 for consistent cache keys
-/// https://peps.python.org/pep-0503/#normalized-names
 fn normalize_package_name(name: &str) -> String {
-    name.to_lowercase().replace(['-', '.', '_'], "-")
+    PackageName::from_str(name)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| name.to_lowercase())
 }
 
 impl AuditCache {
@@ -365,6 +366,9 @@ impl Clone for AuditCache {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::types::{ResolvedDependency, ResolverType};
     use std::collections::HashMap;
@@ -447,14 +451,20 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let cache = AuditCache::new(temp_dir.path().to_path_buf());
 
-        // Releases <= 0.4.4 stored a raw ZIP under "pypa-database.cache". Writing that old-format
-        // file must stay invisible to the versioned "pypa-v2" entry the current code reads.
-        let old_entry = cache.database_entry("pypa");
-        old_entry.write(b"PK\x03\x04 old zip bytes").await.unwrap();
-        assert!(old_entry.path().exists());
+        // Releases <= 0.4.4 stored a raw ZIP under "pypa-database.cache"; v0.4.5 moved to
+        // JSON under "pypa-v2". Both must stay invisible to the current "pypa-v3" entry
+        // (bumped when PackageName gained full PEP 503 normalization). Writing either old
+        // file must not be read back through the current versioned key.
+        let zip_entry = cache.database_entry("pypa");
+        zip_entry.write(b"PK\x03\x04 old zip bytes").await.unwrap();
+        let v2_entry = cache.database_entry("pypa-v2");
+        v2_entry.write(b"{\"old\": \"json\"}").await.unwrap();
+        assert!(zip_entry.path().exists());
+        assert!(v2_entry.path().exists());
 
-        let versioned_entry = cache.database_entry("pypa-v2");
-        assert_ne!(versioned_entry.path(), old_entry.path());
+        let versioned_entry = cache.database_entry("pypa-v3");
+        assert_ne!(versioned_entry.path(), zip_entry.path());
+        assert_ne!(versioned_entry.path(), v2_entry.path());
         assert!(!versioned_entry.path().exists());
     }
 
