@@ -1,0 +1,63 @@
+# Wiring-coverage fixture: every config field set to a NON-DEFAULT value.
+#
+# This is intentionally NOT a semantically valid runtime config (e.g. `scope =
+# "main"` together with `groups` would be rejected by perform_audit's preflight).
+# Its only job is to prove each field is read and reaches effective settings;
+# the wiring test merges it but never runs an audit, so cross-field runtime
+# guards do not apply here.
+#
+# When you add a config field, set it here to a non-default value and assert it
+# in tests/config_wiring.rs. See CLAUDE.md "Cross-File Invariants" (the
+# config-file / CLI dual-path row).
+version = 1
+
+[defaults]
+format = "json"             # default: human
+fail_on = "critical"        # default: medium
+scope = "main"              # default: all
+direct_only = true          # default: false
+detailed = true             # default: false (compact stays false — mutually exclusive)
+display = "text"            # default: table
+include_withdrawn = true    # default: false
+no_ci_detect = true         # default: false
+groups = ["polars"]         # default: []
+
+[sources]
+enabled = ["osv"]           # default: ["pypa", "pypi", "osv"]
+
+[resolver]
+type = "pip-tools"          # default: uv
+no_resolver = true          # default: false
+
+[cache]
+enabled = false             # default: true
+directory = "/tmp/pysentry-wiring-fixture-cache"  # default: none
+resolution_ttl = 99         # default: 24
+vulnerability_ttl = 99      # default: 48
+
+[ignore]
+ids = ["PYSEC-2024-0001"]               # default: []
+while_no_fix = ["GHSA-aaaa-bbbb-cccc"]  # default: []
+
+[http]
+timeout = 99                # default: 120
+connect_timeout = 15        # default: 30
+max_retries = 7             # default: 3
+retry_initial_backoff = 2   # default: 1
+retry_max_backoff = 99      # default: 60
+show_progress = true        # default: false
+
+[maintenance]
+enabled = false             # default: true
+forbid_archived = true      # default: false
+forbid_deprecated = true    # default: false
+forbid_quarantined = true   # default: true (merge only propagates `true`, see test note)
+forbid_unmaintained = true  # default: false
+check_direct_only = true    # default: false
+cache_ttl = 99              # default: 1
+
+[notifications]
+enabled = false             # default: true
+
+[output]
+quiet = true                # default: false

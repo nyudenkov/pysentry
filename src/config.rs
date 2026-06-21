@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_version")]
     pub version: u32,
@@ -47,6 +48,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DefaultConfig {
     #[serde(default = "default_format")]
     pub format: String,
@@ -80,12 +82,14 @@ pub struct DefaultConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourcesConfig {
     #[serde(default = "default_sources")]
     pub enabled: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResolverConfig {
     #[serde(default = "default_resolver_type", rename = "type")]
     pub resolver_type: String,
@@ -95,6 +99,7 @@ pub struct ResolverConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CacheConfig {
     #[serde(default = "default_cache_enabled")]
     pub enabled: bool,
@@ -109,6 +114,7 @@ pub struct CacheConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct IgnoreConfig {
     #[serde(default)]
     pub ids: Vec<String>,
@@ -118,6 +124,7 @@ pub struct IgnoreConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpConfig {
     #[serde(default = "default_http_timeout")]
     pub timeout: u64,
@@ -145,6 +152,7 @@ pub struct HttpConfig {
 /// - `deprecated`: Package obsolete, possibly superseded by another
 /// - `quarantined`: Package identified as malware or compromised
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaintenanceConfig {
     /// Enable PEP 792 project status checks (default: true)
     #[serde(default = "default_maintenance_enabled")]
@@ -177,6 +185,7 @@ pub struct MaintenanceConfig {
 
 /// Remote notifications configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NotificationsConfig {
     /// Enable remote notifications (default: true)
     #[serde(default = "default_notifications_enabled")]
@@ -196,6 +205,7 @@ fn default_notifications_enabled() -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct OutputConfig {
     #[serde(default)]
     pub quiet: bool,
@@ -392,7 +402,11 @@ impl ConfigLoader {
                     break;
                 }
 
-                dir = dir.parent().unwrap();
+                // invariant: the `dir.parent().is_none()` check above breaks the loop
+                // before we reach here, so parent() is always Some at this point.
+                #[allow(clippy::unwrap_used)]
+                let parent = dir.parent().unwrap();
+                dir = parent;
             }
         }
 
