@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
 
+pub mod graph;
 pub mod lock;
 pub mod manifest_reader;
 pub mod pep723;

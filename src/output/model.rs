@@ -9,6 +9,30 @@ use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
+/// Render the " (via a, b, +N more)" suffix naming the top-level deps a transitive finding
+/// traces back to, or "" when none are known. Up to three roots are listed by name; any
+/// remainder collapses to a "+N more" count so the names stay informative without the line
+/// growing unbounded. In the grid table the cell is additionally truncated to fit the
+/// terminal width, so this can afford to be verbose.
+pub fn via_suffix(roots: Option<&[crate::types::PackageName]>) -> String {
+    const MAX_NAMED: usize = 3;
+    match roots {
+        Some(roots) if !roots.is_empty() => {
+            let names = roots
+                .iter()
+                .take(MAX_NAMED)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            match roots.len().saturating_sub(MAX_NAMED) {
+                0 => format!(" (via {names})"),
+                extra => format!(" (via {names}, +{extra} more)"),
+            }
+        }
+        _ => String::new(),
+    }
+}
+
 /// Controls how much detail is included in the human-readable report
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailLevel {
@@ -46,6 +70,10 @@ pub struct AuditReport {
     pub warnings: Vec<String>,
     /// PEP 792 maintenance issues (archived, deprecated, quarantined packages)
     pub maintenance_issues: Vec<MaintenanceIssue>,
+    /// Top-level deps each transitive package traces back to (child → direct deps), for
+    /// "transitive (via X)" display. Empty unless scanned from a lock file that records
+    /// dependency edges (uv.lock, poetry.lock, pylock.toml).
+    pub transitive_roots: HashMap<crate::types::PackageName, Vec<crate::types::PackageName>>,
     cached_summary: OnceLock<AuditSummary>,
 }
 
@@ -59,6 +87,7 @@ impl Clone for AuditReport {
             fix_analysis: self.fix_analysis.clone(),
             warnings: self.warnings.clone(),
             maintenance_issues: self.maintenance_issues.clone(),
+            transitive_roots: self.transitive_roots.clone(),
             cached_summary: OnceLock::new(),
         }
     }
@@ -82,8 +111,27 @@ impl AuditReport {
             fix_analysis,
             warnings,
             maintenance_issues,
+            transitive_roots: HashMap::new(),
             cached_summary: OnceLock::new(),
         }
+    }
+
+    /// Attach the child → top-level-deps map used for "transitive (via X)" display.
+    #[must_use]
+    pub fn with_transitive_roots(
+        mut self,
+        transitive_roots: HashMap<crate::types::PackageName, Vec<crate::types::PackageName>>,
+    ) -> Self {
+        self.transitive_roots = transitive_roots;
+        self
+    }
+
+    /// Top-level deps `package` traces back to, if known (only populated for lock-file scans).
+    pub fn roots_of(
+        &self,
+        package: &crate::types::PackageName,
+    ) -> Option<&[crate::types::PackageName]> {
+        self.transitive_roots.get(package).map(Vec::as_slice)
     }
 
     /// Check if there are any maintenance issues
@@ -143,6 +191,42 @@ pub struct AuditSummary {
 impl AuditSummary {
     pub fn counts_by_level(&self) -> &BTreeMap<Severity, usize> {
         &self.severity_counts
+    }
+}
+
+#[cfg(test)]
+mod via_suffix_tests {
+    use super::via_suffix;
+    use crate::types::PackageName;
+
+    fn names(n: usize) -> Vec<PackageName> {
+        (0..n)
+            .map(|i| PackageName::new(&format!("dep{i}")))
+            .collect()
+    }
+
+    #[test]
+    fn lists_up_to_three_names() {
+        assert_eq!(via_suffix(Some(&names(1))), " (via dep0)");
+        assert_eq!(via_suffix(Some(&names(3))), " (via dep0, dep1, dep2)");
+    }
+
+    #[test]
+    fn names_first_three_then_counts_the_rest() {
+        assert_eq!(
+            via_suffix(Some(&names(4))),
+            " (via dep0, dep1, dep2, +1 more)"
+        );
+        assert_eq!(
+            via_suffix(Some(&names(14))),
+            " (via dep0, dep1, dep2, +11 more)"
+        );
+    }
+
+    #[test]
+    fn empty_or_none_is_blank() {
+        assert_eq!(via_suffix(None), "");
+        assert_eq!(via_suffix(Some(&[])), "");
     }
 }
 

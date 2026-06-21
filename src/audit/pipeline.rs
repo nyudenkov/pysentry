@@ -621,6 +621,14 @@ async fn perform_audit(
     let database_stats = matcher.get_database_stats();
     let fix_analysis = matcher.analyze_fixes(&display_matches);
 
+    let direct_deps = crate::dependency::scanner::ScannedDependency::direct_names(&dependencies);
+    let transitive_roots = crate::parsers::graph::build_transitive_roots(
+        &audit_args.path,
+        &detected_parser_name,
+        &direct_deps,
+    )
+    .await;
+
     let report = AuditReport::new(
         dependency_stats,
         database_stats,
@@ -628,7 +636,8 @@ async fn perform_audit(
         fix_analysis,
         warnings,
         maintenance_issues,
-    );
+    )
+    .with_transitive_roots(transitive_roots);
 
     let summary = report.summary();
     let maint_summary = report.maintenance_summary();

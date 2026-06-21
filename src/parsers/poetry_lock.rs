@@ -135,6 +135,31 @@ struct PoetrySource {
     resolved_reference: Option<String>,
 }
 
+/// Best-effort parent → children edge map from a poetry.lock, for transitive-root
+/// attribution (see `parsers::graph`). poetry.lock records each package's edges as the
+/// keys of its `[package.dependencies]` table. A missing or unparseable file yields an
+/// empty map, never an error.
+pub async fn poetry_lock_edges(project_dir: &Path) -> HashMap<PackageName, HashSet<PackageName>> {
+    let Ok(content) = tokio::fs::read_to_string(project_dir.join("poetry.lock")).await else {
+        return HashMap::new();
+    };
+    let Ok(lock) = PoetryLockParser::deserialize_poetry_lock(&content) else {
+        return HashMap::new();
+    };
+
+    lock.packages
+        .iter()
+        .map(|pkg| {
+            let children = pkg
+                .dependencies
+                .keys()
+                .map(|name| PackageName::new(name))
+                .collect();
+            (PackageName::new(&pkg.name), children)
+        })
+        .collect()
+}
+
 /// Poetry lock file parser
 pub struct PoetryLockParser {
     groups: Option<HashSet<String>>,
@@ -429,6 +454,40 @@ mod tests {
         let project_path = temp_dir.path().to_path_buf();
         tokio::fs::write(&lock_path, content).await.unwrap();
         (temp_dir, project_path)
+    }
+
+    #[tokio::test]
+    async fn test_poetry_lock_edges_from_dependency_table_keys() {
+        let lock_content = r#"
+[[package]]
+name = "django"
+version = "4.2.0"
+optional = false
+groups = ["main"]
+files = []
+
+[package.dependencies]
+certifi = ">=14.5.14"
+sqlparse = ">=0.3.1"
+
+[[package]]
+name = "certifi"
+version = "2024.1.1"
+optional = false
+groups = ["main"]
+files = []
+"#;
+        let (_temp_dir, project_path) = create_test_poetry_lock(lock_content).await;
+        let edges = poetry_lock_edges(&project_path).await;
+
+        assert_eq!(
+            edges.get(&PackageName::new("django")),
+            Some(&HashSet::from([
+                PackageName::new("certifi"),
+                PackageName::new("sqlparse")
+            ])),
+            "edges come from the [package.dependencies] table keys"
+        );
     }
 
     #[tokio::test]

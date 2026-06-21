@@ -143,6 +143,12 @@ impl AuditEngine {
         let fix_analysis = matcher.analyze_fixes(&filtered_matches);
 
         // 5. Create report
+        let direct_deps =
+            crate::dependency::scanner::ScannedDependency::direct_names(&dependencies);
+        let transitive_roots =
+            crate::parsers::graph::build_transitive_roots(project_path, &parser_name, &direct_deps)
+                .await;
+
         let report = AuditReport::new(
             dependency_stats,
             database_stats,
@@ -150,7 +156,8 @@ impl AuditEngine {
             fix_analysis,
             warnings,
             Vec::new(), // No maintenance checks in simple audit
-        );
+        )
+        .with_transitive_roots(transitive_roots);
 
         Ok(report)
     }
