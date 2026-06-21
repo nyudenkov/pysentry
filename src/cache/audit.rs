@@ -29,6 +29,23 @@ pub struct AuditCache {
     cache: Cache,
 }
 
+/// A bad parse at the current versioned key means a corrupt/old-format file; return it as a
+/// miss so the caller refreshes the entry instead of leaking a raw serde error to the user.
+fn parse_or_miss<T: serde::de::DeserializeOwned>(
+    content: &[u8],
+    path: &std::path::Path,
+    kind: &str,
+    action: &str,
+) -> Option<T> {
+    serde_json::from_slice(content)
+        .map_err(|error| {
+            tracing::warn!(
+                "{kind} cache file {path:?} is in an old/unknown format, will be {action}: {error}"
+            );
+        })
+        .ok()
+}
+
 impl AuditCache {
     pub fn new(cache_dir: std::path::PathBuf) -> Self {
         Self {
@@ -69,8 +86,12 @@ impl AuditCache {
             Err(_) => return Ok(None),
         };
 
-        let metadata: DatabaseMetadata = serde_json::from_slice(&content)?;
-        Ok(Some(metadata))
+        Ok(parse_or_miss(
+            &content,
+            entry.path(),
+            "Vulnerability metadata",
+            "re-downloaded",
+        ))
     }
 
     pub async fn write_metadata(&self, metadata: &DatabaseMetadata) -> Result<()> {
@@ -142,8 +163,12 @@ impl AuditCache {
             Err(_) => return Ok(None),
         };
 
-        let cache_entry: ResolutionCacheEntry = serde_json::from_slice(&content)?;
-        Ok(Some(cache_entry))
+        Ok(parse_or_miss(
+            &content,
+            entry.path(),
+            "Resolution",
+            "re-resolved",
+        ))
     }
 
     pub async fn write_resolution_cache(
@@ -444,6 +469,27 @@ mod tests {
             .is_none());
         assert!(cache.should_refresh_resolution(cache_key, 24).unwrap());
         assert_ne!(cache.resolution_entry(cache_key).path(), old_entry.path());
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_resolution_cache_is_a_miss_not_an_error() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+
+        let cache_key = "uv-py3.12-linux-x86_64-cafebabe";
+
+        // Corrupt content at the CURRENT versioned path (unlike the unversioned-key test
+        // above). A bad/old-format payload must surface as a cache miss so it gets
+        // re-resolved, never as a raw serde error propagated to the user.
+        let entry = cache.resolution_entry(cache_key);
+        entry.write(b"{ not valid resolution json }").await.unwrap();
+        assert!(entry.path().exists());
+
+        assert!(cache
+            .read_resolution_cache(cache_key)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
