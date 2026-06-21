@@ -11,7 +11,7 @@ use crate::notifications::display::{
 use crate::output::generate_report;
 use crate::parsers::manifest_reader;
 use crate::parsers::requirements::RequirementsParser;
-use crate::parsers::ParserRegistry;
+use crate::parsers::{ParserRegistry, ProjectParser};
 use crate::types::ResolverType;
 use crate::{
     AuditCache, AuditReport, DependencyScanner, MatcherConfig, Severity, VulnerabilityDatabase,
@@ -387,6 +387,28 @@ async fn perform_audit(
         )
         .await?;
         (scanned, skipped, "requirements.txt".to_string())
+    } else if audit_args.no_resolver
+        && crate::parsers::pep723::Pep723Parser::new(None).can_parse(&audit_args.path)
+    {
+        // --no-resolver on a PEP 723 script: a registry with no resolver parses pinned
+        // (==) deps directly; unpinned deps surface as placeholders, matching the
+        // requirements.txt no-resolver behavior.
+        let parser_registry = ParserRegistry::new(None, None);
+        let (raw_parsed_deps, skipped, parser_name) = parser_registry
+            .parse_project(&audit_args.path, false, false, audit_args.direct_only)
+            .await?;
+        let scanned = raw_parsed_deps
+            .into_iter()
+            .map(|dep| crate::dependency::scanner::ScannedDependency {
+                name: dep.name,
+                version: dep.version,
+                is_direct: dep.is_direct,
+                source: dep.source.into(),
+                path: dep.path,
+                source_file: dep.source_file,
+            })
+            .collect();
+        (scanned, skipped, parser_name.to_string())
     } else if audit_args.no_resolver {
         // --no-resolver without --requirements-files: discover requirements.txt files
         let resolver_type: ResolverType = audit_args.resolver.clone().into();

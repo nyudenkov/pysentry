@@ -275,15 +275,33 @@ impl RequirementsParser {
             )
         };
 
+        self.parse_content(
+            &combined_requirements,
+            source_file,
+            direct_only,
+            no_resolver,
+        )
+        .await
+    }
+
+    /// Resolve and parse requirements-format content (PEP 508 lines, one per line).
+    /// When `no_resolver` is true, only pinned (`==`) deps are parsed and unpinned ones are
+    /// skipped; otherwise the configured resolver pins versions and surfaces transitives.
+    /// Shared by the requirements.txt path and the PEP 723 script parser.
+    pub(crate) async fn parse_content(
+        &self,
+        content: &str,
+        source_file: Option<String>,
+        direct_only: bool,
+        no_resolver: bool,
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         if no_resolver {
-            info!("Parsing requirements files without dependency resolution (--no-resolver)");
-            return self
-                .parse_content_no_resolve(&combined_requirements, source_file)
-                .await;
+            info!("Parsing dependencies without resolution (--no-resolver)");
+            return self.parse_content_no_resolve(content, source_file).await;
         }
 
         info!(
-            "Parsing explicit requirements files with {} resolver",
+            "Parsing dependencies with {} resolver",
             self.resolver.name()
         );
 
@@ -295,13 +313,10 @@ impl RequirementsParser {
             )));
         }
 
-        let resolved_content = self
-            .resolver
-            .resolve_requirements(&combined_requirements)
-            .await?;
+        let resolved_content = self.resolver.resolve_requirements(content).await?;
 
         let dependencies = self
-            .parse_resolved_content(&resolved_content, &combined_requirements, source_file)
+            .parse_resolved_content(&resolved_content, content, source_file)
             .await?;
 
         let filtered_dependencies = if direct_only {
@@ -314,7 +329,7 @@ impl RequirementsParser {
         };
 
         info!(
-            "Successfully parsed {} dependencies from explicit requirements files",
+            "Successfully parsed {} dependencies",
             filtered_dependencies.len()
         );
         Ok((filtered_dependencies, Vec::new()))
