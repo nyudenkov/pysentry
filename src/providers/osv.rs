@@ -211,7 +211,9 @@ impl OsvSource {
 
         let (severity, cvss_score, cvss_version) = Self::map_osv_severity(advisory);
 
-        let target_normalized = target_package.to_lowercase().replace(['-', '_', '.'], "-");
+        // PEP 503 normalization lives centrally in PackageName::new (lowercase +
+        // collapse `[-_.]+` runs to `-`); compare via PackageName, never raw strings.
+        let target_normalized = crate::types::PackageName::new(target_package);
 
         let mut affected_versions = Vec::new();
         let mut fixed_versions = Vec::new();
@@ -220,15 +222,12 @@ impl OsvSource {
             if affected.package.ecosystem != "PyPI" {
                 continue;
             }
-            let pkg_normalized = affected
-                .package
-                .name
-                .to_lowercase()
-                .replace(['-', '_', '.'], "-");
+            let pkg_normalized = crate::types::PackageName::new(&affected.package.name);
             if pkg_normalized != target_normalized {
                 continue;
             }
             affected_versions.extend(Self::extract_osv_ranges(affected));
+            affected_versions.extend(Self::extract_explicit_versions(affected));
             fixed_versions.extend(Self::extract_fixed_versions(affected));
         }
 
@@ -354,6 +353,29 @@ impl OsvSource {
         }
 
         ranges
+    }
+
+    /// Extract exact affected versions from an OSV `affected.versions` list.
+    ///
+    /// OSV enumerates discrete affected versions here independently of `ranges`.
+    /// A version listed in `versions` is affected even when `ranges` is empty or
+    /// fails to cover it, so each entry becomes a single-version inclusive range.
+    fn extract_explicit_versions(affected: &OsvAffected) -> Vec<VersionRange> {
+        let Some(versions) = &affected.versions else {
+            return vec![];
+        };
+
+        versions
+            .iter()
+            .filter_map(|raw| {
+                Version::from_str(raw).ok().map(|version| VersionRange {
+                    constraint: format!("=={version}"),
+                    min: Some(version.clone()),
+                    max: Some(version),
+                    max_inclusive: true,
+                })
+            })
+            .collect()
     }
 
     /// Extract fixed versions from OSV affected entry
@@ -797,6 +819,8 @@ impl VulnerabilityProvider for OsvSource {
         // Create progress bar for batch queries if enabled
         let batch_pb = if self.http_config.show_progress && total_batches > 1 {
             let bar = ProgressBar::new(total_batches as u64);
+            // invariant: the template string is a compile-time constant known to be valid.
+            #[allow(clippy::unwrap_used)]
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} batches")
@@ -876,6 +900,8 @@ impl VulnerabilityProvider for OsvSource {
         // Create progress bar for vulnerability details if enabled
         let details_pb = if self.http_config.show_progress && all_vulnerability_ids.len() > 1 {
             let bar = ProgressBar::new(all_vulnerability_ids.len() as u64);
+            // invariant: the template string is a compile-time constant known to be valid.
+            #[allow(clippy::unwrap_used)]
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} vulnerabilities ({eta})")
@@ -1044,6 +1070,9 @@ struct OsvLightweightVuln {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
 
     #[test]
@@ -1570,6 +1599,103 @@ mod tests {
             ranges[0].max.as_ref().unwrap(),
             &Version::from_str("2.0.0").unwrap()
         );
+    }
+
+    #[test]
+    fn test_explicit_versions_matched_when_ranges_empty() {
+        // OSV record with no ranges but an explicit affected version list.
+        // Without honoring `versions`, this advisory would be silently dropped
+        // (convert returns None on empty affected + fixed), a false negative.
+        let advisory = OsvAdvisory {
+            id: "PYSEC-EXPLICIT".to_string(),
+            summary: Some("Explicit versions only".to_string()),
+            details: None,
+            affected: vec![OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "test-package".to_string(),
+                    purl: None,
+                },
+                ranges: vec![],
+                versions: Some(vec!["1.2.3".to_string(), "1.2.4".to_string()]),
+                database_specific: None,
+                ecosystem_specific: None,
+            }],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let vuln = OsvSource::convert_osv_vulnerability(&advisory, "test-package").unwrap();
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.2.3").unwrap())));
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.2.4").unwrap())));
+        // A version not listed must not match the single-version ranges.
+        assert!(!vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.2.5").unwrap())));
+    }
+
+    #[test]
+    fn test_explicit_versions_supplement_incomplete_ranges() {
+        // A range covering <1.0.0 plus an explicit 2.0.0 listing: the explicit
+        // version must be matched even though it falls outside the range.
+        let advisory = OsvAdvisory {
+            id: "PYSEC-SUPPLEMENT".to_string(),
+            summary: Some("Range plus explicit version".to_string()),
+            details: None,
+            affected: vec![OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "test-package".to_string(),
+                    purl: None,
+                },
+                ranges: vec![OsvRange {
+                    range_type: "ECOSYSTEM".to_string(),
+                    repo: None,
+                    events: vec![OsvEvent {
+                        introduced: Some("0".to_string()),
+                        fixed: Some("1.0.0".to_string()),
+                        last_affected: None,
+                        limit: None,
+                    }],
+                    database_specific: None,
+                }],
+                versions: Some(vec!["2.0.0".to_string()]),
+                database_specific: None,
+                ecosystem_specific: None,
+            }],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let vuln = OsvSource::convert_osv_vulnerability(&advisory, "test-package").unwrap();
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("0.5.0").unwrap())));
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("2.0.0").unwrap())));
+        // 1.5.0 is neither in <1.0.0 nor an explicit version.
+        assert!(!vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.5.0").unwrap())));
     }
 
     #[test]
