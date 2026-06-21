@@ -201,7 +201,15 @@ impl SimpleIndexClient {
                     project_status: None,
                 });
             }
-            return Err(AuditError::Http(response.error_for_status().unwrap_err()));
+            return match response.error_for_status() {
+                Err(e) => Err(AuditError::Http(e)),
+                // error_for_status() only yields Err for 4xx/5xx; a non-success status
+                // that is not an error (e.g. a bare 3xx) must still surface as a failure.
+                Ok(resp) => Err(AuditError::other(format!(
+                    "Unexpected non-error HTTP status {} from {url}",
+                    resp.status()
+                ))),
+            };
         }
 
         let index: PackageIndex = response.json().await?;

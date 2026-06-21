@@ -141,6 +141,9 @@ impl AuditArgs {
         if !self.maintenance_direct_only && config.maintenance.check_direct_only {
             merged.maintenance_direct_only = true;
         }
+        if self.maintenance_cache_ttl == 1 {
+            merged.maintenance_cache_ttl = config.maintenance.cache_ttl;
+        }
 
         if !self.no_ci_detect && config.defaults.no_ci_detect {
             merged.no_ci_detect = true;

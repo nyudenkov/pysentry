@@ -259,6 +259,10 @@ pub struct AuditArgs {
     #[arg(long)]
     pub maintenance_direct_only: bool,
 
+    /// Maintenance status cache TTL in hours (default: 1)
+    #[arg(long, value_name = "HOURS", default_value = "1")]
+    pub maintenance_cache_ttl: u64,
+
     /// Don't fail on vulnerabilities with unknown level
     #[arg(long)]
     pub no_fail_on_unknown: bool,

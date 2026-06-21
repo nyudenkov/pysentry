@@ -347,7 +347,10 @@ async fn perform_audit(
     let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
     if audit_args.is_verbose() {
         if source_names.len() == 1 {
-            eprintln!("Fetching vulnerability data from {}...", source_names[0]);
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let source_name = source_names[0];
+            eprintln!("Fetching vulnerability data from {source_name}...");
         } else {
             eprintln!(
                 "Fetching vulnerability data from {} sources: {}...",
@@ -504,10 +507,12 @@ async fn perform_audit(
 
     if audit_args.is_verbose() {
         if source_names.len() == 1 {
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let source_name = source_names[0];
             eprintln!(
-                "Fetching vulnerabilities for {} packages from {}...",
+                "Fetching vulnerabilities for {} packages from {source_name}...",
                 packages.len(),
-                source_names[0]
             );
         } else {
             eprintln!(
@@ -529,9 +534,10 @@ async fn perform_audit(
             if audit_args.is_verbose() {
                 eprintln!("Checking PEP 792 project status markers...");
             }
-            let maintenance_client = crate::maintenance::SimpleIndexClient::new(
+            let maintenance_client = crate::maintenance::SimpleIndexClient::new_with_cache_ttl(
                 http_config.clone(),
                 Some(audit_cache.clone()),
+                audit_args.maintenance_cache_ttl,
             );
             let config = audit_args.maintenance_check_config();
             maintenance_client
@@ -557,6 +563,8 @@ async fn perform_audit(
     let databases = vuln_result?;
 
     let database = if databases.len() == 1 {
+        // invariant: guarded by len() == 1, so the first element always exists.
+        #[allow(clippy::unwrap_used)]
         databases.into_iter().next().unwrap()
     } else {
         if !audit_args.is_quiet() {
