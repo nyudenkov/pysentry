@@ -586,6 +586,9 @@ impl SarifGenerator {
     }
 
     /// Create plain text help for a vulnerability (no markdown formatting)
+    // invariant: every write! target is the local `help_text` String; `fmt::Write` for
+    // String is infallible, so these writes can never return Err.
+    #[allow(clippy::unwrap_used)]
     fn create_help_text_plain(vulnerability: &Vulnerability) -> String {
         use std::fmt::Write;
         let mut help_text = format!("{}\n\n", vulnerability.summary);
@@ -621,6 +624,9 @@ impl SarifGenerator {
     }
 
     /// Create markdown-formatted help for a vulnerability
+    // invariant: every write! target is the local `help_text` String; `fmt::Write` for
+    // String is infallible, so these writes can never return Err.
+    #[allow(clippy::unwrap_used)]
     fn create_help_text_markdown(vulnerability: &Vulnerability) -> String {
         use std::fmt::Write;
         let mut help_text = format!("## {}\n\n", vulnerability.summary);
@@ -1018,6 +1024,9 @@ pub(crate) fn generate_sarif_report(
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::output::model::test_helpers::create_test_report;
     use crate::types::Version;

@@ -213,6 +213,8 @@ impl ParserRegistry {
         compatible_parsers.sort_by_key(|parser| parser.priority());
 
         // Use the highest priority parser
+        // invariant: emptiness checked above, so index 0 always exists.
+        #[allow(clippy::indexing_slicing)]
         let parser = compatible_parsers[0];
         let parser_name = parser.name();
 

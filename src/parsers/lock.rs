@@ -611,6 +611,9 @@ impl UvLockParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;

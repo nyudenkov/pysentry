@@ -321,6 +321,8 @@ impl ProjectParser for PyLockParser {
             return Err(AuditError::NoDependencyInfo);
         }
 
+        // invariant: emptiness checked above, so index 0 always exists.
+        #[allow(clippy::indexing_slicing)]
         let pylock_path = &pylock_files[0];
         debug!("Reading pylock file: {}", pylock_path.display());
 
@@ -546,6 +548,9 @@ impl PyLockParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;

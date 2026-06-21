@@ -17,6 +17,8 @@ pub(crate) fn parse_resolved_dependencies(
 ) -> Vec<ResolvedDependency> {
     let mut dependencies = Vec::new();
 
+    // invariant: the regex pattern is a compile-time string literal known to be valid.
+    #[allow(clippy::unwrap_used)]
     let package_regex = PACKAGE_REGEX
         .get_or_init(|| Regex::new(r"^([a-zA-Z0-9_.-]+)==([^;]+)(?:;\s*(.+))?").unwrap());
 

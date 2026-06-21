@@ -259,7 +259,10 @@ impl RequirementsParser {
         let combined_requirements = self.combine_explicit_files(requirements_files).await?;
 
         let source_file = if requirements_files.len() == 1 {
-            requirements_files[0]
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let only_file = &requirements_files[0];
+            only_file
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
         } else {
@@ -621,7 +624,10 @@ impl ProjectParser for RequirementsParser {
 
         // Build source file description from the discovered filenames
         let source_file = if requirements_files.len() == 1 {
-            requirements_files[0]
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let only_file = &requirements_files[0];
+            only_file
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
         } else {
@@ -695,6 +701,9 @@ impl ProjectParser for RequirementsParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::types::ResolverType;
 

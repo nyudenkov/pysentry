@@ -52,7 +52,13 @@ impl PipToolsResolver {
         let mut cmd = Command::new("pip-compile");
         cmd.current_dir(temp_dir.path()); // Critical: never use project directory
         cmd.arg(&temp_requirements);
-        cmd.args(["--output-file", temp_output.to_str().unwrap()]);
+        let temp_output_str = temp_output.to_str().ok_or_else(|| {
+            AuditError::other(format!(
+                "Temp output path is not valid UTF-8: {}",
+                temp_output.display()
+            ))
+        })?;
+        cmd.args(["--output-file", temp_output_str]);
 
         // Isolation and safety options
         cmd.args([
