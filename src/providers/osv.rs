@@ -184,7 +184,7 @@ impl OsvSource {
         }
     }
 
-    /// Get cache entry for OSV batch with package-specific key
+    /// Get cache entry for OSV batch with package-specific key.
     fn cache_entry(&self, packages: &[(String, String)]) -> CacheEntry {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -197,7 +197,11 @@ impl OsvSource {
         }
         let package_hash = hasher.finish();
 
-        self.cache.database_entry(&format!("osv-{package_hash:x}"))
+        // -v2: v0.4.7 started converting OSV affected.versions into exact ranges. Old
+        // cache files deserialize successfully but lack those ranges, preserving the
+        // false negative this release fixes.
+        self.cache
+            .database_entry(&format!("osv-v2-{package_hash:x}"))
     }
 
     /// Convert OSV advisory to internal vulnerability format for a specific package
@@ -1744,5 +1748,35 @@ mod tests {
     fn test_should_cache_respects_no_cache() {
         let db = VulnerabilityDatabase::new();
         assert!(!OsvSource::should_cache_result(&db, 0, true));
+    }
+
+    #[test]
+    fn test_cache_entry_versioned_key_ignores_old_name() {
+        use std::hash::{Hash, Hasher};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+        let source = OsvSource::new(
+            cache.clone(),
+            false,
+            crate::config::HttpConfig::default(),
+            48,
+        );
+        let packages = vec![("django".to_string(), "4.2.0".to_string())];
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (name, version) in &packages {
+            name.hash(&mut hasher);
+            version.hash(&mut hasher);
+        }
+        let old_entry = cache.database_entry(&format!("osv-{:x}", hasher.finish()));
+        if let Some(parent) = old_entry.path().parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(old_entry.path(), b"old osv payload").unwrap();
+
+        let versioned_entry = source.cache_entry(&packages);
+        assert_ne!(versioned_entry.path(), old_entry.path());
+        assert!(!versioned_entry.path().exists());
     }
 }

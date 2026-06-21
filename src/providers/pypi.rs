@@ -53,9 +53,14 @@ impl PypiSource {
         }
     }
 
-    /// Get cache entry for a package/version
+    /// Get cache entry for a package/version.
     fn cache_entry(&self, name: &str, version: &str) -> CacheEntry {
-        self.cache.database_entry(&format!("pypi-{name}-{version}"))
+        // -v2: v0.4.7 changed the converted Vulnerability payload for PyPI advisories:
+        // no-fix advisories now emit a wildcard range, and every fixed_in branch emits its
+        // own range. Old v1 cache files deserialize successfully but preserve false-negative
+        // ranges, so they must not be reused.
+        self.cache
+            .database_entry(&format!("pypi-v2-{name}-{version}"))
     }
 
     /// Fetch vulnerability data from PyPI for a single package with retry
@@ -432,5 +437,27 @@ mod tests {
 
         assert_eq!(ranges.len(), 1);
         assert!(ranges[0].contains(&Version::from_str("4.2.0").unwrap()));
+    }
+
+    #[test]
+    fn test_cache_entry_versioned_key_ignores_old_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+        let source = PypiSource::new(
+            cache.clone(),
+            false,
+            crate::config::HttpConfig::default(),
+            48,
+        );
+
+        let old_entry = cache.database_entry("pypi-django-4.2.0");
+        if let Some(parent) = old_entry.path().parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(old_entry.path(), b"old pypi payload").unwrap();
+
+        let versioned_entry = source.cache_entry("django", "4.2.0");
+        assert_ne!(versioned_entry.path(), old_entry.path());
+        assert!(!versioned_entry.path().exists());
     }
 }
