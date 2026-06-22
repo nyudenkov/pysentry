@@ -814,27 +814,40 @@ impl SarifGenerator {
         let mut locations = Vec::new();
         let package_name = &m.package_name;
 
-        if let Some(pyproject_locations) = self
-            .location_cache
-            .get(&format!("pyproject.toml:{package_name}"))
-        {
-            for loc_info in pyproject_locations {
-                locations.push(Self::create_location_from_info(loc_info, m));
-            }
-        }
+        // PEP 723 script matches carry their own .py source file. The location cache is
+        // keyed only by package name, so a script-origin match for a package that also
+        // appears in pyproject.toml/uv.lock would be misattributed to the manifest. Skip
+        // the cache and let the source_file fallback below report the script artifact.
+        let is_script_source = m
+            .source_file
+            .as_deref()
+            .is_some_and(|file| file.ends_with(".py"));
 
-        if let Some(lock_locations) = self.location_cache.get(&format!("uv.lock:{package_name}")) {
-            for loc_info in lock_locations {
-                locations.push(Self::create_location_from_info(loc_info, m));
+        if !is_script_source {
+            if let Some(pyproject_locations) = self
+                .location_cache
+                .get(&format!("pyproject.toml:{package_name}"))
+            {
+                for loc_info in pyproject_locations {
+                    locations.push(Self::create_location_from_info(loc_info, m));
+                }
+            }
+
+            if let Some(lock_locations) =
+                self.location_cache.get(&format!("uv.lock:{package_name}"))
+            {
+                for loc_info in lock_locations {
+                    locations.push(Self::create_location_from_info(loc_info, m));
+                }
             }
         }
 
         if locations.is_empty() {
-            let file_path = if m.is_direct {
+            let file_path = m.source_file.as_deref().unwrap_or(if m.is_direct {
                 "pyproject.toml"
             } else {
                 "uv.lock"
-            };
+            });
 
             let physical_location = SarifPhysicalLocation::builder()
                 .artifact_location(Self::artifact_location(file_path))
@@ -1072,7 +1085,42 @@ mod tests {
             installed_version: Version::from_str("1.5.0").unwrap(),
             vulnerability: create_test_vulnerability(),
             is_direct: true,
+            source_file: None,
         }
+    }
+
+    #[test]
+    fn test_script_source_match_reports_script_not_pyproject() {
+        // Regression: a PEP 723 script match for a package that also appears in
+        // pyproject.toml must be attributed to its .py artifact, not the manifest.
+        let temp_dir = TempDir::new().unwrap();
+        let mut generator = SarifGenerator::new(temp_dir.path());
+        generator.location_cache.insert(
+            "pyproject.toml:test-package".to_string(),
+            vec![LocationInfo {
+                file_path: "pyproject.toml".to_string(),
+                line: Some(10),
+                column: Some(5),
+                context: None,
+            }],
+        );
+
+        let mut m = create_test_match();
+        m.source_file = Some("tool.py".to_string());
+
+        let locations = generator.create_locations_for_match(&m);
+        assert_eq!(locations.len(), 1);
+        let uri = locations[0]
+            .physical_location
+            .as_ref()
+            .unwrap()
+            .artifact_location
+            .as_ref()
+            .unwrap()
+            .uri
+            .as_deref()
+            .unwrap();
+        assert_eq!(uri, "tool.py");
     }
 
     #[test]
@@ -1169,6 +1217,7 @@ mod tests {
             installed_version: Version::from_str("1.5.0").unwrap(),
             vulnerability: vuln,
             is_direct: true,
+            source_file: None,
         };
 
         generator.generate_rules(&[test_match]);
@@ -1457,6 +1506,7 @@ dev = [
             installed_version: Version::from_str("1.5.0").unwrap(),
             vulnerability: vuln,
             is_direct: true,
+            source_file: None,
         };
 
         generator.generate_rules(std::slice::from_ref(&test_match));

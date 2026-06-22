@@ -80,6 +80,7 @@ fn every_config_field_reaches_effective_settings() {
     );
     assert!(merged.no_ci_detect, "defaults.no_ci_detect: {WIRING}");
     assert_eq!(merged.groups, vec!["polars"], "defaults.groups: {WIRING}");
+    assert!(merged.include_scripts, "defaults.include_scripts: {WIRING}");
 
     // ----- Group A: [sources] -----
     assert_eq!(merged.sources, vec!["osv"], "sources.enabled: {WIRING}");

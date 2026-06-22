@@ -21,6 +21,7 @@ display = "text"            # default: table
 include_withdrawn = true    # default: false
 no_ci_detect = true         # default: false
 groups = ["polars"]         # default: []
+include_scripts = true      # default: false
 
 [sources]
 enabled = ["osv"]           # default: ["pypa", "pypi", "osv"]

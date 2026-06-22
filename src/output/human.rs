@@ -164,11 +164,15 @@ pub(crate) fn generate_human_report(
                     m.vulnerability.id.style(styles.vuln_id).to_string()
                 };
                 let dep_type = if m.is_direct {
-                    "direct".to_string()
+                    format!(
+                        "direct{}",
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
                 } else {
                     format!(
-                        "transitive{}",
-                        crate::output::model::via_suffix(report.roots_of(&m.package_name))
+                        "transitive{}{}",
+                        crate::output::model::via_suffix(report.roots_of(&m.package_name)),
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
                     )
                 };
                 builder.push_record([
@@ -196,11 +200,15 @@ pub(crate) fn generate_human_report(
                     String::new()
                 };
                 let dep_type = if m.is_direct {
-                    "direct".to_string()
+                    format!(
+                        "direct{}",
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
                 } else {
                     format!(
-                        "transitive{}",
-                        crate::output::model::via_suffix(report.roots_of(&m.package_name))
+                        "transitive{}{}",
+                        crate::output::model::via_suffix(report.roots_of(&m.package_name)),
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
                     )
                 };
                 writeln!(
@@ -236,11 +244,15 @@ pub(crate) fn generate_human_report(
                 };
 
                 let dep_type = if m.is_direct {
-                    "[direct]".to_string()
+                    format!(
+                        "[direct{}]",
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
                 } else {
                     format!(
-                        "[transitive]{}",
-                        crate::output::model::via_suffix(report.roots_of(&m.package_name))
+                        "[transitive]{}{}",
+                        crate::output::model::via_suffix(report.roots_of(&m.package_name)),
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
                     )
                 };
 
@@ -1210,6 +1222,7 @@ mod tests {
             installed_version: Version::from_str("1.0.0").unwrap(),
             vulnerability,
             is_direct: true,
+            source_file: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -1283,6 +1296,7 @@ mod tests {
             installed_version: Version::from_str("0.1.0").unwrap(),
             vulnerability: withdrawn_vuln,
             is_direct: true,
+            source_file: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -1311,6 +1325,26 @@ mod tests {
 
         assert!(output.contains("GHSA-withdrawn-0001"));
         assert!(output.contains("WITHDRAWN"));
+    }
+
+    #[test]
+    fn test_compact_report_marks_script_source() {
+        let mut report = create_test_report();
+        report
+            .matches
+            .first_mut()
+            .expect("test report has one match")
+            .source_file = Some("tools/audit.py".to_string());
+
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Text,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        assert!(output.contains("direct @ tools/audit.py"));
     }
 
     #[test]

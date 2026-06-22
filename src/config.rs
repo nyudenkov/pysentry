@@ -79,6 +79,9 @@ pub struct DefaultConfig {
 
     #[serde(default)]
     pub groups: Vec<String>,
+
+    #[serde(default)]
+    pub include_scripts: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -666,6 +669,7 @@ impl Default for DefaultConfig {
             include_withdrawn: false,
             no_ci_detect: false,
             groups: Vec::new(),
+            include_scripts: false,
         }
     }
 }

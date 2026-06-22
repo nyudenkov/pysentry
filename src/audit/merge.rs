@@ -109,6 +109,10 @@ impl AuditArgs {
             merged.sources = config.sources.enabled.clone();
         }
 
+        if !self.include_scripts && config.defaults.include_scripts {
+            merged.include_scripts = true;
+        }
+
         let mut ignore_ids = self.ignore_ids.clone();
         ignore_ids.extend(config.ignore.ids.clone());
         merged.ignore_ids = ignore_ids;

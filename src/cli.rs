@@ -285,6 +285,10 @@ pub struct AuditArgs {
         conflicts_with = "exclude_extra"
     )]
     pub groups: Vec<String>,
+
+    /// Also scan PEP 723 Python scripts found under the project directory
+    #[arg(long)]
+    pub include_scripts: bool,
 }
 
 impl AuditArgs {
@@ -658,5 +662,11 @@ mod tests {
     fn test_group_conflicts_with_exclude_extra() {
         let result = Cli::try_parse_from(["pysentry", "--group", "polars", "--exclude-extra", "."]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_include_scripts_flag_parsed() {
+        let args = parse_audit_args(&["--include-scripts", "."]);
+        assert!(args.include_scripts);
     }
 }

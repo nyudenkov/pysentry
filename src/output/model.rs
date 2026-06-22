@@ -33,6 +33,13 @@ pub fn via_suffix(roots: Option<&[crate::types::PackageName]>) -> String {
     }
 }
 
+pub fn script_source_suffix(source_file: Option<&str>) -> String {
+    match source_file {
+        Some(source_file) if source_file.ends_with(".py") => format!(" @ {source_file}"),
+        _ => String::new(),
+    }
+}
+
 /// Controls how much detail is included in the human-readable report
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailLevel {
@@ -282,6 +289,7 @@ pub(crate) mod test_helpers {
             installed_version: Version::from_str("1.0.0").unwrap(),
             vulnerability,
             is_direct: true,
+            source_file: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -366,12 +374,14 @@ pub(crate) mod test_helpers {
                 installed_version: Version::from_str("1.0.0").unwrap(),
                 vulnerability: direct_vulnerability,
                 is_direct: true,
+                source_file: None,
             },
             VulnerabilityMatch {
                 package_name: PackageName::from_str("transitive-package").unwrap(),
                 installed_version: Version::from_str("0.9.0").unwrap(),
                 vulnerability: transitive_vulnerability,
                 is_direct: false,
+                source_file: None,
             },
         ];
 
