@@ -13,7 +13,7 @@ PySentry audits Python projects for known security vulnerabilities by analyzing 
 
 ## Key Features
 
-- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, and `requirements.txt` files
+- **Multiple Project Formats**: Supports `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, `requirements.txt`, and PEP 723 Python scripts
 - **External Resolver Integration**: Leverages `uv` and `pip-tools` for accurate requirements.txt constraint solving
 - **Multiple Data Sources** (all sources used by default):
   - PyPA Advisory Database

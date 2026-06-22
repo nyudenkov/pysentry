@@ -20,8 +20,15 @@ uvx pysentry-rs /path/to/python/project
 pysentry-rs
 pysentry-rs /path/to/python/project
 
-# Automatically detects project type (uv.lock, poetry.lock, Pipfile.lock, pylock.toml, pyproject.toml, Pipfile, requirements.txt)
+# Automatically detects project type (uv.lock, poetry.lock, Pipfile.lock, pylock.toml,
+# pyproject.toml, Pipfile, requirements.txt, or a PEP 723 Python script)
 pysentry-rs /path/to/project
+
+# Audit a Python script with inline PEP 723 metadata
+pysentry-rs script.py
+
+# Include PEP 723 scripts when scanning a project directory
+pysentry-rs --include-scripts /path/to/project
 
 # Force specific resolver
 pysentry-rs --resolver uv /path/to/project
@@ -70,6 +77,9 @@ pysentry-rs --forbid-quarantined
 
 # Check maintenance status for direct dependencies only
 pysentry-rs --forbid-unmaintained --maintenance-direct-only
+
+# Cache maintenance status responses for 6 hours
+pysentry-rs --maintenance-cache-ttl 6
 
 # Don't fail on vulnerabilities with unknown severity
 pysentry-rs --no-fail-on-unknown
@@ -122,7 +132,7 @@ pysentry-rs --clear-resolution-cache /path/to/project
 PySentry reports vulnerabilities with:
 
 - **Package name and version**: The affected dependency
-- **Dependency type**: `[direct]` or `[transitive]` tag on each vulnerability entry
+- **Dependency type**: `[direct]` or `[transitive]` tag on each vulnerability entry. For supported lock files, transitive findings can also show the top-level dependency that pulled them in, such as `(via requests)`
 - **Vulnerability ID**: CVE, GHSA, or PYSEC identifier
 - **Severity**: Critical, High, Medium, Low, or Unknown
 - **Description**: Brief explanation of the vulnerability
