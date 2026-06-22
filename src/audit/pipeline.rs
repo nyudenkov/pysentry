@@ -11,7 +11,7 @@ use crate::notifications::display::{
 use crate::output::generate_report;
 use crate::parsers::manifest_reader;
 use crate::parsers::requirements::RequirementsParser;
-use crate::parsers::ParserRegistry;
+use crate::parsers::{ParserRegistry, ProjectParser};
 use crate::types::ResolverType;
 use crate::{
     AuditCache, AuditReport, DependencyScanner, MatcherConfig, Severity, VulnerabilityDatabase,
@@ -20,7 +20,7 @@ use crate::{
 use anyhow::Result;
 use futures::future::try_join_all;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn audit(
@@ -347,7 +347,10 @@ async fn perform_audit(
     let source_names: Vec<_> = vuln_sources.iter().map(|s| s.name()).collect();
     if audit_args.is_verbose() {
         if source_names.len() == 1 {
-            eprintln!("Fetching vulnerability data from {}...", source_names[0]);
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let source_name = source_names[0];
+            eprintln!("Fetching vulnerability data from {source_name}...");
         } else {
             eprintln!(
                 "Fetching vulnerability data from {} sources: {}...",
@@ -361,85 +364,38 @@ async fn perform_audit(
         eprintln!("Scanning project dependencies...");
     }
 
-    let (dependencies, skipped_packages, detected_parser_name) = if !audit_args
-        .requirements_files
-        .is_empty()
-    {
-        if !audit_args.is_quiet() {
-            eprintln!(
-                "Using explicit requirements files: {}",
-                audit_args
-                    .requirements_files
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        let (scanned, skipped) = scan_explicit_requirements(
-            &audit_args.requirements_files,
-            audit_args.direct_only,
-            audit_args.resolver.clone(),
-            audit_args.no_resolver,
-        )
-        .await?;
-        (scanned, skipped, "requirements.txt".to_string())
-    } else if audit_args.no_resolver {
-        // --no-resolver without --requirements-files: discover requirements.txt files
-        let resolver_type: ResolverType = audit_args.resolver.clone().into();
-        let parser = crate::parsers::requirements::RequirementsParser::new(Some(resolver_type));
-        let req_files = parser.find_requirements_files(&audit_args.path, audit_args.include_dev());
-        if req_files.is_empty() {
-            return Err(anyhow::anyhow!(
-                "--no-resolver requires requirements.txt files but none were found in {}",
-                audit_args.path.display()
-            ));
-        }
-        if !audit_args.is_quiet() {
-            eprintln!(
-                "Using --no-resolver with discovered requirements files: {}",
-                req_files
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        let (scanned, skipped) =
-            scan_explicit_requirements(&req_files, true, audit_args.resolver.clone(), true).await?;
-        (scanned, skipped, "requirements.txt".to_string())
-    } else {
-        let resolver_type: ResolverType = audit_args.resolver.clone().into();
-
-        let parse_dev = audit_args.include_dev();
-        let parse_optional = audit_args.include_optional();
-
-        let groups_option: Option<HashSet<String>> = if audit_args.groups.is_empty() {
-            None
-        } else {
-            Some(audit_args.groups.iter().cloned().collect())
-        };
-        let parser_registry = ParserRegistry::new(Some(resolver_type), groups_option);
-        let (raw_parsed_deps, skipped_packages, parser_name) = parser_registry
-            .parse_project(
-                &audit_args.path,
-                parse_dev,
-                parse_optional,
+    let (mut dependencies, mut skipped_packages, detected_parser_name) =
+        if !audit_args.requirements_files.is_empty() {
+            if !audit_args.is_quiet() {
+                eprintln!(
+                    "Using explicit requirements files: {}",
+                    audit_args
+                        .requirements_files
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            let (scanned, skipped) = scan_explicit_requirements(
+                &audit_args.requirements_files,
                 audit_args.direct_only,
+                audit_args.resolver.clone(),
+                audit_args.no_resolver,
             )
             .await?;
-
-        if audit_args.is_verbose() {
-            eprintln!(
-                "Parsed {} dependencies from {} (scope: {})",
-                raw_parsed_deps.len(),
-                parser_name,
-                audit_args.scope_description()
-            );
-        }
-
-        (
-            raw_parsed_deps
+            (scanned, skipped, "requirements.txt".to_string())
+        } else if audit_args.no_resolver
+            && crate::parsers::pep723::Pep723Parser::new(None).can_parse(&audit_args.path)
+        {
+            // --no-resolver on a PEP 723 script: a registry with no resolver parses pinned
+            // (==) deps directly; unpinned deps are skipped, matching the
+            // requirements.txt no-resolver behavior.
+            let parser_registry = ParserRegistry::new(None, None);
+            let (raw_parsed_deps, skipped, parser_name) = parser_registry
+                .parse_project(&audit_args.path, false, false, audit_args.direct_only)
+                .await?;
+            let scanned = raw_parsed_deps
                 .into_iter()
                 .map(|dep| crate::dependency::scanner::ScannedDependency {
                     name: dep.name,
@@ -449,11 +405,114 @@ async fn perform_audit(
                     path: dep.path,
                     source_file: dep.source_file,
                 })
-                .collect(),
-            skipped_packages,
-            parser_name.to_string(),
-        )
-    };
+                .collect();
+            (scanned, skipped, parser_name.to_string())
+        } else if audit_args.no_resolver {
+            // --no-resolver without --requirements-files: discover requirements.txt files
+            let resolver_type: ResolverType = audit_args.resolver.clone().into();
+            let parser = crate::parsers::requirements::RequirementsParser::new(Some(resolver_type));
+            let req_files =
+                parser.find_requirements_files(&audit_args.path, audit_args.include_dev());
+            if req_files.is_empty() && audit_args.include_scripts {
+                (Vec::new(), Vec::new(), "requirements.txt".to_string())
+            } else if req_files.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "--no-resolver requires requirements.txt files but none were found in {}",
+                    audit_args.path.display()
+                ));
+            } else {
+                if !audit_args.is_quiet() {
+                    eprintln!(
+                        "Using --no-resolver with discovered requirements files: {}",
+                        req_files
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                let (scanned, skipped) =
+                    scan_explicit_requirements(&req_files, true, audit_args.resolver.clone(), true)
+                        .await?;
+                (scanned, skipped, "requirements.txt".to_string())
+            }
+        } else {
+            let resolver_type: ResolverType = audit_args.resolver.clone().into();
+
+            let parse_dev = audit_args.include_dev();
+            let parse_optional = audit_args.include_optional();
+
+            let groups_option: Option<HashSet<String>> = if audit_args.groups.is_empty() {
+                None
+            } else {
+                Some(audit_args.groups.iter().cloned().collect())
+            };
+            let parser_registry = ParserRegistry::new(Some(resolver_type), groups_option);
+            let parse_result = parser_registry
+                .parse_project(
+                    &audit_args.path,
+                    parse_dev,
+                    parse_optional,
+                    audit_args.direct_only,
+                )
+                .await;
+
+            // A directory with only PEP 723 scripts and no manifest/lock yields
+            // NoDependencyInfo; defer to the script scan below instead of failing,
+            // mirroring the --no-resolver branch above.
+            let (raw_parsed_deps, skipped_packages, parser_name) = match parse_result {
+                Err(crate::AuditError::NoDependencyInfo)
+                    if audit_args.include_scripts && audit_args.path.is_dir() =>
+                {
+                    (Vec::new(), Vec::new(), "scripts")
+                }
+                other => other?,
+            };
+
+            if audit_args.is_verbose() {
+                eprintln!(
+                    "Parsed {} dependencies from {} (scope: {})",
+                    raw_parsed_deps.len(),
+                    parser_name,
+                    audit_args.scope_description()
+                );
+            }
+
+            (
+                raw_parsed_deps
+                    .into_iter()
+                    .map(|dep| crate::dependency::scanner::ScannedDependency {
+                        name: dep.name,
+                        version: dep.version,
+                        is_direct: dep.is_direct,
+                        source: dep.source.into(),
+                        path: dep.path,
+                        source_file: dep.source_file,
+                    })
+                    .collect(),
+                skipped_packages,
+                parser_name.to_string(),
+            )
+        };
+
+    if audit_args.include_scripts && audit_args.path.is_dir() {
+        let resolver = if audit_args.no_resolver {
+            None
+        } else {
+            Some(audit_args.resolver.clone().into())
+        };
+        let (script_deps, script_skipped, script_count) =
+            scan_pep723_scripts(&audit_args.path, resolver, audit_args.direct_only).await?;
+        if audit_args.is_verbose() && script_count > 0 {
+            eprintln!(
+                "Parsed {} dependencies from {} PEP 723 script(s)",
+                script_deps.len(),
+                script_count
+            );
+        }
+        dependencies.extend(script_deps);
+        skipped_packages.extend(script_skipped);
+    }
 
     let dependency_stats = if !audit_args.requirements_files.is_empty() || audit_args.no_resolver {
         calculate_dependency_stats(&dependencies)
@@ -504,10 +563,12 @@ async fn perform_audit(
 
     if audit_args.is_verbose() {
         if source_names.len() == 1 {
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let source_name = source_names[0];
             eprintln!(
-                "Fetching vulnerabilities for {} packages from {}...",
+                "Fetching vulnerabilities for {} packages from {source_name}...",
                 packages.len(),
-                source_names[0]
             );
         } else {
             eprintln!(
@@ -529,9 +590,10 @@ async fn perform_audit(
             if audit_args.is_verbose() {
                 eprintln!("Checking PEP 792 project status markers...");
             }
-            let maintenance_client = crate::maintenance::SimpleIndexClient::new(
+            let maintenance_client = crate::maintenance::SimpleIndexClient::new_with_cache_ttl(
                 http_config.clone(),
                 Some(audit_cache.clone()),
+                audit_args.maintenance_cache_ttl,
             );
             let config = audit_args.maintenance_check_config();
             maintenance_client
@@ -557,6 +619,8 @@ async fn perform_audit(
     let databases = vuln_result?;
 
     let database = if databases.len() == 1 {
+        // invariant: guarded by len() == 1, so the first element always exists.
+        #[allow(clippy::unwrap_used)]
         databases.into_iter().next().unwrap()
     } else {
         if !audit_args.is_quiet() {
@@ -578,6 +642,10 @@ async fn perform_audit(
     let matches = matcher.find_vulnerabilities(&dependencies)?;
     let filtered_matches = matcher.filter_matches(matches);
 
+    for ignore_id in matcher.unmatched_ignore_ids() {
+        tracing::warn!("ignore ID '{}' did not match any finding", ignore_id);
+    }
+
     let (display_matches, fail_vulns) = evaluate_fail_condition(
         filtered_matches,
         &fail_on_level,
@@ -587,6 +655,14 @@ async fn perform_audit(
     let database_stats = matcher.get_database_stats();
     let fix_analysis = matcher.analyze_fixes(&display_matches);
 
+    let direct_deps = crate::dependency::scanner::ScannedDependency::direct_names(&dependencies);
+    let transitive_roots = crate::parsers::graph::build_transitive_roots(
+        &audit_args.path,
+        &detected_parser_name,
+        &direct_deps,
+    )
+    .await;
+
     let report = AuditReport::new(
         dependency_stats,
         database_stats,
@@ -594,7 +670,8 @@ async fn perform_audit(
         fix_analysis,
         warnings,
         maintenance_issues,
-    );
+    )
+    .with_transitive_roots(transitive_roots);
 
     let summary = report.summary();
     let maint_summary = report.maintenance_summary();
@@ -648,9 +725,98 @@ async fn scan_explicit_requirements(
     Ok((scanned_dependencies, skipped_packages))
 }
 
+async fn scan_pep723_scripts(
+    project_dir: &Path,
+    resolver: Option<ResolverType>,
+    direct_only: bool,
+) -> Result<(
+    Vec<crate::dependency::scanner::ScannedDependency>,
+    Vec<crate::parsers::SkippedPackage>,
+    usize,
+)> {
+    let scripts = find_python_scripts(project_dir)?;
+    let parser = crate::parsers::pep723::Pep723Parser::new(resolver);
+    let mut dependencies = Vec::new();
+    let mut skipped_packages = Vec::new();
+    let mut parsed_scripts = 0;
+
+    for script in scripts {
+        if !parser.can_parse(&script) {
+            continue;
+        }
+
+        let (parsed_deps, skipped) = parser
+            .parse_dependencies(&script, false, false, direct_only)
+            .await?;
+        parsed_scripts += 1;
+
+        // Intentionally overrides Pep723Parser's basename-only source_file with the
+        // project-relative path: a script discovered under a tree wants `tools/x.py`,
+        // not `x.py`. A directly-pointed script (no project_dir context) keeps the
+        // parser's basename, so the two entry paths differ by design.
+        let source_file = script
+            .strip_prefix(project_dir)
+            .unwrap_or(&script)
+            .to_string_lossy()
+            .to_string();
+
+        dependencies.extend(parsed_deps.into_iter().map(|mut dep| {
+            dep.source_file = Some(source_file.clone());
+            crate::dependency::scanner::ScannedDependency {
+                name: dep.name,
+                version: dep.version,
+                is_direct: dep.is_direct,
+                source: dep.source.into(),
+                path: dep.path,
+                source_file: dep.source_file,
+            }
+        }));
+        skipped_packages.extend(skipped);
+    }
+
+    Ok((dependencies, skipped_packages, parsed_scripts))
+}
+
+fn find_python_scripts(project_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut pending = vec![project_dir.to_path_buf()];
+    let mut scripts = Vec::new();
+
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+
+            if file_type.is_dir() {
+                if should_skip_script_dir(&file_name) {
+                    continue;
+                }
+                pending.push(path);
+            } else if file_type.is_file()
+                && path.extension().and_then(|ext| ext.to_str()) == Some("py")
+            {
+                scripts.push(path);
+            }
+        }
+    }
+
+    scripts.sort();
+    Ok(scripts)
+}
+
+fn should_skip_script_dir(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "__pycache__" | "build" | "dist" | "node_modules" | "site-packages" | "venv"
+        )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::evaluate_fail_condition;
+    use super::{evaluate_fail_condition, scan_pep723_scripts};
     use crate::{Severity, VulnerabilityMatch};
     use std::str::FromStr;
 
@@ -754,12 +920,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_include_scripts_scans_pep723_files_beside_project_files() {
+        let project_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pep723-with-project-files");
+
+        let (deps, skipped, script_count) = scan_pep723_scripts(&project_dir, None, false)
+            .await
+            .unwrap();
+
+        assert_eq!(script_count, 1);
+        assert!(skipped.is_empty());
+        assert_eq!(deps.len(), 1);
+        let dep = deps
+            .first()
+            .expect("fixture should produce one script dependency");
+        assert_eq!(dep.name.to_string(), "requests");
+        assert_eq!(dep.source_file.as_deref(), Some("audit_script.py"));
+    }
+
     fn make_match(vuln_level: Severity) -> VulnerabilityMatch {
         VulnerabilityMatch {
             package_name: crate::types::PackageName::from_str("test-pkg").unwrap(),
             installed_version: crate::types::Version::from_str("1.0.0").unwrap(),
             vulnerability: crate::vulnerability::database::Vulnerability::with_level(vuln_level),
             is_direct: true,
+            source_file: None,
         }
     }
 

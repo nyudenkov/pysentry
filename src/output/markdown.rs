@@ -104,7 +104,14 @@ pub(crate) fn generate_markdown_report(
                 "- **Package:** `{}` v`{}`",
                 m.package_name, m.installed_version
             )?;
-            let dep_type = if m.is_direct { "direct" } else { "transitive" };
+            let dep_type = if m.is_direct {
+                "direct".to_string()
+            } else {
+                format!(
+                    "transitive{}",
+                    crate::output::model::via_suffix(report.roots_of(&m.package_name))
+                )
+            };
             writeln!(output, "- **Dependency:** {dep_type}")?;
             writeln!(output, "- **Severity:** {}", m.vulnerability.severity)?;
 
@@ -184,9 +191,12 @@ pub(crate) fn generate_markdown_report(
             let status = issue.issue_type.to_string();
 
             let dep_type = if issue.is_direct {
-                "direct"
+                "direct".to_string()
             } else {
-                "transitive"
+                format!(
+                    "transitive{}",
+                    crate::output::model::via_suffix(report.roots_of(&issue.package_name))
+                )
             };
 
             writeln!(

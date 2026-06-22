@@ -48,7 +48,7 @@ body:
     id: version
     attributes:
       label: PySentry Version
-      placeholder: "e.g. 0.4.6 — run `pysentry-rs --version`"
+      placeholder: "e.g. 0.4.7 — run `pysentry-rs --version`"
     validations:
       required: true
 

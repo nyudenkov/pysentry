@@ -9,6 +9,8 @@ const FIXTURE_DIR: &str = concat!(
     "/tests/fixtures/per-group-scope"
 );
 
+// Test helper, not a `#[test]` fn, so clippy's allow-expect-in-tests does not cover it.
+#[allow(clippy::expect_used)]
 async fn scan(
     include_dev: bool,
     include_optional: bool,

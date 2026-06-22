@@ -259,7 +259,10 @@ impl RequirementsParser {
         let combined_requirements = self.combine_explicit_files(requirements_files).await?;
 
         let source_file = if requirements_files.len() == 1 {
-            requirements_files[0]
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let only_file = &requirements_files[0];
+            only_file
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
         } else {
@@ -272,15 +275,33 @@ impl RequirementsParser {
             )
         };
 
+        self.parse_content(
+            &combined_requirements,
+            source_file,
+            direct_only,
+            no_resolver,
+        )
+        .await
+    }
+
+    /// Resolve and parse requirements-format content (PEP 508 lines, one per line).
+    /// When `no_resolver` is true, only pinned (`==`) deps are parsed and unpinned ones are
+    /// skipped; otherwise the configured resolver pins versions and surfaces transitives.
+    /// Shared by the requirements.txt path and the PEP 723 script parser.
+    pub(crate) async fn parse_content(
+        &self,
+        content: &str,
+        source_file: Option<String>,
+        direct_only: bool,
+        no_resolver: bool,
+    ) -> Result<(Vec<ParsedDependency>, Vec<SkippedPackage>)> {
         if no_resolver {
-            info!("Parsing requirements files without dependency resolution (--no-resolver)");
-            return self
-                .parse_content_no_resolve(&combined_requirements, source_file)
-                .await;
+            info!("Parsing dependencies without resolution (--no-resolver)");
+            return self.parse_content_no_resolve(content, source_file).await;
         }
 
         info!(
-            "Parsing explicit requirements files with {} resolver",
+            "Parsing dependencies with {} resolver",
             self.resolver.name()
         );
 
@@ -292,13 +313,10 @@ impl RequirementsParser {
             )));
         }
 
-        let resolved_content = self
-            .resolver
-            .resolve_requirements(&combined_requirements)
-            .await?;
+        let resolved_content = self.resolver.resolve_requirements(content).await?;
 
         let dependencies = self
-            .parse_resolved_content(&resolved_content, &combined_requirements, source_file)
+            .parse_resolved_content(&resolved_content, content, source_file)
             .await?;
 
         let filtered_dependencies = if direct_only {
@@ -311,7 +329,7 @@ impl RequirementsParser {
         };
 
         info!(
-            "Successfully parsed {} dependencies from explicit requirements files",
+            "Successfully parsed {} dependencies",
             filtered_dependencies.len()
         );
         Ok((filtered_dependencies, Vec::new()))
@@ -621,7 +639,10 @@ impl ProjectParser for RequirementsParser {
 
         // Build source file description from the discovered filenames
         let source_file = if requirements_files.len() == 1 {
-            requirements_files[0]
+            // invariant: guarded by len() == 1, so index 0 always exists.
+            #[allow(clippy::indexing_slicing)]
+            let only_file = &requirements_files[0];
+            only_file
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
         } else {
@@ -695,6 +716,9 @@ impl ProjectParser for RequirementsParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::types::ResolverType;
 

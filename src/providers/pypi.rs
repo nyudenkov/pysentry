@@ -53,9 +53,14 @@ impl PypiSource {
         }
     }
 
-    /// Get cache entry for a package/version
+    /// Get cache entry for a package/version.
     fn cache_entry(&self, name: &str, version: &str) -> CacheEntry {
-        self.cache.database_entry(&format!("pypi-{name}-{version}"))
+        // -v2: v0.4.7 changed the converted Vulnerability payload for PyPI advisories:
+        // no-fix advisories now emit a wildcard range, and every fixed_in branch emits its
+        // own range. Old v1 cache files deserialize successfully but preserve false-negative
+        // ranges, so they must not be reused.
+        self.cache
+            .database_entry(&format!("pypi-v2-{name}-{version}"))
     }
 
     /// Fetch vulnerability data from PyPI for a single package with retry
@@ -177,26 +182,37 @@ impl PypiSource {
 
     /// Extract affected version ranges from vulnerability details
     fn extract_affected_ranges(vuln: &PypiVulnerability) -> Vec<VersionRange> {
-        // PyPI doesn't provide structured affected ranges
-        // We'll need to parse them from the details text or use fixed_in as a hint
-
+        // PyPI doesn't provide structured affected ranges, so each fixed version
+        // is treated as the upper bound of an affected range. Carrying every
+        // fixed version (not just the first) preserves multi-branch fixes, e.g.
+        // a vulnerability fixed in both 2.31.1 and 3.0.2 leaves 3.0.1 affected.
         if let Some(fixed_in) = &vuln.fixed_in {
-            if let Some(first_fixed) = fixed_in.first() {
-                // Assume all versions before the first fixed version are affected
-                if let Ok(version) = Version::from_str(first_fixed) {
-                    return vec![VersionRange {
+            let ranges: Vec<VersionRange> = fixed_in
+                .iter()
+                .filter_map(|raw| {
+                    Version::from_str(raw).ok().map(|version| VersionRange {
                         min: None,
                         max: Some(version),
-                        constraint: format!("<{first_fixed}"),
+                        constraint: format!("<{raw}"),
                         max_inclusive: false,
-                    }];
-                }
+                    })
+                })
+                .collect();
+            if !ranges.is_empty() {
+                return ranges;
             }
         }
 
-        // If we can't determine ranges, return an empty vec
-        // This means all versions are potentially affected
-        vec![]
+        // No usable fix version to bound a range. The PyPI JSON API is queried
+        // per installed version and only returns advisories that apply to that
+        // version, so trust the server's assertion with a match-all range rather
+        // than emitting an empty list, which the matcher reads as "not affected".
+        vec![VersionRange {
+            min: None,
+            max: None,
+            constraint: "*".to_string(),
+            max_inclusive: false,
+        }]
     }
 
     /// Create a future for fetching package vulnerabilities with retry
@@ -252,6 +268,8 @@ impl VulnerabilityProvider for PypiSource {
         // Create progress bar if enabled
         let pb = if self.http_config.show_progress && packages.len() > 1 {
             let bar = ProgressBar::new(packages.len() as u64);
+            // invariant: the template string is a compile-time constant known to be valid.
+            #[allow(clippy::unwrap_used)]
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} packages ({eta})")
@@ -360,4 +378,86 @@ struct PypiVulnerability {
     fixed_in: Option<Vec<String>>,
     #[serde(default)]
     link: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
+    use super::*;
+
+    fn vuln_with_fixed_in(fixed_in: Option<Vec<&str>>) -> PypiVulnerability {
+        PypiVulnerability {
+            id: "PYSEC-TEST".to_string(),
+            aliases: None,
+            details: "test".to_string(),
+            summary: None,
+            fixed_in: fixed_in.map(|v| v.into_iter().map(String::from).collect()),
+            link: None,
+        }
+    }
+
+    #[test]
+    fn test_multiple_fixed_versions_cover_all_branches() {
+        // Fixed in both 2.31.1 and 3.0.2: 3.0.1 must remain flagged. The old
+        // `.first()` logic only emitted <2.31.1 and missed the 3.x branch.
+        let vuln = vuln_with_fixed_in(Some(vec!["2.31.1", "3.0.2"]));
+        let ranges = PypiSource::extract_affected_ranges(&vuln);
+
+        assert!(ranges
+            .iter()
+            .any(|range| range.contains(&Version::from_str("3.0.1").unwrap())));
+        assert!(ranges
+            .iter()
+            .any(|range| range.contains(&Version::from_str("2.31.0").unwrap())));
+        // Above every fix version, nothing should match.
+        assert!(!ranges
+            .iter()
+            .any(|range| range.contains(&Version::from_str("3.5.0").unwrap())));
+    }
+
+    #[test]
+    fn test_no_fixed_in_trusts_server_with_wildcard() {
+        // PyPI returns this advisory only because it applies to the queried
+        // version. With no fix to bound a range, a match-all range keeps it from
+        // being silently dropped as "not affected".
+        let vuln = vuln_with_fixed_in(None);
+        let ranges = PypiSource::extract_affected_ranges(&vuln);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].contains(&Version::from_str("1.0.0").unwrap()));
+        assert!(ranges[0].contains(&Version::from_str("99.0.0").unwrap()));
+    }
+
+    #[test]
+    fn test_unparseable_fixed_in_falls_back_to_wildcard() {
+        let vuln = vuln_with_fixed_in(Some(vec!["not-a-version"]));
+        let ranges = PypiSource::extract_affected_ranges(&vuln);
+
+        assert_eq!(ranges.len(), 1);
+        assert!(ranges[0].contains(&Version::from_str("4.2.0").unwrap()));
+    }
+
+    #[test]
+    fn test_cache_entry_versioned_key_ignores_old_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+        let source = PypiSource::new(
+            cache.clone(),
+            false,
+            crate::config::HttpConfig::default(),
+            48,
+        );
+
+        let old_entry = cache.database_entry("pypi-django-4.2.0");
+        if let Some(parent) = old_entry.path().parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(old_entry.path(), b"old pypi payload").unwrap();
+
+        let versioned_entry = source.cache_entry("django", "4.2.0");
+        assert_ne!(versioned_entry.path(), old_entry.path());
+        assert!(!versioned_entry.path().exists());
+    }
 }

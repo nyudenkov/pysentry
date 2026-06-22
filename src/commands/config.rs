@@ -108,6 +108,7 @@ pub async fn config_show(args: &ConfigShowArgs) -> Result<()> {
         );
         println!("  Detailed: {}", config_loader.config.defaults.detailed);
         println!("  Compact: {}", config_loader.config.defaults.compact);
+        println!("  Display: {}", config_loader.config.defaults.display);
         println!(
             "  Include withdrawn: {}",
             config_loader.config.defaults.include_withdrawn

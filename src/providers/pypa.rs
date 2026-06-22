@@ -199,9 +199,15 @@ impl PypaClient {
         let response = self.client.get(PYPA_ADVISORY_DB_URL).send().await?;
 
         if !response.status().is_success() {
-            return Err(AuditError::DatabaseDownload(Box::new(
-                response.error_for_status().unwrap_err(),
-            )));
+            return Err(match response.error_for_status() {
+                Err(e) => AuditError::DatabaseDownload(Box::new(e)),
+                // error_for_status() only yields Err for 4xx/5xx; a non-success status
+                // that is not an error (e.g. a bare 3xx) must still surface as a failure.
+                Ok(resp) => AuditError::other(format!(
+                    "Unexpected non-error HTTP status {} downloading PyPA advisory database",
+                    resp.status()
+                )),
+            });
         }
 
         let total_size = response.content_length();
@@ -209,6 +215,8 @@ impl PypaClient {
         let pb = if self.http_config.show_progress {
             if let Some(size) = total_size {
                 let bar = ProgressBar::new(size);
+                // invariant: the template string is a compile-time constant known to be valid.
+                #[allow(clippy::unwrap_used)]
                 bar.set_style(
                     ProgressStyle::default_bar()
                         .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
@@ -282,9 +290,13 @@ impl PypaSource {
     fn cache_entry(&self) -> CacheEntry {
         // Versioned key: v0.4.5 changed this cache from a raw ZIP to JSON. Released versions
         // <= 0.4.4 read the unversioned "pypa" path as a ZIP and crash ("Could not find EOCD")
-        // on JSON content. The "-v2" suffix gives the JSON format its own file so old and new
-        // versions never collide on a shared cache; bump it again on any future format change.
-        self.cache.database_entry("pypa-v2")
+        // on JSON content. The suffix gives each format its own file so old and new versions
+        // never collide on a shared cache; bump it on any future format change.
+        // -v3: PackageName gained full PEP 503 normalization (dots collapse), so the
+        // PackageName keys serialized into this payload changed. An old -v2 payload read by
+        // a -v3 binary would miss dotted packages (e.g. zope.interface) — a silent false
+        // negative — so the payload needs its own file.
+        self.cache.database_entry("pypa-v3")
     }
 
     /// Download and parse `PyPA` advisory database, returning a pre-built VulnerabilityDatabase.
@@ -696,6 +708,9 @@ impl VulnerabilityProvider for PypaSource {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use chrono::Datelike;
     use std::str::FromStr;

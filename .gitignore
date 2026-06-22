@@ -51,8 +51,6 @@ htmlcov/
 *.bak
 *.log
 
-.local
-
 # Claude Code documentation (keep root, ignore subdirectories)
 **/CLAUDE.md
 !/CLAUDE.md

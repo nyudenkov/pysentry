@@ -18,6 +18,32 @@ fn fix_version_summary(fixes: &[&FixSuggestion]) -> Option<(String, usize)> {
     ))
 }
 
+/// Space left for the free-text "Type" column after the rigid columns take their natural
+/// width: terminal minus the fixed columns minus rounded-border overhead (one border per
+/// column boundary plus two padding spaces per column = `3n + 1`). Floored at the width of
+/// "transitive" so the grid is never wider than it was before the "(via …)" suffix existed.
+fn type_column_budget(
+    terminal_width: usize,
+    fixed_columns_width: usize,
+    num_columns: usize,
+) -> usize {
+    let border_overhead = 3 * num_columns + 1;
+    terminal_width
+        .saturating_sub(fixed_columns_width + border_overhead)
+        .max("transitive".len())
+}
+
+/// Truncate a cell's visible text to `budget` characters, appending '…' when cut. Keeps the
+/// variable-length Type cell from forcing the whole grid table past the terminal width.
+fn truncate_cell(text: &str, budget: usize) -> String {
+    if text.chars().count() <= budget {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(budget.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 pub(crate) fn generate_human_report(
     report: &AuditReport,
     detail_level: DetailLevel,
@@ -108,6 +134,25 @@ pub(crate) fn generate_human_report(
             writeln!(output)?;
             let mut builder = Builder::new();
             builder.push_record(["ID", "Package", "Version", "Severity", "Type"]);
+
+            // Only the free-text Type column flexes; the rigid columns keep their natural
+            // width and the Type cell is truncated to whatever space is left, so a long
+            // "(via …)" never widens the grid past the terminal.
+            let mut id_w = "ID".chars().count();
+            let mut pkg_w = "Package".chars().count();
+            let mut ver_w = "Version".chars().count();
+            let mut sev_w = "Severity".chars().count();
+            for m in &report.matches {
+                let id_len = m.vulnerability.id.chars().count()
+                    + usize::from(m.vulnerability.withdrawn.is_some()) * " (WITHDRAWN)".len();
+                id_w = id_w.max(id_len);
+                pkg_w = pkg_w.max(m.package_name.to_string().chars().count());
+                ver_w = ver_w.max(format!("v{}", m.installed_version).chars().count());
+                sev_w = sev_w.max(m.vulnerability.severity.to_string().chars().count());
+            }
+            let type_budget =
+                type_column_budget(get_terminal_width(), id_w + pkg_w + ver_w + sev_w, 5);
+
             for m in &report.matches {
                 let id_field = if m.vulnerability.withdrawn.is_some() {
                     format!(
@@ -118,7 +163,18 @@ pub(crate) fn generate_human_report(
                 } else {
                     m.vulnerability.id.style(styles.vuln_id).to_string()
                 };
-                let dep_type = if m.is_direct { "direct" } else { "transitive" };
+                let dep_type = if m.is_direct {
+                    format!(
+                        "direct{}",
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
+                } else {
+                    format!(
+                        "transitive{}{}",
+                        crate::output::model::via_suffix(report.roots_of(&m.package_name)),
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
+                };
                 builder.push_record([
                     id_field,
                     m.package_name.to_string().style(styles.package).to_string(),
@@ -128,7 +184,9 @@ pub(crate) fn generate_human_report(
                         .to_string()
                         .style(*styles.severity(&m.vulnerability.severity))
                         .to_string(),
-                    dep_type.style(styles.dimmed).to_string(),
+                    truncate_cell(&dep_type, type_budget)
+                        .style(styles.dimmed)
+                        .to_string(),
                 ]);
             }
             let table = builder.build().with(Style::rounded()).to_string();
@@ -141,7 +199,18 @@ pub(crate) fn generate_human_report(
                 } else {
                     String::new()
                 };
-                let dep_type = if m.is_direct { "direct" } else { "transitive" };
+                let dep_type = if m.is_direct {
+                    format!(
+                        "direct{}",
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
+                } else {
+                    format!(
+                        "transitive{}{}",
+                        crate::output::model::via_suffix(report.roots_of(&m.package_name)),
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
+                };
                 writeln!(
                     output,
                     "  {}{}  {} v{}  [{}] {}",
@@ -175,9 +244,16 @@ pub(crate) fn generate_human_report(
                 };
 
                 let dep_type = if m.is_direct {
-                    "[direct]"
+                    format!(
+                        "[direct{}]",
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
                 } else {
-                    "[transitive]"
+                    format!(
+                        "[transitive]{}{}",
+                        crate::output::model::via_suffix(report.roots_of(&m.package_name)),
+                        crate::output::model::script_source_suffix(m.source_file.as_deref())
+                    )
                 };
 
                 writeln!(
@@ -334,12 +410,26 @@ pub(crate) fn generate_human_report(
             writeln!(output, "{}", "MAINTENANCE".style(styles.header))?;
             let mut builder = Builder::new();
             builder.push_record(["Status", "Package", "Version", "Type"]);
+
+            let mut status_w = "Status".chars().count();
+            let mut pkg_w = "Package".chars().count();
+            let mut ver_w = "Version".chars().count();
+            for issue in &report.maintenance_issues {
+                status_w = status_w.max(issue.issue_type.to_string().chars().count());
+                pkg_w = pkg_w.max(issue.package_name.to_string().chars().count());
+                ver_w = ver_w.max(format!("v{}", issue.installed_version).chars().count());
+            }
+            let type_budget = type_column_budget(get_terminal_width(), status_w + pkg_w + ver_w, 4);
+
             for issue in &report.maintenance_issues {
                 let status_text = issue.issue_type.to_string();
                 let dep_type = if issue.is_direct {
-                    "direct"
+                    "direct".to_string()
                 } else {
-                    "transitive"
+                    format!(
+                        "transitive{}",
+                        crate::output::model::via_suffix(report.roots_of(&issue.package_name))
+                    )
                 };
                 builder.push_record([
                     status_text
@@ -351,7 +441,9 @@ pub(crate) fn generate_human_report(
                         .style(styles.package)
                         .to_string(),
                     format!("v{}", issue.installed_version),
-                    dep_type.style(styles.dimmed).to_string(),
+                    truncate_cell(&dep_type, type_budget)
+                        .style(styles.dimmed)
+                        .to_string(),
                 ]);
             }
             let table = builder.build().with(Style::rounded()).to_string();
@@ -362,9 +454,12 @@ pub(crate) fn generate_human_report(
             for issue in &report.maintenance_issues {
                 let status_text = issue.issue_type.to_string();
                 let dep_type = if issue.is_direct {
-                    "direct"
+                    "direct".to_string()
                 } else {
-                    "transitive"
+                    format!(
+                        "transitive{}",
+                        crate::output::model::via_suffix(report.roots_of(&issue.package_name))
+                    )
                 };
                 writeln!(
                     output,
@@ -402,9 +497,12 @@ pub(crate) fn generate_human_report(
                 let status_tag = status_text.style(*styles.maintenance(&issue.issue_type));
 
                 let dep_type = if issue.is_direct {
-                    "[direct]"
+                    "[direct]".to_string()
                 } else {
-                    "[transitive]"
+                    format!(
+                        "[transitive]{}",
+                        crate::output::model::via_suffix(report.roots_of(&issue.package_name))
+                    )
                 };
 
                 write!(
@@ -458,6 +556,88 @@ mod tests {
     use crate::vulnerability::matcher::{DatabaseStats, FixAnalysis, FixSuggestion};
     use std::collections::HashMap;
     use std::str::FromStr;
+
+    fn max_line_width(s: &str) -> usize {
+        s.lines().map(|l| l.chars().count()).max().unwrap_or(0)
+    }
+
+    /// Pins the `3n + 1` border-overhead constant in `type_column_budget` against what
+    /// `tabled` actually renders for a rounded table. If tabled's spacing ever changes,
+    /// this fails and the budget math must follow — otherwise the table silently overflows.
+    #[test]
+    fn rounded_table_overhead_matches_formula() {
+        for num_columns in [2usize, 4, 5] {
+            let mut builder = Builder::new();
+            // Each column holds a fixed-width 5-char cell so total content width is known.
+            let row: Vec<String> = (0..num_columns).map(|_| "xxxxx".to_string()).collect();
+            builder.push_record(row.clone());
+            builder.push_record(row);
+            let table = builder.build().with(Style::rounded()).to_string();
+
+            let content_width = num_columns * 5;
+            let expected = content_width + (3 * num_columns + 1);
+            assert_eq!(
+                max_line_width(&table),
+                expected,
+                "rounded table with {num_columns} cols of width 5"
+            );
+        }
+    }
+
+    #[test]
+    fn type_column_budget_fits_terminal_and_floors() {
+        // Narrow terminal: budget is whatever's left after fixed columns + overhead.
+        // 40 - (20 fixed) - (3*5+1=16) = 4, but floored at len("transitive") = 10.
+        assert_eq!(type_column_budget(40, 20, 5), 10);
+        // Roomy terminal: 120 - 20 - 16 = 84.
+        assert_eq!(type_column_budget(120, 20, 5), 84);
+        // Fixed columns already exceed the terminal: still floored, never panics.
+        assert_eq!(type_column_budget(30, 100, 5), 10);
+    }
+
+    #[test]
+    fn truncate_cell_adds_ellipsis_only_when_needed() {
+        assert_eq!(truncate_cell("transitive", 10), "transitive");
+        assert_eq!(
+            truncate_cell("transitive (via fastapi)", 14),
+            "transitive (v…"
+        );
+        assert_eq!(
+            truncate_cell("transitive (via fastapi)", 14)
+                .chars()
+                .count(),
+            14
+        );
+    }
+
+    /// End-to-end: a transitive finding with a long via list, rendered in the grid table,
+    /// keeps every line within the terminal width and leaves the rigid columns intact.
+    #[test]
+    fn table_stays_within_width_with_long_via() {
+        let report = create_test_report_with_extras().with_transitive_roots(HashMap::from([(
+            PackageName::new("transitive-package"),
+            vec![
+                PackageName::new("a-really-long-direct-dependency-name"),
+                PackageName::new("another-long-one"),
+            ],
+        )]));
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        // No rendered line exceeds the terminal width (default 120 off-TTY).
+        assert!(
+            max_line_width(&output) <= get_terminal_width(),
+            "table overflowed terminal:\n{output}"
+        );
+        // The rigid Severity column is never split mid-word.
+        assert!(output.contains("MEDIUM"));
+        assert!(!output.contains("MEDIU\n"));
+    }
 
     #[test]
     fn test_human_report_generation() {
@@ -807,6 +987,31 @@ mod tests {
     }
 
     #[test]
+    fn test_transitive_finding_shows_via_root() {
+        // transitive-package is pulled in by parent-lib; the rendered line must name it.
+        let mut roots = std::collections::HashMap::new();
+        roots.insert(
+            crate::types::PackageName::new("transitive-package"),
+            vec![crate::types::PackageName::new("parent-lib")],
+        );
+        let report = create_test_report_with_extras().with_transitive_roots(roots);
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Text,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        assert!(
+            output.contains("(via parent-lib)"),
+            "transitive finding must name its top-level dep; got:\n{output}"
+        );
+        // The direct finding must NOT get a "via" suffix.
+        assert!(!output.contains("[direct] (via"));
+    }
+
+    #[test]
     fn test_compact_report_transitive_tag() {
         let report = create_test_report_with_extras();
         let output = generate_human_report(
@@ -1017,6 +1222,7 @@ mod tests {
             installed_version: Version::from_str("1.0.0").unwrap(),
             vulnerability,
             is_direct: true,
+            source_file: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -1090,6 +1296,7 @@ mod tests {
             installed_version: Version::from_str("0.1.0").unwrap(),
             vulnerability: withdrawn_vuln,
             is_direct: true,
+            source_file: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -1118,6 +1325,26 @@ mod tests {
 
         assert!(output.contains("GHSA-withdrawn-0001"));
         assert!(output.contains("WITHDRAWN"));
+    }
+
+    #[test]
+    fn test_compact_report_marks_script_source() {
+        let mut report = create_test_report();
+        report
+            .matches
+            .first_mut()
+            .expect("test report has one match")
+            .source_file = Some("tools/audit.py".to_string());
+
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Compact,
+            DisplayMode::Text,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+
+        assert!(output.contains("direct @ tools/audit.py"));
     }
 
     #[test]

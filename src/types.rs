@@ -9,7 +9,26 @@ pub struct PackageName(String);
 
 impl PackageName {
     pub fn new(name: &str) -> Self {
-        let normalized = name.to_lowercase().replace('_', "-");
+        // invariant: full PEP 503 normalization — lowercase, then collapse every run
+        // of `-`, `_`, `.` to a single `-` (canonical form is
+        // `re.sub(r"[-_.]+", "-", name).lower()`). Comparing raw strings shipped
+        // cross-package contamination (v0.4.4); normalizing only `_`→`-` while
+        // ignoring dots shipped dot-mismatch false negatives (PEP 503). Always
+        // compare via PackageName, never raw strings (CLAUDE.md Critical Rules).
+        let lowercased = name.to_lowercase();
+        let mut normalized = String::with_capacity(lowercased.len());
+        let mut prev_separator = false;
+        for ch in lowercased.chars() {
+            if matches!(ch, '-' | '_' | '.') {
+                if !prev_separator {
+                    normalized.push('-');
+                    prev_separator = true;
+                }
+            } else {
+                normalized.push(ch);
+                prev_separator = false;
+            }
+        }
         Self(normalized)
     }
 
@@ -146,6 +165,94 @@ impl From<&str> for ResolverType {
             "uv" => ResolverType::Uv,
             "pip-tools" | "pip_tools" | "piptools" => ResolverType::PipTools,
             _ => ResolverType::Uv, // Default fallback
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PackageName;
+    use proptest::prelude::*;
+
+    /// PEP 503 canonical reference: `re.sub(r"[-_.]+", "-", name).lower()`.
+    /// PackageName::new must produce exactly this for every input.
+    fn pep503_reference(name: &str) -> String {
+        use std::sync::OnceLock;
+        static RE: OnceLock<regex::Regex> = OnceLock::new();
+        let re = RE.get_or_init(|| regex::Regex::new(r"[-_.]+").unwrap());
+        re.replace_all(&name.to_lowercase(), "-").into_owned()
+    }
+
+    /// Join `segments` with separator `runs` (cycled to cover every gap),
+    /// optionally upper-casing the whole spelling. The result is always a
+    /// PEP-503-equivalent spelling of the same underlying name.
+    fn build_spelling(segments: &[String], runs: &[String], upcase: bool) -> String {
+        let mut spelling = String::new();
+        // runs is always non-empty (generated with 1..6), so cycle().next() is always Some.
+        let mut runs_iter = runs.iter().cycle();
+        for (i, segment) in segments.iter().enumerate() {
+            if i > 0 {
+                if let Some(run) = runs_iter.next() {
+                    spelling.push_str(run);
+                }
+            }
+            spelling.push_str(segment);
+        }
+        if upcase {
+            spelling.to_uppercase()
+        } else {
+            spelling
+        }
+    }
+
+    fn separator_run() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::sample::select(vec!['-', '_', '.']), 1..4)
+            .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    #[test]
+    fn pep503_concrete_examples() {
+        // Examples document; the proptests below cover the space.
+        let canonical = PackageName::new("zope-interface");
+        assert_eq!(canonical.as_str(), "zope-interface");
+        assert_eq!(PackageName::new("zope.interface"), canonical);
+        assert_eq!(PackageName::new("Zope_Interface"), canonical);
+        assert_eq!(PackageName::new("ZOPE.INTERFACE"), canonical);
+
+        // Runs of mixed separators collapse to a single hyphen.
+        assert_eq!(PackageName::new("foo___bar").as_str(), "foo-bar");
+        assert_eq!(PackageName::new("a.-_b").as_str(), "a-b");
+        assert_eq!(PackageName::new("ruamel.yaml").as_str(), "ruamel-yaml");
+    }
+
+    proptest! {
+        /// All PEP-503-equivalent spellings of the same name (differing only in
+        /// separator choice/runs and case) must construct equal PackageNames.
+        /// Pre-fix this FAILED: PackageName::new only mapped `_`→`-` and left dots
+        /// and separator runs intact (the v0.4.4 dot-mismatch false negative).
+        #[test]
+        fn pep503_equivalent_spellings_are_equal(
+            segments in prop::collection::vec("[a-zA-Z0-9]{1,8}", 1..6),
+            runs_a in prop::collection::vec(separator_run(), 1..6),
+            runs_b in prop::collection::vec(separator_run(), 1..6),
+            upcase_a in any::<bool>(),
+        ) {
+            let spelling_a = build_spelling(&segments, &runs_a, upcase_a);
+            let spelling_b = build_spelling(&segments, &runs_b, false);
+            prop_assert_eq!(
+                PackageName::new(&spelling_a),
+                PackageName::new(&spelling_b),
+                "PEP 503-equivalent spellings must normalize equally: {:?} vs {:?}",
+                spelling_a,
+                spelling_b
+            );
+        }
+
+        /// PackageName::new must match the canonical PEP 503 reference exactly.
+        #[test]
+        fn pep503_matches_reference(name in "[a-zA-Z0-9._-]{1,30}") {
+            let normalized = PackageName::new(&name);
+            prop_assert_eq!(normalized.as_str(), pep503_reference(&name));
         }
     }
 }

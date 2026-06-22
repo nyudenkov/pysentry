@@ -109,6 +109,10 @@ impl AuditArgs {
             merged.sources = config.sources.enabled.clone();
         }
 
+        if !self.include_scripts && config.defaults.include_scripts {
+            merged.include_scripts = true;
+        }
+
         let mut ignore_ids = self.ignore_ids.clone();
         ignore_ids.extend(config.ignore.ids.clone());
         merged.ignore_ids = ignore_ids;
@@ -140,6 +144,9 @@ impl AuditArgs {
         }
         if !self.maintenance_direct_only && config.maintenance.check_direct_only {
             merged.maintenance_direct_only = true;
+        }
+        if self.maintenance_cache_ttl == 1 {
+            merged.maintenance_cache_ttl = config.maintenance.cache_ttl;
         }
 
         if !self.no_ci_detect && config.defaults.no_ci_detect {

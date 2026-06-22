@@ -135,10 +135,20 @@ impl AuditEngine {
         let matches = matcher.find_vulnerabilities(&dependencies)?;
         let filtered_matches = matcher.filter_matches(matches);
 
+        for ignore_id in matcher.unmatched_ignore_ids() {
+            tracing::warn!("ignore ID '{}' did not match any finding", ignore_id);
+        }
+
         let database_stats = matcher.get_database_stats();
         let fix_analysis = matcher.analyze_fixes(&filtered_matches);
 
         // 5. Create report
+        let direct_deps =
+            crate::dependency::scanner::ScannedDependency::direct_names(&dependencies);
+        let transitive_roots =
+            crate::parsers::graph::build_transitive_roots(project_path, &parser_name, &direct_deps)
+                .await;
+
         let report = AuditReport::new(
             dependency_stats,
             database_stats,
@@ -146,7 +156,8 @@ impl AuditEngine {
             fix_analysis,
             warnings,
             Vec::new(), // No maintenance checks in simple audit
-        );
+        )
+        .with_transitive_roots(transitive_roots);
 
         Ok(report)
     }

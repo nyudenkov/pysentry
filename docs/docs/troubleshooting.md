@@ -335,7 +335,7 @@ pysentry-rs --format json --output results.json
 # Use faster resolver and limit sources
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.4.6
+    rev: v0.4.7
     hooks:
       - id: pysentry
         args: ["--resolver", "uv", "--sources", "pypa"]

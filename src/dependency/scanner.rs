@@ -187,6 +187,18 @@ pub enum DependencySource {
     Url(String),
 }
 
+impl ScannedDependency {
+    /// Names of the direct (top-level) dependencies in a scan, used to seed
+    /// transitive-root attribution. See `crate::parsers::graph`.
+    pub fn direct_names(dependencies: &[ScannedDependency]) -> HashSet<crate::types::PackageName> {
+        dependencies
+            .iter()
+            .filter(|dep| dep.is_direct)
+            .map(|dep| dep.name.clone())
+            .collect()
+    }
+}
+
 // Conversion implementations for backward compatibility
 impl From<crate::parsers::DependencySource> for DependencySource {
     fn from(source: crate::parsers::DependencySource) -> Self {
@@ -222,6 +234,9 @@ impl Default for DependencyScanner {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use std::str::FromStr;
 
@@ -271,6 +286,34 @@ mod tests {
         assert_eq!(stats.total_packages, 2);
         assert_eq!(stats.direct_packages, 1);
         assert_eq!(stats.transitive_packages, 1);
+    }
+
+    #[test]
+    fn test_direct_names_keeps_only_direct() {
+        let dependencies = vec![
+            ScannedDependency {
+                name: crate::types::PackageName::from_str("direct-pkg").unwrap(),
+                version: crate::types::Version::from_str("1.0.0").unwrap(),
+                is_direct: true,
+                source: DependencySource::Registry,
+                path: None,
+                source_file: None,
+            },
+            ScannedDependency {
+                name: crate::types::PackageName::from_str("transitive-pkg").unwrap(),
+                version: crate::types::Version::from_str("2.0.0").unwrap(),
+                is_direct: false,
+                source: DependencySource::Registry,
+                path: None,
+                source_file: None,
+            },
+        ];
+
+        let names = ScannedDependency::direct_names(&dependencies);
+        assert_eq!(
+            names,
+            HashSet::from([crate::types::PackageName::from_str("direct-pkg").unwrap()])
+        );
     }
 
     #[test]

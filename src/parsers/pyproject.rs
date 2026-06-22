@@ -375,10 +375,13 @@ impl ProjectParser for PyProjectParser {
                 .await
             {
                 Ok(dependencies) => {
+                    // invariant: this branch is reached only when `should_use_resolver` is
+                    // true, which requires `has_resolver()` (resolver is Some).
+                    #[allow(clippy::unwrap_used)]
+                    let resolver_name = self.resolver.as_ref().unwrap().name();
                     info!(
-                        "Successfully resolved {} dependencies using {} resolver",
+                        "Successfully resolved {} dependencies using {resolver_name} resolver",
                         dependencies.len(),
-                        self.resolver.as_ref().unwrap().name()
                     );
                     return Ok((dependencies, Vec::new()));
                 }
@@ -775,6 +778,9 @@ impl PyProjectParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::types::Version;
 

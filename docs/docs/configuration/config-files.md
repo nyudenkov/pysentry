@@ -30,6 +30,7 @@ scope = "all"
 direct_only = false
 no_ci_detect = false
 display = "table"
+include_scripts = false
 
 [sources]
 enabled = ["pypa", "osv"]
@@ -87,6 +88,7 @@ scope = "main"
 direct_only = false
 no_ci_detect = false
 display = "table"
+include_scripts = false
 
 [tool.pysentry.sources]
 enabled = ["pypa", "osv"]
@@ -139,6 +141,7 @@ quiet = false
 | `fail_on` | string | Minimum severity to cause non-zero exit | `medium` |
 | `scope` | string | Dependency scope: `all` or `main` | `all` |
 | `groups` | array | Audit only the named dependency group(s) plus main dependencies. Requires a lock file. Conflicts with `scope = "main"` | `[]` |
+| `include_scripts` | bool | Also scan PEP 723 Python scripts found under the project directory | `false` |
 | `direct_only` | bool | Only check direct dependencies | `false` |
 | `detailed` | bool | Enable detailed output with full vulnerability descriptions | `false` |
 | `compact` | bool | Compact output: summary + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
@@ -180,8 +183,10 @@ quiet = false
 
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
-| `ids` | array | Vulnerability IDs to always ignore | `[]` |
-| `while_no_fix` | array | Vulnerability IDs to ignore while no fix exists | `[]` |
+| `ids` | array | Vulnerability IDs or aliases to always ignore | `[]` |
+| `while_no_fix` | array | Vulnerability IDs or aliases to ignore while no fix exists | `[]` |
+
+Ignore entries match the advisory's primary ID and aliases, so a CVE suppression can match a GHSA or PYSEC advisory for the same vulnerability. PySentry logs a warning when an ignore entry did not match any advisory during the run.
 
 ### `[output]`
 

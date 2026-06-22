@@ -178,6 +178,30 @@ struct PyLockWheelSource {
     hashes: HashMap<String, String>,
 }
 
+/// Best-effort parent → children edge map from a pylock.toml, for transitive-root
+/// attribution (see `parsers::graph`). PEP 751 records each package's edges under its
+/// `dependencies` array. A missing or unparseable file yields an empty map, never an error.
+pub async fn pylock_edges(project_dir: &Path) -> HashMap<PackageName, HashSet<PackageName>> {
+    let Ok(content) = tokio::fs::read_to_string(project_dir.join("pylock.toml")).await else {
+        return HashMap::new();
+    };
+    let Ok(lock) = PyLockParser::deserialize_pylock(&content) else {
+        return HashMap::new();
+    };
+
+    lock.packages
+        .iter()
+        .map(|pkg| {
+            let children = pkg
+                .dependencies
+                .iter()
+                .map(|dep| PackageName::new(&dep.name))
+                .collect();
+            (PackageName::new(&pkg.name), children)
+        })
+        .collect()
+}
+
 pub struct PyLockParser {
     groups: Option<HashSet<String>>,
 }
@@ -321,6 +345,8 @@ impl ProjectParser for PyLockParser {
             return Err(AuditError::NoDependencyInfo);
         }
 
+        // invariant: emptiness checked above, so index 0 always exists.
+        #[allow(clippy::indexing_slicing)]
         let pylock_path = &pylock_files[0];
         debug!("Reading pylock file: {}", pylock_path.display());
 
@@ -546,6 +572,9 @@ impl PyLockParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -556,6 +585,34 @@ mod tests {
         let project_path = temp_dir.path().to_path_buf();
         tokio::fs::write(&lock_path, content).await.unwrap();
         (temp_dir, project_path)
+    }
+
+    #[tokio::test]
+    async fn test_pylock_edges_from_dependencies_array() {
+        let lock_content = r#"
+lock-version = "1.0"
+created-by = "test-tool"
+
+[[package]]
+name = "requests"
+version = "2.28.1"
+dependencies = [{ name = "urllib3" }, { name = "certifi" }]
+
+[[package]]
+name = "urllib3"
+version = "1.26.0"
+"#;
+        let (_temp_dir, project_path) = create_test_pylock_file(lock_content, "pylock.toml").await;
+        let edges = pylock_edges(&project_path).await;
+
+        assert_eq!(
+            edges.get(&PackageName::new("requests")),
+            Some(&HashSet::from([
+                PackageName::new("urllib3"),
+                PackageName::new("certifi")
+            ])),
+            "edges come from each package's dependencies array"
+        );
     }
 
     #[tokio::test]

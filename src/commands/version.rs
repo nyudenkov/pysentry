@@ -52,7 +52,7 @@ pub async fn check_version(args: &CheckVersionArgs) -> Result<()> {
         }
     };
 
-    let latest_tag = match release_info["tag_name"].as_str() {
+    let latest_tag = match release_info.get("tag_name").and_then(|v| v.as_str()) {
         Some(tag) => tag,
         None => {
             eprintln!("Failed to get latest version information");
@@ -90,7 +90,7 @@ pub async fn check_version(args: &CheckVersionArgs) -> Result<()> {
         println!("To update:");
         println!("  • Rust CLI: cargo install pysentry");
         println!("  • Python package: pip install --upgrade pysentry-rs");
-        if let Some(release_url) = release_info["html_url"].as_str() {
+        if let Some(release_url) = release_info.get("html_url").and_then(|v| v.as_str()) {
             println!("  • Release notes: {release_url}");
         }
     } else if latest_version < current_version {
@@ -134,7 +134,7 @@ pub async fn check_for_update_silent() -> Result<Option<String>> {
         }
     };
 
-    let latest_tag = match release_info["tag_name"].as_str() {
+    let latest_tag = match release_info.get("tag_name").and_then(|v| v.as_str()) {
         Some(tag) => tag,
         None => {
             return Ok(None);

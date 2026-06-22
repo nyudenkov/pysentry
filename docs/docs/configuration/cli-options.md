@@ -30,6 +30,7 @@ Complete reference for all PySentry command line options.
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
 | `--group` | Audit only the named dependency group(s) plus main dependencies (repeatable, comma-separated). Requires a lock file. Conflicts with `--exclude-extra` | `[]` |
+| `--include-scripts` | Also scan PEP 723 Python scripts found under the project directory | `false` |
 | `--direct-only` | Check only direct dependencies | `false` |
 | `--detailed` | Show full vulnerability descriptions (summary + full text) | `false` |
 | `--compact` | Compact output: summary line + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
@@ -100,6 +101,7 @@ Names match by PEP 735 normalization (`--group typing-test` matches a declared `
 | `--forbid-quarantined` | Fail on quarantined packages (malware/compromised) | `true` |
 | `--forbid-unmaintained` | Fail on any unmaintained packages | `false` |
 | `--maintenance-direct-only` | Only check direct dependencies for maintenance status | `false` |
+| `--maintenance-cache-ttl` | Maintenance status cache TTL in hours | `1` |
 
 ## CI Options
 
@@ -209,6 +211,21 @@ pysentry-rs --clear-resolution-cache
 pysentry-rs --cache-dir /tmp/pysentry-cache
 ```
 
+### PEP 723 Scripts
+
+```bash
+# Audit a Python script with inline PEP 723 metadata
+pysentry-rs script.py
+
+# Include PEP 723 scripts when scanning a project directory
+pysentry-rs --include-scripts .
+
+# Audit only pinned script dependencies without invoking a resolver
+pysentry-rs --no-resolver script.py
+```
+
+When `--include-scripts` is used with a directory, PySentry keeps the normal project parser (`uv.lock`, `pyproject.toml`, `requirements.txt`, etc.) and adds dependencies from PEP 723 scripts found under that directory. Human output marks script-origin findings with the script path, for example `direct @ tools/audit.py`.
+
 ### Requirements.txt
 
 ```bash
@@ -263,6 +280,9 @@ pysentry-rs --forbid-unmaintained
 
 # Check only direct dependencies
 pysentry-rs --forbid-unmaintained --maintenance-direct-only
+
+# Cache maintenance status responses for 6 hours
+pysentry-rs --maintenance-cache-ttl 6
 ```
 
 ### CI/CD

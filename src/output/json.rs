@@ -44,6 +44,9 @@ struct JsonReportView<'a> {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::maintenance::{MaintenanceIssue, MaintenanceIssueType};
     use crate::output::model::test_helpers::{create_test_report, create_test_report_with_extras};

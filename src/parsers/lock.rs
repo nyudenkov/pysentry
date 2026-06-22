@@ -81,6 +81,32 @@ struct Dependency {
 
 // PyProject.toml support removed - lock parser now only works with lock file structure
 
+/// Best-effort parent → children edge map from a uv.lock, for transitive-root attribution
+/// (see `parsers::graph`). Edges cover each package's main, optional, and dev dependencies.
+/// A missing or unparseable uv.lock yields an empty map, never an error.
+pub async fn uv_lock_edges(project_dir: &Path) -> HashMap<PackageName, HashSet<PackageName>> {
+    let Ok(content) = tokio::fs::read_to_string(project_dir.join("uv.lock")).await else {
+        return HashMap::new();
+    };
+    let Ok(lock) = UvLockParser::deserialize_lock(&content) else {
+        return HashMap::new();
+    };
+
+    lock.packages
+        .iter()
+        .map(|pkg| {
+            let children = pkg
+                .dependencies
+                .iter()
+                .chain(pkg.optional_dependencies.values().flatten())
+                .chain(pkg.dev_dependencies.values().flatten())
+                .map(|d| PackageName::new(&d.name))
+                .collect();
+            (PackageName::new(&pkg.name), children)
+        })
+        .collect()
+}
+
 /// UV lock file parser
 pub struct UvLockParser {
     groups: Option<HashSet<String>>,
@@ -611,6 +637,9 @@ impl UvLockParser {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -1288,6 +1317,51 @@ prod = ["httpx[my_extra]>=0.27"]
             names.contains("h2"),
             "h2 must resolve via httpx[my_extra] matching the normalized my-extra lock key, got: {names:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_uv_lock_edges_include_main_and_optional() {
+        let lock_content = r#"
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [{ name = "c" }]
+
+[package.optional-dependencies]
+extra = [{ name = "opt" }]
+
+[[package]]
+name = "c"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "opt"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+"#;
+        let (_temp_dir, project_path) = create_test_lock_file(lock_content).await;
+        let edges = uv_lock_edges(&project_path).await;
+
+        assert_eq!(
+            edges.get(&PackageName::new("a")),
+            Some(&HashSet::from([
+                PackageName::new("c"),
+                PackageName::new("opt")
+            ])),
+            "main and optional-dependency edges must both be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_uv_lock_edges_missing_file_is_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let edges = uv_lock_edges(temp_dir.path()).await;
+        assert!(edges.is_empty(), "no uv.lock -> empty map, never an error");
     }
 
     // Regression for bug_006: shared transitives between [project].dependencies and a

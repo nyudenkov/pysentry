@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: MIT
 
 use super::storage::{Cache, CacheBucket, CacheEntry, Freshness};
-use crate::types::{ResolutionCacheEntry, ResolverType};
+use crate::types::{PackageName, ResolutionCacheEntry, ResolverType};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hasher;
+use std::str::FromStr;
 use std::time::Duration;
+
+/// Format version embedded in resolution cache filenames. The cached payload is a
+/// `ResolutionCacheEntry` serialized as JSON; releases with an incompatible shape would
+/// otherwise read each other's files as a silent miss. Versioning the name gives each
+/// format its own file so old and new binaries never collide on a shared cache. Bump this
+/// on any change to `ResolutionCacheEntry`'s serialized form.
+const RESOLUTION_CACHE_FORMAT_VERSION: &str = "v1";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DatabaseMetadata {
@@ -19,6 +27,23 @@ pub struct DatabaseMetadata {
 
 pub struct AuditCache {
     cache: Cache,
+}
+
+/// A bad parse at the current versioned key means a corrupt/old-format file; return it as a
+/// miss so the caller refreshes the entry instead of leaking a raw serde error to the user.
+fn parse_or_miss<T: serde::de::DeserializeOwned>(
+    content: &[u8],
+    path: &std::path::Path,
+    kind: &str,
+    action: &str,
+) -> Option<T> {
+    serde_json::from_slice(content)
+        .map_err(|error| {
+            tracing::warn!(
+                "{kind} cache file {path:?} is in an old/unknown format, will be {action}: {error}"
+            );
+        })
+        .ok()
 }
 
 impl AuditCache {
@@ -61,8 +86,12 @@ impl AuditCache {
             Err(_) => return Ok(None),
         };
 
-        let metadata: DatabaseMetadata = serde_json::from_slice(&content)?;
-        Ok(Some(metadata))
+        Ok(parse_or_miss(
+            &content,
+            entry.path(),
+            "Vulnerability metadata",
+            "re-downloaded",
+        ))
     }
 
     pub async fn write_metadata(&self, metadata: &DatabaseMetadata) -> Result<()> {
@@ -110,7 +139,7 @@ impl AuditCache {
     pub fn resolution_entry(&self, cache_key: &str) -> CacheEntry {
         self.cache.entry(
             CacheBucket::DependencyResolution,
-            &format!("{cache_key}.resolution"),
+            &format!("{cache_key}.{RESOLUTION_CACHE_FORMAT_VERSION}.resolution"),
         )
     }
 
@@ -134,8 +163,12 @@ impl AuditCache {
             Err(_) => return Ok(None),
         };
 
-        let cache_entry: ResolutionCacheEntry = serde_json::from_slice(&content)?;
-        Ok(Some(cache_entry))
+        Ok(parse_or_miss(
+            &content,
+            entry.path(),
+            "Resolution",
+            "re-resolved",
+        ))
     }
 
     pub async fn write_resolution_cache(
@@ -253,10 +286,10 @@ pub struct ResolutionCacheStats {
     pub pip_tools_entries: usize,
 }
 
-/// Normalize package name per PEP 503 for consistent cache keys
-/// https://peps.python.org/pep-0503/#normalized-names
 fn normalize_package_name(name: &str) -> String {
-    name.to_lowercase().replace(['-', '.', '_'], "-")
+    PackageName::from_str(name)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| name.to_lowercase())
 }
 
 impl AuditCache {
@@ -358,6 +391,9 @@ impl Clone for AuditCache {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::types::{ResolvedDependency, ResolverType};
     use std::collections::HashMap;
@@ -405,6 +441,77 @@ mod tests {
             &environment_markers,
         );
         assert_ne!(key1, key3);
+    }
+
+    #[tokio::test]
+    async fn test_resolution_cache_ignores_unversioned_entry() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+
+        let cache_key = "uv-py3.12-linux-x86_64-deadbeef";
+
+        // A pre-versioning release wrote resolution files at "{key}.resolution.cache". Recreate
+        // that old-format file directly and confirm the versioned reader never picks it up.
+        let old_entry = cache.cache.entry(
+            CacheBucket::DependencyResolution,
+            &format!("{cache_key}.resolution"),
+        );
+        old_entry
+            .write(b"{ legacy resolution payload that no longer deserializes }")
+            .await
+            .unwrap();
+        assert!(old_entry.path().exists());
+
+        assert!(cache
+            .read_resolution_cache(cache_key)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(cache.should_refresh_resolution(cache_key, 24).unwrap());
+        assert_ne!(cache.resolution_entry(cache_key).path(), old_entry.path());
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_resolution_cache_is_a_miss_not_an_error() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+
+        let cache_key = "uv-py3.12-linux-x86_64-cafebabe";
+
+        // Corrupt content at the CURRENT versioned path (unlike the unversioned-key test
+        // above). A bad/old-format payload must surface as a cache miss so it gets
+        // re-resolved, never as a raw serde error propagated to the user.
+        let entry = cache.resolution_entry(cache_key);
+        entry.write(b"{ not valid resolution json }").await.unwrap();
+        assert!(entry.path().exists());
+
+        assert!(cache
+            .read_resolution_cache(cache_key)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_database_entry_versioned_key_ignores_old_name() {
+        let temp_dir = tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+
+        // Releases <= 0.4.4 stored a raw ZIP under "pypa-database.cache"; v0.4.5 moved to
+        // JSON under "pypa-v2". Both must stay invisible to the current "pypa-v3" entry
+        // (bumped when PackageName gained full PEP 503 normalization). Writing either old
+        // file must not be read back through the current versioned key.
+        let zip_entry = cache.database_entry("pypa");
+        zip_entry.write(b"PK\x03\x04 old zip bytes").await.unwrap();
+        let v2_entry = cache.database_entry("pypa-v2");
+        v2_entry.write(b"{\"old\": \"json\"}").await.unwrap();
+        assert!(zip_entry.path().exists());
+        assert!(v2_entry.path().exists());
+
+        let versioned_entry = cache.database_entry("pypa-v3");
+        assert_ne!(versioned_entry.path(), zip_entry.path());
+        assert_ne!(versioned_entry.path(), v2_entry.path());
+        assert!(!versioned_entry.path().exists());
     }
 
     #[tokio::test]

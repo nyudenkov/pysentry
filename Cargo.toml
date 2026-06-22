@@ -1,6 +1,6 @@
 [package]
 name = "pysentry"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2021"
 rust-version = "1.79"
 description = "Security vulnerability auditing for Python packages"
@@ -35,7 +35,7 @@ owo-colors = { version = "4.2.3", features = ["supports-colors"] }
 enable-ansi-support = "0.2.1"
 pep440_rs = "0.7.3"
 polycvss = "0.3"
-pyo3 = { version = "0.26.0", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.29.0", features = ["extension-module"], optional = true }
 regex = "1.12.3"
 reqwest = { version = "0.12.28", features = ["json", "stream", "rustls-tls-native-roots"], default-features = false }
 rustc-hash = "2.1.2"
@@ -59,6 +59,10 @@ hotpath = { version = "0.15", optional = true }
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+proptest = "1"
 
 [lints.clippy]
 items_after_statements = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"

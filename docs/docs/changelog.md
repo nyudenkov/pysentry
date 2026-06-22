@@ -4,6 +4,133 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.7 "Hardening"
+
+### ✨ New Features
+
+#### PEP 723 Inline Script Metadata
+
+PySentry can now audit single-file Python scripts that declare dependencies using PEP 723 inline metadata:
+
+```python
+# /// script
+# dependencies = [
+#   "requests==2.31.0",
+#   "click==8.1.7",
+# ]
+# ///
+```
+
+Run PySentry directly against the script:
+
+```bash
+pysentry-rs script.py
+```
+
+Pinned dependencies are audited directly under `--no-resolver`; unpinned dependencies are resolved through the configured resolver when resolution is enabled. This makes PySentry work with modern `uv run script.py` style workflows without requiring a separate project directory.
+
+Directory scans can also include PEP 723 scripts with `--include-scripts` or `[defaults] include_scripts = true`. Script-origin findings are marked with the script path in human output, for example `direct @ tools/audit.py`.
+
+#### Transitive Findings Show Their Top-Level Dependency
+
+Human output now explains why a vulnerable transitive package is present by showing the top-level dependency that pulled it in:
+
+```text
+urllib3 2.0.0 [transitive] (via requests)
+```
+
+For packages reachable from multiple direct dependencies, PySentry lists up to three roots and summarizes the rest. This is display-only context; it does not change matching, filtering, or exit-code behavior.
+
+Supported lock formats are `uv.lock`, `poetry.lock`, and `pylock.toml` / `pylock.<name>.toml`. Formats without dependency edges, such as `Pipfile.lock` and resolved `requirements.txt`, continue to render as before.
+
+#### Maintenance Cache TTL
+
+PEP 792 maintenance status checks now have a configurable cache TTL:
+
+```bash
+pysentry-rs --maintenance-cache-ttl 6
+```
+
+```toml
+# .pysentry.toml
+[maintenance]
+cache_ttl = 6
+```
+
+The default remains 1 hour. This is useful in CI environments that want fewer Simple API requests while still keeping archived, deprecated, and quarantined package status reasonably fresh.
+
+### 🔧 Improvements
+
+#### Alias-Aware Ignores and Unmatched Ignore Warnings
+
+`--ignore` and `--ignore-while-no-fix` now match both the advisory's primary ID and its aliases. Ignoring a CVE now works even when the provider's canonical advisory ID is a GHSA or PYSEC ID:
+
+```bash
+pysentry-rs --ignore CVE-2024-12345
+```
+
+PySentry also logs a warning when an ignore ID did not match any advisory during the run. This catches typoed suppressions that previously looked active but did nothing.
+
+#### Unknown Config Fields Are Rejected
+
+Configuration files now reject unknown keys instead of silently ignoring them. A typo like `formatt = "json"` now fails validation rather than leaving `format` at its default.
+
+This applies to `.pysentry.toml` and `[tool.pysentry]` in `pyproject.toml`.
+
+#### Friendlier Cache and Database Download Errors
+
+Cache-format mismatches and failed advisory database downloads now surface clearer error messages with better context. PySentry no longer leaks low-level ZIP or serde errors in places where the actionable problem is stale cache data or a provider download failure.
+
+#### Stricter Internal Safety Checks
+
+The codebase now enforces clippy lints for production `unwrap`, `expect`, and indexing usage. Existing intentional exceptions are documented with invariants. This does not change CLI behavior, but it reduces the chance that malformed project data or provider data can crash the binary.
+
+### 🐛 Bug Fixes
+
+#### OSV `affected.versions` Advisories Were Missed
+
+Some OSV advisories enumerate affected releases in `affected.versions` instead of, or in addition to, range events. PySentry previously ignored that field, so single-source OSV scans could miss advisories whose affected versions were listed explicitly.
+
+PySentry now converts every explicit OSV affected version into an exact inclusive range, so those advisories match correctly.
+
+:::warning
+If you run PySentry with `--sources osv`, affected findings may have been missing from previous reports. Re-run your audit on this release.
+:::
+
+#### PyPI Advisories Without Usable Fix Ranges Were Missed
+
+The PyPI JSON API returns vulnerabilities for the specific package version being queried. When PyPI returned an advisory with no usable `fixed_in` value, PySentry emitted no affected range, and the matcher treated the advisory as not affecting the installed version.
+
+PySentry now trusts PyPI's per-version response and emits a match-all range for these advisories, preventing them from being silently dropped.
+
+#### PyPI Multi-Branch Fixes Dropped Later Affected Branches
+
+PyPI advisories can list multiple fixed versions for different release branches. PySentry previously used only the first fixed version, which could miss vulnerabilities in a later branch, such as a package fixed in both `2.31.1` and `3.0.2` while `3.0.1` remained vulnerable.
+
+PySentry now emits one affected range per fixed version, preserving multi-branch fix semantics.
+
+#### PEP 503 Package Name Normalization
+
+Package names are now normalized using the full PEP 503 rule: lowercase and collapse every run of `-`, `_`, and `.` to a single `-`. This fixes dotted-name mismatches such as `zope.interface`, `Zope_Interface`, and `zope-interface` referring to the same package.
+
+The PyPA advisory cache key was bumped to `pypa-v3` because cached package indexes serialized with the old normalization could miss dotted packages.
+
+#### Provider Cache Keys Versioned for v0.4.7 Conversions
+
+The OSV and PyPI provider caches now use versioned keys for the v0.4.7 conversion changes. Old cache files deserialize successfully but lack the new exact, wildcard, and multi-branch ranges, so reusing them would preserve the false negatives fixed in this release.
+
+PySentry now writes fresh provider cache entries under new prefixes and ignores the old unversioned entries.
+
+#### Resolution Cache Key Versioning
+
+Dependency resolution cache files now include a format version in their filename. This prevents future serialized payload changes from colliding with older binaries or older cache entries.
+
+---
+
+**Full Changelog**: https://github.com/nyudenkov/pysentry/compare/v0.4.6...v0.4.7
+
+---
+
 ## v0.4.6
 
 ### ✨ New Features

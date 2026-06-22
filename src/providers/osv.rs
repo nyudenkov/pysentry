@@ -184,7 +184,7 @@ impl OsvSource {
         }
     }
 
-    /// Get cache entry for OSV batch with package-specific key
+    /// Get cache entry for OSV batch with package-specific key.
     fn cache_entry(&self, packages: &[(String, String)]) -> CacheEntry {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -197,7 +197,11 @@ impl OsvSource {
         }
         let package_hash = hasher.finish();
 
-        self.cache.database_entry(&format!("osv-{package_hash:x}"))
+        // -v2: v0.4.7 started converting OSV affected.versions into exact ranges. Old
+        // cache files deserialize successfully but lack those ranges, preserving the
+        // false negative this release fixes.
+        self.cache
+            .database_entry(&format!("osv-v2-{package_hash:x}"))
     }
 
     /// Convert OSV advisory to internal vulnerability format for a specific package
@@ -211,7 +215,9 @@ impl OsvSource {
 
         let (severity, cvss_score, cvss_version) = Self::map_osv_severity(advisory);
 
-        let target_normalized = target_package.to_lowercase().replace(['-', '_', '.'], "-");
+        // PEP 503 normalization lives centrally in PackageName::new (lowercase +
+        // collapse `[-_.]+` runs to `-`); compare via PackageName, never raw strings.
+        let target_normalized = crate::types::PackageName::new(target_package);
 
         let mut affected_versions = Vec::new();
         let mut fixed_versions = Vec::new();
@@ -220,15 +226,12 @@ impl OsvSource {
             if affected.package.ecosystem != "PyPI" {
                 continue;
             }
-            let pkg_normalized = affected
-                .package
-                .name
-                .to_lowercase()
-                .replace(['-', '_', '.'], "-");
+            let pkg_normalized = crate::types::PackageName::new(&affected.package.name);
             if pkg_normalized != target_normalized {
                 continue;
             }
             affected_versions.extend(Self::extract_osv_ranges(affected));
+            affected_versions.extend(Self::extract_explicit_versions(affected));
             fixed_versions.extend(Self::extract_fixed_versions(affected));
         }
 
@@ -354,6 +357,29 @@ impl OsvSource {
         }
 
         ranges
+    }
+
+    /// Extract exact affected versions from an OSV `affected.versions` list.
+    ///
+    /// OSV enumerates discrete affected versions here independently of `ranges`.
+    /// A version listed in `versions` is affected even when `ranges` is empty or
+    /// fails to cover it, so each entry becomes a single-version inclusive range.
+    fn extract_explicit_versions(affected: &OsvAffected) -> Vec<VersionRange> {
+        let Some(versions) = &affected.versions else {
+            return vec![];
+        };
+
+        versions
+            .iter()
+            .filter_map(|raw| {
+                Version::from_str(raw).ok().map(|version| VersionRange {
+                    constraint: format!("=={version}"),
+                    min: Some(version.clone()),
+                    max: Some(version),
+                    max_inclusive: true,
+                })
+            })
+            .collect()
     }
 
     /// Extract fixed versions from OSV affected entry
@@ -797,6 +823,8 @@ impl VulnerabilityProvider for OsvSource {
         // Create progress bar for batch queries if enabled
         let batch_pb = if self.http_config.show_progress && total_batches > 1 {
             let bar = ProgressBar::new(total_batches as u64);
+            // invariant: the template string is a compile-time constant known to be valid.
+            #[allow(clippy::unwrap_used)]
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} batches")
@@ -876,6 +904,8 @@ impl VulnerabilityProvider for OsvSource {
         // Create progress bar for vulnerability details if enabled
         let details_pb = if self.http_config.show_progress && all_vulnerability_ids.len() > 1 {
             let bar = ProgressBar::new(all_vulnerability_ids.len() as u64);
+            // invariant: the template string is a compile-time constant known to be valid.
+            #[allow(clippy::unwrap_used)]
             bar.set_style(
                 ProgressStyle::default_bar()
                     .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} vulnerabilities ({eta})")
@@ -1044,6 +1074,9 @@ struct OsvLightweightVuln {
 
 #[cfg(test)]
 mod tests {
+    // Indexing into fixtures/parsed results is the norm in tests; a panic on a
+    // bad index is an acceptable test failure.
+    #![allow(clippy::indexing_slicing)]
     use super::*;
 
     #[test]
@@ -1573,6 +1606,103 @@ mod tests {
     }
 
     #[test]
+    fn test_explicit_versions_matched_when_ranges_empty() {
+        // OSV record with no ranges but an explicit affected version list.
+        // Without honoring `versions`, this advisory would be silently dropped
+        // (convert returns None on empty affected + fixed), a false negative.
+        let advisory = OsvAdvisory {
+            id: "PYSEC-EXPLICIT".to_string(),
+            summary: Some("Explicit versions only".to_string()),
+            details: None,
+            affected: vec![OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "test-package".to_string(),
+                    purl: None,
+                },
+                ranges: vec![],
+                versions: Some(vec!["1.2.3".to_string(), "1.2.4".to_string()]),
+                database_specific: None,
+                ecosystem_specific: None,
+            }],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let vuln = OsvSource::convert_osv_vulnerability(&advisory, "test-package").unwrap();
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.2.3").unwrap())));
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.2.4").unwrap())));
+        // A version not listed must not match the single-version ranges.
+        assert!(!vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.2.5").unwrap())));
+    }
+
+    #[test]
+    fn test_explicit_versions_supplement_incomplete_ranges() {
+        // A range covering <1.0.0 plus an explicit 2.0.0 listing: the explicit
+        // version must be matched even though it falls outside the range.
+        let advisory = OsvAdvisory {
+            id: "PYSEC-SUPPLEMENT".to_string(),
+            summary: Some("Range plus explicit version".to_string()),
+            details: None,
+            affected: vec![OsvAffected {
+                package: OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "test-package".to_string(),
+                    purl: None,
+                },
+                ranges: vec![OsvRange {
+                    range_type: "ECOSYSTEM".to_string(),
+                    repo: None,
+                    events: vec![OsvEvent {
+                        introduced: Some("0".to_string()),
+                        fixed: Some("1.0.0".to_string()),
+                        last_affected: None,
+                        limit: None,
+                    }],
+                    database_specific: None,
+                }],
+                versions: Some(vec!["2.0.0".to_string()]),
+                database_specific: None,
+                ecosystem_specific: None,
+            }],
+            references: vec![],
+            severity: vec![],
+            published: None,
+            modified: None,
+            database_specific: None,
+            aliases: vec![],
+        };
+
+        let vuln = OsvSource::convert_osv_vulnerability(&advisory, "test-package").unwrap();
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("0.5.0").unwrap())));
+        assert!(vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("2.0.0").unwrap())));
+        // 1.5.0 is neither in <1.0.0 nor an explicit version.
+        assert!(!vuln
+            .affected_versions
+            .iter()
+            .any(|range| range.contains(&Version::from_str("1.5.0").unwrap())));
+    }
+
+    #[test]
     fn test_should_cache_empty_db_with_expected_vulns() {
         let db = VulnerabilityDatabase::new();
         assert!(
@@ -1618,5 +1748,35 @@ mod tests {
     fn test_should_cache_respects_no_cache() {
         let db = VulnerabilityDatabase::new();
         assert!(!OsvSource::should_cache_result(&db, 0, true));
+    }
+
+    #[test]
+    fn test_cache_entry_versioned_key_ignores_old_name() {
+        use std::hash::{Hash, Hasher};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cache = AuditCache::new(temp_dir.path().to_path_buf());
+        let source = OsvSource::new(
+            cache.clone(),
+            false,
+            crate::config::HttpConfig::default(),
+            48,
+        );
+        let packages = vec![("django".to_string(), "4.2.0".to_string())];
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for (name, version) in &packages {
+            name.hash(&mut hasher);
+            version.hash(&mut hasher);
+        }
+        let old_entry = cache.database_entry(&format!("osv-{:x}", hasher.finish()));
+        if let Some(parent) = old_entry.path().parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(old_entry.path(), b"old osv payload").unwrap();
+
+        let versioned_entry = source.cache_entry(&packages);
+        assert_ne!(versioned_entry.path(), old_entry.path());
+        assert!(!versioned_entry.path().exists());
     }
 }

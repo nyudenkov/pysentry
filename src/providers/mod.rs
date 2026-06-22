@@ -69,6 +69,8 @@ fn extract_best_cvss_score<'a>(
 
     tagged.sort_by_key(|b| std::cmp::Reverse(b.0));
 
+    // invariant: emptiness checked above, so index 0 always exists.
+    #[allow(clippy::indexing_slicing)]
     let mut current_version = tagged[0].0;
     let mut best_score: Option<f32> = None;
     let mut best_version: u8 = 0;

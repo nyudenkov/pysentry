@@ -6,8 +6,10 @@ use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
 
+pub mod graph;
 pub mod lock;
 pub mod manifest_reader;
+pub mod pep723;
 pub mod pipfile;
 pub mod pipfile_lock;
 pub mod poetry_lock;
@@ -171,6 +173,7 @@ impl ParserRegistry {
                     Box::new(pyproject::PyProjectParser::new(Some(resolver_type))),
                     Box::new(pipfile::PipfileParser::new(Some(resolver_type))),
                     Box::new(requirements::RequirementsParser::new(Some(resolver_type))),
+                    Box::new(pep723::Pep723Parser::new(Some(resolver_type))),
                 ];
                 Self { parsers }
             }
@@ -183,6 +186,7 @@ impl ParserRegistry {
                     Box::new(pyproject::PyProjectParser::new(None)),
                     Box::new(pipfile::PipfileParser::new(None)),
                     Box::new(requirements::RequirementsParser::new(None)),
+                    Box::new(pep723::Pep723Parser::new(None)),
                 ];
                 Self { parsers }
             }
@@ -213,6 +217,8 @@ impl ParserRegistry {
         compatible_parsers.sort_by_key(|parser| parser.priority());
 
         // Use the highest priority parser
+        // invariant: emptiness checked above, so index 0 always exists.
+        #[allow(clippy::indexing_slicing)]
         let parser = compatible_parsers[0];
         let parser_name = parser.name();
 

@@ -96,6 +96,13 @@ jobs:
             - Performance considerations
             - Security concerns
             - Test coverage
+            - Cross-File Invariants: for every row of the table in CLAUDE.md
+              ("Cross-File Invariants"), check whether this diff touches the
+              left-column trigger and, if so, confirm the required middle-column
+              follow-up was done (e.g. main.rs dispatch mirrored in python.rs,
+              cached-payload format change paired with a version-marker bump,
+              new user-facing option wired through BOTH cli.rs and merge.rs).
+              Flag any row that fired without its follow-up.
 
             Use the repository's CLAUDE.md for guidance on style and conventions. Be constructive and helpful in your feedback.
 

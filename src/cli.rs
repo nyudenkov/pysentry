@@ -259,6 +259,10 @@ pub struct AuditArgs {
     #[arg(long)]
     pub maintenance_direct_only: bool,
 
+    /// Maintenance status cache TTL in hours (default: 1)
+    #[arg(long, value_name = "HOURS", default_value = "1")]
+    pub maintenance_cache_ttl: u64,
+
     /// Don't fail on vulnerabilities with unknown level
     #[arg(long)]
     pub no_fail_on_unknown: bool,
@@ -281,6 +285,10 @@ pub struct AuditArgs {
         conflicts_with = "exclude_extra"
     )]
     pub groups: Vec<String>,
+
+    /// Also scan PEP 723 Python scripts found under the project directory
+    #[arg(long)]
+    pub include_scripts: bool,
 }
 
 impl AuditArgs {
@@ -654,5 +662,11 @@ mod tests {
     fn test_group_conflicts_with_exclude_extra() {
         let result = Cli::try_parse_from(["pysentry", "--group", "polars", "--exclude-extra", "."]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_include_scripts_flag_parsed() {
+        let args = parse_audit_args(&["--include-scripts", "."]);
+        assert!(args.include_scripts);
     }
 }

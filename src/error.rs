@@ -11,7 +11,7 @@ pub enum AuditError {
     #[error("No dependency information found. Generate a lock file (uv.lock, poetry.lock, Pipfile.lock, pylock.toml) or add pyproject.toml/requirements.txt")]
     NoDependencyInfo,
 
-    #[error("Failed to download vulnerability database: {0}")]
+    #[error("Failed to download vulnerability database (network/provider error): {0}. Check your network connection and retry")]
     DatabaseDownload(Box<dyn std::error::Error + Send + Sync>),
 
     #[error("Failed to download {resource} from {url}: {source}")]
