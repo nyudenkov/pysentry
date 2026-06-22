@@ -750,6 +750,10 @@ async fn scan_pep723_scripts(
             .await?;
         parsed_scripts += 1;
 
+        // Intentionally overrides Pep723Parser's basename-only source_file with the
+        // project-relative path: a script discovered under a tree wants `tools/x.py`,
+        // not `x.py`. A directly-pointed script (no project_dir context) keeps the
+        // parser's basename, so the two entry paths differ by design.
         let source_file = script
             .strip_prefix(project_dir)
             .unwrap_or(&script)
