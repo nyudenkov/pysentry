@@ -222,7 +222,10 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
         python:
-          ["3.9", "3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "3.14t"]
+          # No 3.13t: PyO3 free-threaded support requires CPython 3.14+ (stable
+          # free-threaded ABI). maturin fails on 3.13t with "Free-threaded Python
+          # interpreter is only supported on 3.14 and later." 3.13t users get the sdist.
+          ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
     steps:
       - uses: actions/checkout@v4
 

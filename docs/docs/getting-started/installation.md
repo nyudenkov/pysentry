@@ -93,6 +93,10 @@ The binary will be available at `target/release/pysentry`.
 
 **Supported Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13, 3.14
 
+:::note Free-threaded Python
+Prebuilt wheels are available for free-threaded **3.14t**, but not **3.13t** — PyO3's free-threaded support requires CPython 3.14 or later. On 3.13t, pip falls back to the source distribution (a Rust toolchain is required to build it).
+:::
+
 **Supported Architectures**: x86_64 (x64), ARM64 (aarch64)
 
 ## CLI Command Names
