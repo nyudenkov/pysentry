@@ -1,0 +1,9 @@
+[advisories]
+ignore = [
+    # proc-macro-error2 unmaintained. Transitive via tabled_derive -> tabled.
+    # Build-time only proc-macro dep; no runtime exposure.
+    "RUSTSEC-2026-0173",
+    # rand unsound only when a custom logger calls rand::rng() — not our usage.
+    # Transitive via reqwest's quinn-proto and via proptest (dev/test).
+    "RUSTSEC-2026-0097",
+]
