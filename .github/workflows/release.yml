@@ -141,6 +141,12 @@ jobs:
       - name: List downloaded files
         run: ls -la binaries/
 
+      - name: Generate SHA256SUMS
+        run: |
+          cd binaries
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
         with:

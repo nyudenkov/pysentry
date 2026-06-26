@@ -365,9 +365,16 @@ impl ConfigLoader {
     /// Returns the path, source type, and optionally the pre-parsed config (for pyproject.toml).
     fn discover_config_file_with_cache() -> Result<Option<(PathBuf, ConfigSource, Option<Config>)>>
     {
-        if let Ok(current_dir) = std::env::current_dir() {
-            let mut dir = current_dir.as_path();
+        let current_dir = std::env::current_dir().ok();
+        Self::discover_config_file_with_cache_in(current_dir.as_deref())
+    }
 
+    /// Walk from `start_dir` instead of the process CWD - lets tests avoid
+    /// mutating global CWD, which races under parallel `cargo test`.
+    fn discover_config_file_with_cache_in(
+        start_dir: Option<&Path>,
+    ) -> Result<Option<(PathBuf, ConfigSource, Option<Config>)>> {
+        if let Some(mut dir) = start_dir {
             loop {
                 // Check .pysentry.toml first (highest priority)
                 let pysentry_toml = dir.join(".pysentry.toml");
@@ -436,6 +443,14 @@ impl ConfigLoader {
     /// Discover configuration file from the hierarchy (public API).
     pub fn discover_config_file() -> Result<Option<(PathBuf, ConfigSource)>> {
         Self::discover_config_file_with_cache()
+            .map(|opt| opt.map(|(path, source, _)| (path, source)))
+    }
+
+    /// Test-only base-dir variant of `discover_config_file`. Still falls through
+    /// to user/system config if `base` has none; callers create one under `base`.
+    #[cfg(test)]
+    fn discover_config_file_in(base: &Path) -> Result<Option<(PathBuf, ConfigSource)>> {
+        Self::discover_config_file_with_cache_in(Some(base))
             .map(|opt| opt.map(|(path, source, _)| (path, source)))
     }
 
@@ -1117,14 +1132,7 @@ format = "sarif"
         )
         .unwrap();
 
-        // Save and change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = ConfigLoader::discover_config_file();
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        let result = ConfigLoader::discover_config_file_in(temp_dir.path());
 
         // Verify .pysentry.toml is chosen (format = "json")
         let (path, source) = result.unwrap().unwrap();
@@ -1179,14 +1187,7 @@ format = "sarif"
         )
         .unwrap();
 
-        // Save and change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = ConfigLoader::discover_config_file();
-
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        let result = ConfigLoader::discover_config_file_in(temp_dir.path());
 
         // Verify pyproject.toml is chosen
         let (path, source) = result.unwrap().unwrap();
@@ -1257,12 +1258,7 @@ format = "json"
         )
         .unwrap();
 
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = ConfigLoader::discover_config_file();
-
-        std::env::set_current_dir(original_dir).unwrap();
+        let result = ConfigLoader::discover_config_file_in(temp_dir.path());
 
         let (path, source) = result.unwrap().unwrap();
         assert_eq!(source, ConfigSource::PyProjectToml);

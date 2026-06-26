@@ -7,7 +7,7 @@
 
 use crate::cache::AuditCache;
 use crate::config::HttpConfig;
-use crate::dependency::scanner::ScannedDependency;
+use crate::dependency::scanner::{DependencySource, ScannedDependency};
 use crate::providers::retry::{is_http_error_retryable, retry_with_backoff};
 use crate::{AuditError, Result};
 
@@ -85,12 +85,7 @@ impl SimpleIndexClient {
             dependencies.len()
         );
 
-        // Filter dependencies if check_direct_only is set
-        let deps_to_check: Vec<_> = if config.check_direct_only {
-            dependencies.iter().filter(|d| d.is_direct).collect()
-        } else {
-            dependencies.iter().collect()
-        };
+        let deps_to_check = select_deps_to_check(dependencies, config);
 
         if deps_to_check.is_empty() {
             debug!("No dependencies to check for maintenance status");
@@ -284,6 +279,22 @@ impl SimpleIndexClient {
     }
 }
 
+/// Select which dependencies to query for PEP 792 status.
+///
+/// Skips non-Registry deps (Git/Path/Url): they don't exist on PyPI, so a query
+/// wastes a request and a name-collision with a real PyPI project would yield a
+/// false "archived/quarantined" result for a package that isn't that project.
+fn select_deps_to_check<'a>(
+    dependencies: &'a [ScannedDependency],
+    config: &MaintenanceCheckConfig,
+) -> Vec<&'a ScannedDependency> {
+    dependencies
+        .iter()
+        .filter(|d| !config.check_direct_only || d.is_direct)
+        .filter(|d| matches!(d.source, DependencySource::Registry))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +382,55 @@ mod tests {
         let issue = client.create_issue_if_needed(&dep, &status);
 
         assert!(issue.is_none());
+    }
+
+    fn dep_with_source(name: &str, source: DependencySource, is_direct: bool) -> ScannedDependency {
+        ScannedDependency {
+            name: PackageName::from_str(name).unwrap(),
+            version: Version::from_str("1.0.0").unwrap(),
+            is_direct,
+            source,
+            path: None,
+            source_file: None,
+        }
+    }
+
+    #[test]
+    fn test_select_deps_to_check_filters_source_and_direct() {
+        let deps = vec![
+            dep_with_source("reg-direct", DependencySource::Registry, true),
+            dep_with_source("reg-transitive", DependencySource::Registry, false),
+            dep_with_source("path-direct", DependencySource::Path, true),
+            dep_with_source(
+                "git-direct",
+                DependencySource::Git {
+                    url: "https://example.com/repo.git".to_string(),
+                    rev: None,
+                },
+                true,
+            ),
+            dep_with_source(
+                "url-direct",
+                DependencySource::Url("https://example.com/pkg.whl".to_string()),
+                true,
+            ),
+        ];
+
+        let names = |config: &MaintenanceCheckConfig| -> Vec<String> {
+            select_deps_to_check(&deps, config)
+                .iter()
+                .map(|d| d.name.to_string())
+                .collect()
+        };
+
+        // Non-Registry deps are always skipped; check_direct_only narrows further.
+        let all = names(&MaintenanceCheckConfig::default());
+        assert_eq!(all, vec!["reg-direct", "reg-transitive"]);
+
+        let direct_only = names(&MaintenanceCheckConfig {
+            check_direct_only: true,
+            ..Default::default()
+        });
+        assert_eq!(direct_only, vec!["reg-direct"]);
     }
 }
