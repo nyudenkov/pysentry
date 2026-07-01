@@ -1,12 +1,58 @@
 <svg width="160" height="160" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M20 80C20 80 45 40 80 40C115 40 140 80 140 80C140 80 115 120 80 120C45 120 20 80 20 80Z" fill="#0a1a0a" stroke="#4CAF50" stroke-width="2.5"/>
-  <circle cx="80" cy="80" r="28" fill="#0f240f" stroke="#4CAF50" stroke-width="2"/>
-  <circle cx="80" cy="80" r="14" fill="#4CAF50"/>
-  <circle cx="75" cy="75" r="4.5" fill="#81C784" opacity="0.5"/>
-  <line x1="20" y1="80" x2="52" y2="80" stroke="#4CAF50" stroke-width="1" opacity="0.2"/>
-  <line x1="108" y1="80" x2="140" y2="80" stroke="#4CAF50" stroke-width="1" opacity="0.2"/>
-  <path d="M28 52L28 42L38 42" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.4"/>
-  <path d="M132 52L132 42L122 42" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.4"/>
-  <path d="M28 108L28 118L38 118" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.4"/>
-  <path d="M132 108L132 118L122 118" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.4"/>
+  <defs>
+    <radialGradient id="iris" cx="0.42" cy="0.38" r="0.75">
+      <stop offset="0%" stop-color="#81C784"/>
+      <stop offset="55%" stop-color="#4CAF50"/>
+      <stop offset="100%" stop-color="#2E7D32"/>
+    </radialGradient>
+    <radialGradient id="sclera" cx="0.5" cy="0.5" r="0.65">
+      <stop offset="0%" stop-color="#122b12"/>
+      <stop offset="100%" stop-color="#081408"/>
+    </radialGradient>
+    <linearGradient id="lid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d200d"/>
+      <stop offset="100%" stop-color="#071007"/>
+    </linearGradient>
+  </defs>
+
+  <!-- eye shape -->
+  <path d="M20 80C20 80 45 40 80 40C115 40 140 80 140 80C140 80 115 120 80 120C45 120 20 80 20 80Z" fill="url(#lid)" stroke="#4CAF50" stroke-width="2.5"/>
+  <!-- inner lid rim -->
+  <path d="M27 80C27 80 49 47 80 47C111 47 133 80 133 80C133 80 111 113 80 113C49 113 27 80 27 80Z" stroke="#4CAF50" stroke-width="0.75" opacity="0.25" fill="none"/>
+
+  <!-- sclera + iris -->
+  <circle cx="80" cy="80" r="28" fill="url(#sclera)" stroke="#4CAF50" stroke-width="2"/>
+  <circle cx="80" cy="80" r="15" fill="url(#iris)"/>
+  <!-- iris texture: radial spokes -->
+  <g stroke="#0f240f" stroke-width="0.8" opacity="0.45">
+    <line x1="80" y1="66" x2="80" y2="70"/>
+    <line x1="80" y1="90" x2="80" y2="94"/>
+    <line x1="66" y1="80" x2="70" y2="80"/>
+    <line x1="90" y1="80" x2="94" y2="80"/>
+    <line x1="70.1" y1="70.1" x2="72.9" y2="72.9"/>
+    <line x1="87.1" y1="87.1" x2="89.9" y2="89.9"/>
+    <line x1="70.1" y1="89.9" x2="72.9" y2="87.1"/>
+    <line x1="87.1" y1="72.9" x2="89.9" y2="70.1"/>
+  </g>
+
+  <!-- pupil -->
+  <circle cx="80" cy="80" r="7" fill="#06180a"/>
+  <!-- highlights -->
+  <circle cx="74.5" cy="73.5" r="3.6" fill="#C8E6C9" opacity="0.55"/>
+  <circle cx="86" cy="87" r="1.6" fill="#C8E6C9" opacity="0.3"/>
+
+  <!-- scanner ring with ticks -->
+  <circle cx="80" cy="80" r="22" stroke="#4CAF50" stroke-width="1" opacity="0.35" stroke-dasharray="3.5 5.1" fill="none"/>
+
+  <!-- horizontal scan guides -->
+  <line x1="20" y1="80" x2="50" y2="80" stroke="#4CAF50" stroke-width="1" opacity="0.2"/>
+  <line x1="110" y1="80" x2="140" y2="80" stroke="#4CAF50" stroke-width="1" opacity="0.2"/>
+  <circle cx="50" cy="80" r="1.3" fill="#4CAF50" opacity="0.4"/>
+  <circle cx="110" cy="80" r="1.3" fill="#4CAF50" opacity="0.4"/>
+
+  <!-- viewfinder brackets -->
+  <path d="M28 52L28 42L38 42" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <path d="M132 52L132 42L122 42" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <path d="M28 108L28 118L38 118" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <path d="M132 108L132 118L122 118" stroke="#4CAF50" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.5"/>
 </svg>
