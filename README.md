@@ -4,76 +4,72 @@
 
 # PySentry
 
-**A fast and reliable security vulnerability scanner for Python projects.**
+**Fast, reliable vulnerability scanning for Python dependencies.**
 
-[![PyPI Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
+[![CI](https://github.com/nyudenkov/pysentry/actions/workflows/ci.yml/badge.svg)](https://github.com/nyudenkov/pysentry/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pysentry-rs)](https://pypi.org/project/pysentry-rs/)
+[![crates.io](https://img.shields.io/crates/v/pysentry)](https://crates.io/crates/pysentry)
+[![Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
 
-[Help to test and improve](https://github.com/nyudenkov/pysentry/issues/12) · [Participate in pysentry usage survey](https://tally.so/r/mYNPNv)
+[**Documentation**](https://docs.pysentry.com) · [**Benchmarks**](benchmarks/results/) · [Help test & improve](https://github.com/nyudenkov/pysentry/issues/12) · [Usage survey](https://tally.so/r/mYNPNv)
 
 </div>
 
-PySentry scans Python projects for known security vulnerabilities by reading your dependency files and cross-referencing them against multiple vulnerability databases.
+PySentry audits Python projects for known security vulnerabilities. It reads your lock file or manifest, resolves the full dependency tree, and checks every package against three vulnerability databases — then reports what is affected, how severe it is, and the upgrade that fixes it.
 
-**[Documentation](https://docs.pysentry.com)** · **[Benchmarks](benchmarks/results/)** · **[Buy Me a Coffee](https://buymeacoffee.com/nyudenkov)**
+![PySentry scanning a project and reporting vulnerabilities](assets/demo.gif)
 
 ## Features
 
-- **Multiple file formats** — reads `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, and `requirements.txt`
-- **Three vulnerability databases** — PyPA Advisory Database, PyPI JSON API, and OSV.dev, all queried by default
-- **PEP 792 support** — detects archived, deprecated, and quarantined packages, and can block quarantined ones
-- **Multiple output formats** — human-readable, JSON, SARIF, and Markdown
-- **Fast** — a Rust core with async fetching and local caching
+- **Every dependency format** — `uv.lock`, `poetry.lock`, `Pipfile.lock`, `pylock.toml`, `pyproject.toml`, `Pipfile`, `requirements.txt`, and PEP 723 inline script metadata. Lock files take precedence when both are present.
+- **Three databases, one report** — PyPA Advisory Database, PyPI JSON API, and OSV.dev, queried concurrently with results merged and de-duplicated.
+- **Tree-aware findings** — distinguishes direct from transitive dependencies and names the top-level package that pulls a vulnerable one in.
+- **PEP 792 lifecycle checks** — flags archived, deprecated, and quarantined packages; `--forbid-quarantined` turns known malware into a failing build.
+- **Built for CI** — human, JSON, SARIF, and Markdown output; `--fail-on` sets the exit threshold without hiding lower-severity findings.
+- **Fast** — a Rust core with async fetching and local caching. See the [benchmarks](benchmarks/results/).
 
 ## Used by
 
-PySentry runs in CI pipelines at projects like:
-
-- [Genkit](https://github.com/genkit-ai/genkit) (Google)
-- [OVD-Info](https://ovd.info/en)
-- [activist.org](https://activist.org)
+PySentry runs in CI pipelines at [Genkit](https://github.com/genkit-ai/genkit) (Google), [OVD-Info](https://ovd.info/en), and [activist.org](https://activist.org), among others.
 
 ## Installation
 
 ```bash
-# Using uvx (recommended)
-uvx pysentry-rs /path/to/project
+# Run without installing (recommended)
+uvx pysentry-rs
 
-# Using pip
-pip install pysentry-rs
-
-# Using cargo
-cargo install pysentry
-
-# Pre-built binaries available at GitHub Releases
+# Or install permanently
+pip install pysentry-rs    # PyPI
+cargo install pysentry     # crates.io
 ```
 
-See [Installation Guide](https://docs.pysentry.com/getting-started/installation) for all options.
+Pre-built binaries are attached to [GitHub Releases](https://github.com/nyudenkov/pysentry/releases). See the [installation guide](https://docs.pysentry.com/getting-started/installation) for all options.
 
-## Quick Start
+> **Naming:** the Python package installs the binary as `pysentry-rs`; the Rust crate and release binaries are plain `pysentry`. Examples below use `pysentry-rs` — substitute accordingly.
 
-> **Note:** Examples use `pysentry-rs`. If you installed via `cargo install pysentry` or a binary release, replace it with `pysentry` throughout.
+## Quick start
 
 ```bash
-# Scan current directory
+# Scan the current directory
 pysentry-rs
 
-# Scan specific project
+# Scan another project
 pysentry-rs /path/to/project
 
-# Filter by severity
+# Report only high and critical findings
 pysentry-rs --severity high
 
-# Output to JSON
-pysentry-rs --format json --output report.json
-
-# Fail on critical vulnerabilities only
+# Exit non-zero only for critical findings
 pysentry-rs --fail-on critical
 
-# Block quarantined packages (malware protection)
+# Write a SARIF report for GitHub code scanning
+pysentry-rs --format sarif --output results.sarif
+
+# Refuse quarantined (malicious) packages
 pysentry-rs --forbid-quarantined
 ```
 
-See [Quickstart Guide](https://docs.pysentry.com/getting-started/quickstart) for more examples.
+More examples in the [quickstart guide](https://docs.pysentry.com/getting-started/quickstart).
 
 ## Pre-commit
 
@@ -83,16 +79,14 @@ repos:
     rev: v0.4.7
     hooks:
       - id: pysentry
-        # Use compact mode for minimal pre-commit output
-        # args: ['--compact']
+        # args: ['--compact']  # terser output for hook runs
 ```
 
 ## Configuration
 
-PySentry supports TOML configuration via `.pysentry.toml` or `pyproject.toml`:
+Project defaults live in `.pysentry.toml` or `pyproject.toml`; CLI flags always take precedence:
 
 ```toml
-# .pysentry.toml
 version = 1
 
 [defaults]
@@ -106,30 +100,34 @@ enabled = ["pypa", "osv"]
 ids = ["CVE-2023-12345"]
 ```
 
-See [Configuration Guide](https://docs.pysentry.com/configuration/config-files) for all options.
+All options are covered in the [configuration guide](https://docs.pysentry.com/configuration/config-files).
 
 ## Documentation
 
-Full documentation is available at **[docs.pysentry.com](https://docs.pysentry.com)**:
-
-- [Installation](https://docs.pysentry.com/getting-started/installation)
-- [Quickstart](https://docs.pysentry.com/getting-started/quickstart)
-- [CLI Options](https://docs.pysentry.com/configuration/cli-options)
-- [Configuration Files](https://docs.pysentry.com/configuration/config-files)
-- [Environment Variables](https://docs.pysentry.com/configuration/environment-variables)
-- [Troubleshooting](https://docs.pysentry.com/troubleshooting)
+Full documentation lives at [docs.pysentry.com](https://docs.pysentry.com):
+[Installation](https://docs.pysentry.com/getting-started/installation) ·
+[Quickstart](https://docs.pysentry.com/getting-started/quickstart) ·
+[CLI options](https://docs.pysentry.com/configuration/cli-options) ·
+[Configuration files](https://docs.pysentry.com/configuration/config-files) ·
+[Environment variables](https://docs.pysentry.com/configuration/environment-variables) ·
+[Troubleshooting](https://docs.pysentry.com/troubleshooting)
 
 ## Requirements
 
-- **For `requirements.txt` scanning**: Install `uv` (recommended) or `pip-tools` for dependency resolution
-- **Python**: 3.9–3.14 (for pip/uvx installation)
-- **Rust**: 1.79+ (for cargo installation or building from source)
+- **Python** 3.9–3.14 for the PyPI package
+- **Rust** 1.79+ only for `cargo install` or building from source
+- **`uv`** (recommended) or **`pip-tools`** for scanning manifests without a lock file (`requirements.txt`, `pyproject.toml`, `Pipfile`) — auditing lock files needs no external tools
 
 ## Feedback
 
-Bug reports and feature requests are welcome on the [issue tracker](https://github.com/nyudenkov/pysentry/issues). For anything else, reach out at nikita@pysentry.com.
+Bug reports and feature requests are welcome on the [issue tracker](https://github.com/nyudenkov/pysentry/issues); a couple of minutes on the [usage survey](https://tally.so/r/mYNPNv) helps shape the roadmap. For anything else, reach out at nikita@pysentry.com.
+
+If PySentry saves you time, consider [sponsoring on GitHub](https://github.com/sponsors/nyudenkov) or [buying me a coffee](https://buymeacoffee.com/nyudenkov).
 
 ## Acknowledgments
 
-- Inspired by [pip-audit](https://github.com/pypa/pip-audit) and [uv #9189](https://github.com/astral-sh/uv/issues/9189)
-- Vulnerability data from [PyPA](https://github.com/pypa/advisory-database), [PyPI](https://pypi.org/), and [OSV.dev](https://osv.dev/)
+Inspired by [pip-audit](https://github.com/pypa/pip-audit) and [uv #9189](https://github.com/astral-sh/uv/issues/9189). Vulnerability data comes from [PyPA](https://github.com/pypa/advisory-database), [PyPI](https://pypi.org/), and [OSV.dev](https://osv.dev/).
+
+## License
+
+[MIT](LICENSE)
