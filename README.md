@@ -14,12 +14,6 @@
 
 PySentry scans Python projects for known security vulnerabilities by reading your dependency files and cross-referencing them against multiple vulnerability databases.
 
-<div align="center">
-
-<img src="assets/demo.gif" alt="PySentry scanning a project" width="800">
-
-</div>
-
 **[Documentation](https://docs.pysentry.com)** · **[Benchmarks](benchmarks/results/)** · **[Buy Me a Coffee](https://buymeacoffee.com/nyudenkov)**
 
 ## Features
