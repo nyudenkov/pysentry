@@ -109,6 +109,10 @@ impl AuditArgs {
             merged.sources = config.sources.enabled.clone();
         }
 
+        if self.service_url.is_none() {
+            merged.service_url = config.sources.service_url.clone();
+        }
+
         if !self.include_scripts && config.defaults.include_scripts {
             merged.include_scripts = true;
         }
@@ -297,6 +301,30 @@ mod tests {
         assert_eq!(merged.sources, vec!["osv".to_string()]);
         let resolved = merged.resolve_sources().unwrap();
         assert_eq!(resolved, vec![VulnerabilitySourceType::Osv]);
+    }
+
+    #[test]
+    fn test_service_url_merge_from_config() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.sources.service_url = Some("https://osv.internal/v1".to_string());
+        let merged = args.merge_with_config(&config);
+        assert_eq!(
+            merged.service_url,
+            Some("https://osv.internal/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_service_url_cli_overrides_config() {
+        let args = parse_audit_args(&["--service-url", "https://cli.example/v1", "."]);
+        let mut config = crate::config::Config::default();
+        config.sources.service_url = Some("https://config.example/v1".to_string());
+        let merged = args.merge_with_config(&config);
+        assert_eq!(
+            merged.service_url,
+            Some("https://cli.example/v1".to_string())
+        );
     }
 
     #[test]

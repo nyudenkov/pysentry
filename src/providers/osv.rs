@@ -184,6 +184,15 @@ impl OsvSource {
         }
     }
 
+    /// Effective OSV API base URL: the custom endpoint if set, else the public default.
+    fn base_url(&self) -> &str {
+        self.http_config
+            .service_url
+            .as_deref()
+            .map(|url| url.trim_end_matches('/'))
+            .unwrap_or(OSV_API_BASE)
+    }
+
     /// Get cache entry for OSV batch with package-specific key.
     fn cache_entry(&self, packages: &[(String, String)]) -> CacheEntry {
         use std::collections::hash_map::DefaultHasher;
@@ -194,6 +203,11 @@ impl OsvSource {
         for (name, version) in packages {
             name.hash(&mut hasher);
             version.hash(&mut hasher);
+        }
+        // Fold the custom endpoint into the key so a mirror's data never collides with public
+        // OSV results. Public (default) runs keep their existing key — no churn on upgrade.
+        if let Some(url) = self.http_config.service_url.as_deref() {
+            url.hash(&mut hasher);
         }
         let package_hash = hasher.finish();
 
@@ -613,7 +627,7 @@ impl OsvSource {
     async fn fetch_vulnerability_details(&self, vuln_id: &str) -> Result<Option<OsvAdvisory>> {
         let response = self
             .client
-            .get(format!("{OSV_API_BASE}/vulns/{vuln_id}"))
+            .get(format!("{}/vulns/{vuln_id}", self.base_url()))
             .send()
             .await
             .map_err(|e| AuditError::DatabaseDownload(Box::new(e)))?;
@@ -687,7 +701,7 @@ impl OsvSource {
         .await
         .map_err(|err| AuditError::DatabaseDownloadDetailed {
             resource: format!("OSV vulnerability {}", vuln_id_clone),
-            url: format!("{}/vulns/{}", OSV_API_BASE, vuln_id_clone),
+            url: format!("{}/vulns/{}", self.base_url(), vuln_id_clone),
             source: Box::new(err),
         });
 
@@ -712,7 +726,7 @@ impl OsvSource {
 
                 let response = self
                     .client
-                    .post(format!("{OSV_API_BASE}/querybatch"))
+                    .post(format!("{}/querybatch", self.base_url()))
                     .json(&request)
                     .send()
                     .await?;
@@ -734,7 +748,7 @@ impl OsvSource {
         .await
         .map_err(|err| AuditError::DatabaseDownloadDetailed {
             resource: format!("OSV batch query ({} packages)", batch_len),
-            url: format!("{}/querybatch", OSV_API_BASE),
+            url: format!("{}/querybatch", self.base_url()),
             source: Box::new(err),
         })
     }

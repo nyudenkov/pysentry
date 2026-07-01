@@ -198,6 +198,11 @@ pub struct AuditArgs {
     #[arg(long = "sources", value_name = "SOURCE")]
     pub sources: Vec<String>,
 
+    /// Override the OSV API base URL (custom/self-hosted OSV-compatible endpoint).
+    /// Only valid with `--sources osv`.
+    #[arg(long = "service-url", value_name = "URL")]
+    pub service_url: Option<String>,
+
     /// Dependency resolver for requirements.txt files
     #[arg(long, value_enum, default_value = "uv")]
     pub resolver: ResolverTypeArg,

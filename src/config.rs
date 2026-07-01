@@ -89,6 +89,10 @@ pub struct DefaultConfig {
 pub struct SourcesConfig {
     #[serde(default = "default_sources")]
     pub enabled: Vec<String>,
+
+    /// Override the OSV API base URL (custom/self-hosted OSV-compatible endpoint).
+    #[serde(default)]
+    pub service_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +150,11 @@ pub struct HttpConfig {
 
     #[serde(default = "default_http_show_progress")]
     pub show_progress: bool,
+
+    // ponytail: transport only for the OSV custom endpoint, NOT a config home.
+    // The home is [sources].service_url; main/python push the merged value here.
+    #[serde(skip)]
+    pub service_url: Option<String>,
 }
 
 /// PEP 792 Project Status Markers configuration
@@ -693,6 +702,7 @@ impl Default for SourcesConfig {
     fn default() -> Self {
         Self {
             enabled: default_sources(),
+            service_url: None,
         }
     }
 }
@@ -726,6 +736,7 @@ impl Default for HttpConfig {
             retry_initial_backoff: default_http_retry_initial_backoff(),
             retry_max_backoff: default_http_retry_max_backoff(),
             show_progress: default_http_show_progress(),
+            service_url: None,
         }
     }
 }

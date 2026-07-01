@@ -63,7 +63,9 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         }
                     };
 
-                    let http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+                    let mut http_config =
+                        config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+                    http_config.service_url = merged_audit_args.service_url.clone();
                     let vulnerability_ttl = config
                         .as_ref()
                         .map(|c| c.cache.vulnerability_ttl)

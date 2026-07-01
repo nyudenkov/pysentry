@@ -259,6 +259,16 @@ async fn perform_audit(
 ) -> Result<(AuditReport, bool)> {
     std::fs::create_dir_all(cache_dir)?;
 
+    // --service-url overrides the OSV provider's endpoint, so it only makes sense when OSV is
+    // the sole source. Re-checked here post-merge (not via clap conflicts_with) because config
+    // can inject sources that clap never sees.
+    if audit_args.service_url.is_some() && source_types != [VulnerabilitySourceType::Osv] {
+        return Err(anyhow::anyhow!(
+            "--service-url is only valid with `--sources osv` (it overrides the OSV \
+             provider's endpoint). Re-run with `--sources osv`."
+        ));
+    }
+
     // --group is only meaningful for pyproject.toml-based parsers (uv.lock, poetry.lock,
     // pylock.toml). Reject combinations that bypass pyproject.toml parsing up-front so the
     // user sees a clear error before any scanning begins.
@@ -858,6 +868,44 @@ mod tests {
                 .contains("requirements.txt has no dependency-group concept"),
             "unexpected error message: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_service_url_requires_osv_only_source() {
+        use crate::cli::{AuditArgs, VulnerabilitySourceType};
+        use clap::Parser;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let project_path_str = temp_dir.path().to_str().unwrap();
+        let audit_args = AuditArgs::try_parse_from([
+            "pysentry",
+            "--service-url",
+            "https://osv.internal/v1",
+            project_path_str,
+        ])
+        .unwrap();
+
+        let cache_dir = temp_dir.path().join("cache");
+        // Sources resolve to PyPA (not the required osv-only set) → guard must fire pre-network.
+        let result = super::perform_audit(
+            &audit_args,
+            &cache_dir,
+            crate::config::HttpConfig::default(),
+            3600,
+            &[VulnerabilitySourceType::Pypa],
+            &crate::ci::CiEnvironment::None,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "expected error: --service-url without osv-only sources"
+        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("--service-url is only valid with `--sources osv`"),);
     }
 
     // A user who passes BOTH --group and explicit --requirements-files is asking for two

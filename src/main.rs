@@ -38,6 +38,7 @@ async fn run() -> Result<u8> {
             };
 
             let mut http_config = config.as_ref().map(|c| c.http.clone()).unwrap_or_default();
+            http_config.service_url = merged_audit_args.service_url.clone();
             if merged_audit_args.is_quiet() {
                 http_config.show_progress = false;
             }
