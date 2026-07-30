@@ -1,10 +1,13 @@
 """Compare benchmark results and generate a Markdown report for PR comments."""
+
 from __future__ import annotations
 
-import sys
-import json
 import argparse
+import json
+import sys
 from pathlib import Path
+
+from src.performance_monitor import format_memory, format_time
 
 
 def load_json(path: Path) -> dict:
@@ -13,27 +16,21 @@ def load_json(path: Path) -> dict:
 
 
 def index_results(results: list, tool: str) -> dict:
-    """Index results by (dataset_name, cache_type, config_name) for a specific tool."""
-    index = {}
-    for r in results:
-        if r["tool_name"] == tool:
-            key = (r["dataset_name"], r["cache_type"], r["config_name"])
-            index[key] = r
-    return index
+    """Index results by (dataset_name, cache_type, config_name) for a tool."""
+    return {
+        (r["dataset_name"], r["cache_type"], r["config_name"]): r
+        for r in results
+        if r["tool_name"] == tool
+    }
 
 
-def fmt_time(seconds: float) -> str:
-    if seconds >= 60:
-        m = int(seconds // 60)
-        s = seconds % 60
-        return f"{m}m {s:.2f}s"
-    return f"{seconds:.3f}s"
-
-
-def fmt_memory(mb: float) -> str:
-    if mb >= 1024:
-        return f"{mb / 1024:.2f} GB"
-    return f"{mb:.1f} MB"
+def vulns(metrics: dict) -> str:
+    # distinct (canonical) count; ⚠️ if the tool reported more (uncollapsed aliases).
+    distinct = metrics.get("canonical_vulns", metrics.get("vuln_count", -1))
+    if distinct is None or distinct < 0:
+        return "n/a"
+    raw = metrics.get("raw_vulns", distinct)
+    return f"{distinct} ⚠️" if isinstance(raw, int) and raw > distinct else str(distinct)
 
 
 def pct_change(old: float, new: float) -> str:
@@ -64,14 +61,16 @@ def generate_comparison(
 
         if curr_ps and base_ps:
             sections.append(f"### PySentry: PR vs baseline (`{label}`)\n")
-            header = (
-                "| Dataset | Cache | Config"
-                " | PR Time | Baseline | Δ Time"
-                " | PR Memory | Baseline | Δ Memory |"
-            )
-            separator = "|---------|-------|--------|---------|----------|--------|-----------|----------|----------|"
-            rows = [header, separator]
-
+            rows = [
+                (
+                    "| Dataset | Cache | Config | PR Time | Baseline | Δ Time"
+                    " | PR Memory | Baseline | Δ Memory | Vulns |"
+                ),
+                (
+                    "|---------|-------|--------|---------|----------|--------"
+                    "|-----------|----------|----------|-------|"
+                ),
+            ]
             for key in sorted(curr_ps.keys()):
                 dataset, cache, config = key
                 c = curr_ps[key]["metrics"]
@@ -79,18 +78,20 @@ def generate_comparison(
                     b = base_ps[key]["metrics"]
                     rows.append(
                         f"| {dataset} | {cache} | {config}"
-                        f" | {fmt_time(c['execution_time'])} | {fmt_time(b['execution_time'])}"
+                        f" | {format_time(c['execution_time'])}"
+                        f" | {format_time(b['execution_time'])}"
                         f" | {pct_change(b['execution_time'], c['execution_time'])}"
-                        f" | {fmt_memory(c['peak_memory_mb'])} | {fmt_memory(b['peak_memory_mb'])}"
-                        f" | {pct_change(b['peak_memory_mb'], c['peak_memory_mb'])} |"
+                        f" | {format_memory(c['peak_memory_mb'])}"
+                        f" | {format_memory(b['peak_memory_mb'])}"
+                        f" | {pct_change(b['peak_memory_mb'], c['peak_memory_mb'])}"
+                        f" | {vulns(c)} |"
                     )
                 else:
                     rows.append(
                         f"| {dataset} | {cache} | {config}"
-                        f" | {fmt_time(c['execution_time'])} | —"
-                        f" | —"
-                        f" | {fmt_memory(c['peak_memory_mb'])} | —"
-                        f" | — |"
+                        f" | {format_time(c['execution_time'])} | — | —"
+                        f" | {format_memory(c['peak_memory_mb'])} | — | —"
+                        f" | {vulns(c)} |"
                     )
             sections.append("\n".join(rows))
     else:
@@ -101,25 +102,43 @@ def generate_comparison(
 
     if curr_ps and curr_pa:
         sections.append("### Speedup vs pip-audit (this run)\n")
-        header = "| Dataset | Cache | Config | PySentry | pip-audit | Speedup |"
-        separator = "|---------|-------|--------|----------|-----------|---------|"
-        rows = [header, separator]
-
-        pa_by_dataset_cache = {}
-        for (dataset, cache, _config), r in curr_pa.items():
-            pa_by_dataset_cache[(dataset, cache)] = r
-
+        sections.append(
+            "> Compare speed alongside the vuln counts — the tools query "
+            "different advisory databases.\n"
+        )
+        rows = [
+            (
+                "| Dataset | Cache | Config | PySentry | Vulns | pip-audit"
+                " | Vulns | Speedup |"
+            ),
+            (
+                "|---------|-------|--------|----------|-------|-----------"
+                "|-------|---------|"
+            ),
+        ]
+        # Reference pip-audit against its pypi service (falls back to any) so the
+        # speedup column has one baseline even when several services were run.
+        pa_by_dataset_cache: dict = {}
+        for (dataset, cache, config_name), r in curr_pa.items():
+            slot = (dataset, cache)
+            if slot not in pa_by_dataset_cache or config_name == "pip-audit-pypi":
+                pa_by_dataset_cache[slot] = r
         for key in sorted(curr_ps.keys()):
             dataset, cache, config = key
-            pa_key = (dataset, cache)
-            if pa_key in pa_by_dataset_cache:
-                ps_time = curr_ps[key]["metrics"]["execution_time"]
-                pa_time = pa_by_dataset_cache[pa_key]["metrics"]["execution_time"]
-                speedup = pa_time / ps_time if ps_time > 0 else 0
-                rows.append(
-                    f"| {dataset} | {cache} | {config}"
-                    f" | {fmt_time(ps_time)} | {fmt_time(pa_time)} | {speedup:.1f}x |"
-                )
+            pa = pa_by_dataset_cache.get((dataset, cache))
+            if not pa:
+                continue
+            ps_m = curr_ps[key]["metrics"]
+            pa_m = pa["metrics"]
+            ps_time = ps_m["execution_time"]
+            pa_time = pa_m["execution_time"]
+            speedup = pa_time / ps_time if ps_time > 0 else 0
+            rows.append(
+                f"| {dataset} | {cache} | {config}"
+                f" | {format_time(ps_time)} | {vulns(ps_m)}"
+                f" | {format_time(pa_time)} | {vulns(pa_m)}"
+                f" | {speedup:.1f}x |"
+            )
         sections.append("\n".join(rows))
 
     si = current.get("system_info", {})
@@ -142,9 +161,7 @@ def main() -> int:
     parser.add_argument(
         "--current", type=Path, required=True, help="Path to current benchmark JSON"
     )
-    parser.add_argument(
-        "--baseline", type=Path, help="Path to baseline benchmark JSON"
-    )
+    parser.add_argument("--baseline", type=Path, help="Path to baseline benchmark JSON")
     parser.add_argument(
         "--baseline-label",
         default="main",

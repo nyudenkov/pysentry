@@ -34,6 +34,30 @@ repos:
         files: \.rs$
         pass_filenames: false
 
+  # Python benchmark suite (ruff + ty pinned via benchmarks/uv.lock)
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (benchmarks)
+        entry: uv run --directory benchmarks ruff check .
+        language: system
+        files: ^benchmarks/.*\.py$
+        pass_filenames: false
+
+      - id: ruff-format
+        name: ruff format (benchmarks)
+        entry: uv run --directory benchmarks ruff format --check .
+        language: system
+        files: ^benchmarks/.*\.py$
+        pass_filenames: false
+
+      - id: ty-check
+        name: ty check (benchmarks)
+        entry: uv run --directory benchmarks ty check .
+        language: system
+        files: ^benchmarks/.*\.py$
+        pass_filenames: false
+
   - repo: local
     hooks:
       - id: cargo-audit

@@ -3,10 +3,34 @@ name = "benchmarks"
 version = "0.1.0"
 description = "Performance benchmark suite for PySentry vs pip-audit"
 readme = "README.md"
-requires-python = ">=3.10"
+# 3.11+ for tomllib (test_data/gen_pinned.py)
+requires-python = ">=3.11"
 dependencies = [
-    "matplotlib>=3.10.5",
-    "pip-audit>=2.9.0",
+    "pip-audit>=2.10.1",
     "psutil>=7.0.0",
-    "tabulate>=0.9.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12",
+    "ty>=0.0.1a21",
+]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "RUF", # ruff-specific
+]
+
+[tool.ty.environment]
+python-version = "3.11"
+# src/ is imported as a package (`src.benchmark_runner`), not as a source root.
+root = ["."]

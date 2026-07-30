@@ -1,10 +1,10 @@
-import sys
 import argparse
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from src.benchmark_runner import BenchmarkRunner
+from src.benchmark_runner import DATASETS, MODE_RESOLVE, BenchmarkRunner
 
 
 def main():
@@ -13,91 +13,70 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                    # Run full benchmark suite
-  python main.py --quick           # Run only small dataset for quick testing
-  python main.py --output-dir ./custom-results  # Custom output directory
+  python main.py                 # Full suite (median of --runs per config)
+  python main.py --quick         # Only the small resolve dataset
+  python main.py --runs 3        # Fewer repetitions per config
         """,
     )
-
     parser.add_argument(
-        "--quick", action="store_true", help="Run only small dataset for quick testing"
+        "--quick",
+        action="store_true",
+        help="Run only the small resolve dataset for a quick check",
     )
-
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=5,
+        help="Repetitions per config; the median is reported (default: 5)",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
         help="Custom output directory for results (default: ./results/)",
     )
-
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose output"
     )
-
-    parser.add_argument(
-        "--skip-build",
-        action="store_true",
-        help="Skip PySentry build check (assume it's already built)",
-    )
-
     args = parser.parse_args()
 
     try:
         benchmark_dir = Path(__file__).parent
+        runner = BenchmarkRunner(benchmark_dir, runs_per_config=args.runs)
         if args.output_dir:
-            runner = BenchmarkRunner(benchmark_dir)
             runner.results_dir = args.output_dir
             runner.results_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            runner = BenchmarkRunner(benchmark_dir)
 
-        if args.verbose:
-            print(f"Benchmark directory: {benchmark_dir}")
-            print(f"Results directory: {runner.results_dir}")
-
+        datasets = (
+            [("small_requirements.txt", MODE_RESOLVE)] if args.quick else DATASETS
+        )
         if args.quick:
-            print("Quick mode: Running only small dataset...")
-            large_dataset = runner.test_data_dir / "large_requirements.txt"
-            backup_path = None
-            if large_dataset.exists():
-                backup_path = runner.test_data_dir / "large_requirements.txt.backup"
-                large_dataset.rename(backup_path)
+            print("Quick mode: small resolve dataset only")
 
-        try:
-            print("Starting benchmark suite...")
-            suite = runner.run_full_benchmark_suite()
+        print("Starting benchmark suite...")
+        suite = runner.run_full_benchmark_suite(datasets=datasets)
+        report_path = runner.save_and_generate_report(suite)
 
-            report_path = runner.save_and_generate_report(suite)
+        total = len(suite.results)
+        successful = len([r for r in suite.results if r.metrics.exit_code <= 1])
 
-            successful_runs = len(
-                [r for r in suite.results if r.metrics.exit_code <= 1]
-            )
-            total_runs = len(suite.results)
+        print("\n" + "=" * 60)
+        print("BENCHMARK SUITE COMPLETED")
+        print("=" * 60)
+        print(f"Total configs: {total}")
+        print(f"Successful: {successful}")
+        print(f"Failed: {total - successful}")
+        print(f"Duration: {suite.total_duration:.2f} seconds")
+        print(f"Report saved to: {report_path}")
+        print("=" * 60)
 
-            print("\n" + "=" * 60)
-            print("BENCHMARK SUITE COMPLETED")
-            print("=" * 60)
-            print(f"Total runs: {total_runs}")
-            print(f"Successful: {successful_runs}")
-            print(f"Failed: {total_runs - successful_runs}")
-            print(f"Duration: {suite.total_duration:.2f} seconds")
-            print(f"Report saved to: {report_path}")
-            print("=" * 60)
-
-            exit_code = 0 if successful_runs == total_runs else 1
-
-            if exit_code != 0:
-                print(f"WARNING: {total_runs - successful_runs} benchmark runs failed!")
-
-            return exit_code
-
-        finally:
-            if args.quick and backup_path and backup_path.exists():
-                backup_path.rename(large_dataset)
+        if successful != total:
+            print(f"WARNING: {total - successful} benchmark configs failed!")
+            return 1
+        return 0
 
     except KeyboardInterrupt:
         print("\nBenchmark interrupted by user.")
         return 1
-
     except Exception as e:
         print(f"Error running benchmark suite: {e}")
         if args.verbose:

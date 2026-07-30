@@ -1,0 +1,42 @@
+name: Benchmarks Lint
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "benchmarks/**"
+      - ".github/workflows/benchmarks-lint.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "benchmarks/**"
+      - ".github/workflows/benchmarks-lint.yml"
+
+jobs:
+  lint:
+    name: ruff + ty + self-checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: benchmarks
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      - name: ty check
+        run: uv run ty check .
+
+      - name: Self-checks
+        run: uv run python test_metrics.py

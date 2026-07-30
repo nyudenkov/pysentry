@@ -1,222 +1,209 @@
-from typing import List, Dict
-from dataclasses import dataclass
 from datetime import datetime
-import statistics
 
 from .performance_monitor import format_memory, format_time
+from .tool_wrapper import MODE_AUDIT_ONLY
 
 
-@dataclass
-class ComparisonResult:
-    winner: str
-    loser: str
-    improvement_factor: float
-    metric_name: str
-    winner_value: float
-    loser_value: float
+def _distinct(m) -> str:
+    return "n/a" if m.canonical_vulns < 0 else str(m.canonical_vulns)
+
+
+def _reported(m) -> str:
+    if m.raw_vulns < 0:
+        return "n/a"
+    # ⚠️ flags a tool that printed more entries than distinct vulns — i.e. it did
+    # not collapse advisory aliases (pip-audit's OSV service).
+    if m.raw_vulns > m.canonical_vulns >= 0:
+        return f"{m.raw_vulns} ⚠️"
+    return str(m.raw_vulns)
 
 
 class ReportGenerator:
     def generate_report(self, suite) -> str:
-        sections = []
-        sections.append(self._generate_header(suite))
-        sections.append(self._generate_executive_summary(suite))
-        sections.append(self._generate_system_info(suite))
-        sections.append(self._generate_performance_tables(suite))
-        sections.append(self._generate_detailed_analysis(suite))
+        sections = [
+            self._header(suite),
+            self._methodology(suite),
+            self._system_info(suite),
+            self._performance_tables(suite),
+            self._config_guide(suite),
+        ]
+        return "\n\n".join(s for s in sections if s)
 
-        return "\n\n".join(sections)
-
-    def _generate_header(self, suite) -> str:
+    def _header(self, suite) -> str:
         timestamp = datetime.fromisoformat(suite.start_time).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
-        duration = format_time(suite.total_duration)
+        versions = ", ".join(f"{k} {v}" for k, v in sorted(suite.tool_versions.items()))
+        return (
+            "# PySentry vs pip-audit Benchmark Report\n\n"
+            f"**Generated:** {timestamp}  \n"
+            f"**Duration:** {format_time(suite.total_duration)}  \n"
+            f"**Tools:** {versions}  \n"
+            f"**Runs per config:** {suite.runs_per_config} "
+            "(reported value is the **median**; ± is stdev)"
+        )
 
-        return f"""# PySentry - pip-audit Benchmark Report
-
-**Generated:** {timestamp}
-**Duration:** {duration}
-**Total Tests:** {len(suite.results)}"""
-
-    def _generate_executive_summary(self, suite) -> str:
-        results_by_config = self._group_results(suite.results)
-
-        summaries = []
-
-        for key, results in results_by_config.items():
-            dataset, cache_type = key
-
-            if len(results) < 2:
-                continue
-
-            fastest = min(results, key=lambda r: r.metrics.execution_time)
-            slowest = max(results, key=lambda r: r.metrics.execution_time)
-
-            most_efficient = min(results, key=lambda r: r.metrics.peak_memory_mb)
-            least_efficient = max(results, key=lambda r: r.metrics.peak_memory_mb)
-
-            speed_improvement = (
-                slowest.metrics.execution_time / fastest.metrics.execution_time
-            )
-            memory_improvement = (
-                least_efficient.metrics.peak_memory_mb
-                / most_efficient.metrics.peak_memory_mb
-            )
-
-            summaries.append(f"""### {dataset.title()} Dataset - {cache_type.title()} Cache
-- **Fastest:** {fastest.config_name} ({format_time(fastest.metrics.execution_time)}) - {speed_improvement:.2f}x faster than slowest
-- **Memory Efficient:** {most_efficient.config_name} ({format_memory(most_efficient.metrics.peak_memory_mb)}) - {memory_improvement:.2f}x less memory than highest""")
-
-        successful_runs = [r for r in suite.results if r.metrics.exit_code <= 1]
-        success_rate = len(successful_runs) / len(suite.results) * 100
-
-        header = f"""## Executive Summary
-
-**Overall Success Rate:** {success_rate:.1f}% ({len(successful_runs)}/{len(suite.results)} successful runs)
-
-"""
-
-        return header + "\n\n".join(summaries)
-
-    def _generate_system_info(self, suite) -> str:
-        sys_info = suite.system_info
-
-        return f"""## Test Environment
-
-- **Platform:** {sys_info.platform}
-- **Python Version:** {sys_info.python_version}
-- **CPU Cores:** {sys_info.cpu_count}
-- **Total Memory:** {sys_info.total_memory_gb:.2f} GB
-- **Available Memory:** {sys_info.available_memory_gb:.2f} GB"""
-
-    def _generate_performance_tables(self, suite) -> str:
-        sections = []
-
-        results_by_config = self._group_results(suite.results)
-
-        for (dataset, cache_type), results in results_by_config.items():
-            if not results:
-                continue
-
-            sections.append(
-                f"### {dataset.title()} Dataset - {cache_type.title()} Cache"
-            )
-
-            sections.append("#### Execution Time Comparison")
-            sections.append(
-                self._create_performance_table(
-                    results, "execution_time", "Execution Time", format_time
-                )
-            )
-
-            sections.append("#### Memory Usage Comparison")
-            sections.append(
-                self._create_performance_table(
-                    results, "peak_memory_mb", "Peak Memory", format_memory
-                )
-            )
-
-        return "\n\n".join(["## Performance Comparison"] + sections)
-
-    def _create_performance_table(
-        self, results: List, metric_attr: str, metric_name: str, formatter
-    ) -> str:
-        """Create a performance comparison table."""
-        if not results:
-            return "No data available."
-
-        sorted_results = sorted(results, key=lambda r: getattr(r.metrics, metric_attr))
-
-        rows = [
-            "| Tool Configuration | " + metric_name + " | Relative Performance |",
-            "|---------------------|---------------------|---------------------|",
+    def _methodology(self, suite) -> str:
+        lines = [
+            "## Methodology",
+            "",
+            (
+                "Each configuration is run multiple times; the table shows the median "
+                "execution time with min and stdev, median peak memory (summed over "
+                "the process tree — both tools shell out to a resolver), and the "
+                "vulnerability count each tool reported."
+            ),
+            "",
+            (
+                "**Read speed alongside the vuln count.** The tools query different "
+                "advisory databases, so a faster tool that reports fewer "
+                "vulnerabilities is not strictly faster at the same work."
+            ),
+            "",
+            (
+                "The vuln columns are **Distinct** (unique flaws after collapsing "
+                "GHSA/PYSEC/CVE aliases — the real coverage, comparable across tools) "
+                "and **Reported** (what the tool actually printed). A ⚠️ marks a "
+                "Reported count higher than Distinct: the tool lists the same flaw "
+                "under several advisory IDs. pysentry collapses them; pip-audit's OSV "
+                "service does not, so it over-reports."
+            ),
+            "",
+            (
+                "Every dataset is measured **cold** and **hot**. Cold clears all "
+                "caches first — it is the fresh-CI-run experience (includes the "
+                "vulnerability DB download and is network-sensitive). Hot has a warm "
+                "DB and reflects steady-state throughput."
+            ),
+            "",
+            (
+                "Most pysentry configs run with PEP 792 maintenance checks **off** "
+                "(pip-audit has no equivalent, so this keeps the core comparison "
+                "vuln-vs-vuln). The `pysentry-pypi-maintenance` config leaves them "
+                "**on** so the feature's cost is visible."
+            ),
+            "",
+            "### Datasets",
+            "",
+            "| Dataset | Packages | Mode |",
+            "|---------|----------|------|",
         ]
+        modes = {r.dataset_name: r.mode for r in suite.results}
+        for name, count in suite.dataset_packages.items():
+            mode = modes.get(name, "?")
+            note = " (pinned, reproducible)" if mode == MODE_AUDIT_ONLY else ""
+            lines.append(f"| {name} | {count} | {mode}{note} |")
 
-        best_value = getattr(sorted_results[0].metrics, metric_attr)
+        lines += [
+            "",
+            (
+                "- **resolve** — unpinned specs, dependency resolution ON. Includes "
+                "resolver cost; pysentry uses `uv`, pip-audit uses `pip`. Not pinned, "
+                "so results drift as the ecosystem and advisory DB change over time."
+            ),
+            (
+                "- **audit-only** — pinned input, resolution OFF on both tools "
+                "(`--no-resolver` / `--no-deps --disable-pip`). This isolates audit "
+                "throughput from resolver choice and is reproducible."
+            ),
+            "",
+            "### Commands",
+            "",
+            "| Config | Command |",
+            "|--------|---------|",
+        ]
+        seen = {}
+        for r in suite.results:
+            seen.setdefault(r.config_name, r.command)
+        for config_name, command in seen.items():
+            lines.append(f"| {config_name} | `{command}` |")
+        return "\n".join(lines)
 
-        for result in sorted_results:
-            value = getattr(result.metrics, metric_attr)
-            relative = value / best_value if best_value > 0 else 1.0
+    def _system_info(self, suite) -> str:
+        info = suite.system_info
+        return (
+            "## Test Environment\n\n"
+            f"- **Platform:** {info.platform}\n"
+            f"- **Python:** {info.python_version}\n"
+            f"- **CPU Cores:** {info.cpu_count}\n"
+            f"- **Total Memory:** {info.total_memory_gb:.2f} GB"
+        )
 
-            status_emoji = (
-                "🥇"
-                if result == sorted_results[0]
-                else "🥈"
-                if result == sorted_results[1]
-                else ""
-            )
-
-            rows.append(
-                f"| {status_emoji} {result.config_name} | {formatter(value)} | {relative:.2f}x |"
-            )
-
-        return "\n".join(rows)
-
-    def _generate_detailed_analysis(self, suite) -> str:
-        sections = ["## Detailed Analysis"]
-
-        tool_results = {}
+    def _performance_tables(self, suite) -> str:
+        grouped: dict[tuple, list] = {}
         for result in suite.results:
-            tool_name = result.tool_name
-            if tool_name not in tool_results:
-                tool_results[tool_name] = []
-            tool_results[tool_name].append(result)
-
-        for tool_name, results in tool_results.items():
-            sections.append(f"### {tool_name.title()} Performance")
-
-            if not results:
-                sections.append("No data available.")
-                continue
-
-            exec_times = [
-                r.metrics.execution_time for r in results if r.metrics.exit_code == 0
-            ]
-            memory_usage = [
-                r.metrics.peak_memory_mb for r in results if r.metrics.exit_code == 0
-            ]
-
-            if exec_times:
-                avg_time = statistics.mean(exec_times)
-                min_time = min(exec_times)
-                max_time = max(exec_times)
-
-                sections.append(
-                    f"- **Execution Time:** Avg: {format_time(avg_time)}, "
-                    f"Min: {format_time(min_time)}, Max: {format_time(max_time)}"
-                )
-
-            if memory_usage:
-                avg_memory = statistics.mean(memory_usage)
-                min_memory = min(memory_usage)
-                max_memory = max(memory_usage)
-
-                sections.append(
-                    f"- **Memory Usage:** Avg: {format_memory(avg_memory)}, "
-                    f"Min: {format_memory(min_memory)}, Max: {format_memory(max_memory)}"
-                )
-
-            errors = [r for r in results if r.metrics.exit_code != 0]
-            error_rate = len(errors) / len(results) * 100
-            sections.append(
-                f"- **Success Rate:** {100 - error_rate:.1f}% ({len(results) - len(errors)}/{len(results)})"
+            grouped.setdefault((result.dataset_name, result.cache_type), []).append(
+                result
             )
 
-            if errors:
-                sections.append(
-                    f"- **Failed Configurations:** {', '.join([e.config_name for e in errors])}"
-                )
-
+        sections = ["## Performance"]
+        for (dataset, cache_type), results in grouped.items():
+            sections.append(f"### {dataset} — {cache_type} cache")
+            sections.append(self._table(results))
         return "\n\n".join(sections)
 
-    def _group_results(self, results: List) -> Dict:
-        grouped = {}
+    def _table(self, results: list) -> str:
+        ranked = sorted(results, key=lambda r: r.metrics.execution_time)
+        fastest = ranked[0].metrics.execution_time
 
-        for result in results:
-            key = (result.dataset_name, result.cache_type)
-            if key not in grouped:
-                grouped[key] = []
-            grouped[key].append(result)
+        rows = [
+            "| Config | Median Time | Min | Stdev | Rel | Peak Mem | Distinct | Reported |",
+            "|--------|-------------|-----|-------|-----|----------|----------|----------|",
+        ]
+        for i, result in enumerate(ranked):
+            m = result.metrics
+            relative = m.execution_time / fastest if fastest > 0 else 1.0
+            medal = "🥇 " if i == 0 else "🥈 " if i == 1 else ""
+            rows.append(
+                f"| {medal}{result.config_name} "
+                f"| {format_time(m.execution_time)} "
+                f"| {format_time(m.time_min)} "
+                f"| ±{m.time_stdev:.3f}s "
+                f"| {relative:.2f}x "
+                f"| {format_memory(m.peak_memory_mb)} "
+                f"| {_distinct(m)} "
+                f"| {_reported(m)} |"
+            )
+        return "\n".join(rows)
 
-        return grouped
+    def _config_guide(self, suite) -> str:
+        """pysentry-only view: what each source / maintenance option costs, so a
+        reader deciding what to enable can lean on concrete numbers."""
+        grouped: dict[tuple, list] = {}
+        for r in suite.results:
+            if r.tool_name == "pysentry":
+                grouped.setdefault((r.dataset_name, r.cache_type), []).append(r)
+        if not grouped:
+            return ""
+
+        sections = [
+            "## Choosing a pysentry configuration",
+            (
+                "Concrete cost of each pysentry option. `vs best` is relative to the "
+                "fastest pysentry config on that row. Source choice (`pypa` / `osv` / "
+                "`pypi` / `all-sources`) trades coverage against speed and memory; "
+                "`pysentry-pypi-maintenance` is the only config with PEP 792 "
+                "maintenance checks on, so its delta is that feature's cost."
+            ),
+        ]
+        for (dataset, cache_type), results in grouped.items():
+            ranked = sorted(results, key=lambda r: r.metrics.execution_time)
+            best = ranked[0].metrics.execution_time
+            sections.append(f"### {dataset} — {cache_type} cache")
+            rows = [
+                "| Config | Median Time | Peak Mem | Distinct | Reported | vs best |",
+                "|--------|-------------|----------|----------|----------|---------|",
+            ]
+            for r in ranked:
+                m = r.metrics
+                rel = m.execution_time / best if best > 0 else 1.0
+                rows.append(
+                    f"| {r.config_name} "
+                    f"| {format_time(m.execution_time)} "
+                    f"| {format_memory(m.peak_memory_mb)} "
+                    f"| {_distinct(m)} "
+                    f"| {_reported(m)} "
+                    f"| {rel:.2f}x |"
+                )
+            sections.append("\n".join(rows))
+        return "\n\n".join(sections)
