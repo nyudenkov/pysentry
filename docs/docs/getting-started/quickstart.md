@@ -144,9 +144,10 @@ PySentry reports vulnerabilities with:
 | Code | Meaning |
 |------|---------|
 | 0 | No vulnerabilities found at or above the `--fail-on` threshold |
-| 1 | Vulnerabilities found at or above the `--fail-on` threshold, or error during execution |
+| 1 | Vulnerabilities found at or above the `--fail-on` threshold |
+| 2 | Error: the audit did not complete (bad configuration, network failure, parse failure) |
 
-Note: Both vulnerability detection and errors result in exit code 1. Use verbose output (`-v`) to distinguish between them.
+CI can rely on the distinction: `1` means "vulnerable", `2` means "the audit never ran" — gate on any non-zero, or handle them separately.
 
 ## Next Steps
 

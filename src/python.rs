@@ -37,7 +37,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create async runtime: {e}")))?;
 
         rt.block_on(async {
-            use crate::audit::pipeline::audit;
+            use crate::audit::pipeline::{audit, EXIT_ERROR};
             use crate::cli::{Cli, Commands};
             use crate::commands::resolvers::check_resolvers;
             use clap::Parser;
@@ -59,7 +59,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         Ok(result) => result,
                         Err(e) => {
                             eprintln!("Configuration error: {e}");
-                            return Ok(1);
+                            return Ok(EXIT_ERROR);
                         }
                     };
 
@@ -98,7 +98,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         Ok(exit_code) => Ok(exit_code),
                         Err(e) => {
                             eprintln!("Error: Audit failed: {e}");
-                            Ok(1)
+                            Ok(EXIT_ERROR)
                         }
                     }
                 }
@@ -111,7 +111,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         Ok(()) => Ok(0),
                         Err(e) => {
                             eprintln!("Error: {e}");
-                            Ok(1)
+                            Ok(EXIT_ERROR)
                         }
                     }
                 }
@@ -124,7 +124,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         Ok(()) => Ok(0),
                         Err(e) => {
                             eprintln!("Error: {e}");
-                            Ok(1)
+                            Ok(EXIT_ERROR)
                         }
                     }
                 }
@@ -133,7 +133,7 @@ fn run_cli(py: Python<'_>, args: Vec<String>) -> PyResult<i32> {
                         Ok(()) => Ok(0),
                         Err(e) => {
                             eprintln!("Error: {e}");
-                            Ok(1)
+                            Ok(EXIT_ERROR)
                         }
                     }
                 }

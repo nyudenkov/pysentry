@@ -76,7 +76,7 @@ More examples in the [quickstart guide](https://docs.pysentry.com/getting-starte
 ```yaml
 repos:
   - repo: https://github.com/pysentry/pysentry-pre-commit
-    rev: v0.4.7
+    rev: v0.4.8
     hooks:
       - id: pysentry
         # args: ['--compact']  # terser output for hook runs

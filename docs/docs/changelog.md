@@ -4,6 +4,65 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.4.8 "CI-native"
+
+### ✨ New Features
+
+#### First-Party GitHub Action
+
+PySentry ships an official GitHub Action. It downloads the prebuilt release binary for the runner platform, verifies it against the release `SHA256SUMS`, runs the audit, and uploads a SARIF report to GitHub Code Scanning — findings appear in the repository Security tab and on pull requests:
+
+```yaml
+permissions:
+  security-events: write
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: nyudenkov/pysentry@v0.4.8
+    with:
+      fail-on: high
+```
+
+Inputs map 1:1 to CLI flags (`path`, `fail-on`, `sources`, `format`, `output`, `ignore`, plus a raw `args` passthrough). The SARIF report is uploaded even when the audit fails, so findings always reach the Security tab before the job exits non-zero. See the [CI guide](/ci) — it also covers other CI systems.
+
+#### `--service-url`: Custom OSV-Compatible Endpoint
+
+Corporate and air-gapped environments can point the OSV provider at a self-hosted or mirrored OSV-compatible endpoint:
+
+```bash
+pysentry-rs --sources osv --service-url https://osv.internal.example.com
+```
+
+Only valid with `--sources osv`; also available as a config file option.
+
+#### Distinct Exit Code for System Errors
+
+Exit code `1` previously meant both "vulnerabilities found" and "the audit never ran". System errors (bad configuration, network failure, parse failure) now exit `2`; findings at or above the `--fail-on` threshold keep `1`. CI can gate on any non-zero exit as before, or handle the two cases separately.
+
+### 🔧 Improvements
+
+#### SARIF Reports Carry Line Numbers for Every Source
+
+SARIF results previously included a source line only for `pyproject.toml` and `uv.lock`; every other project layout produced results GitHub Code Scanning could not anchor. Location scanning now covers everything the parsers read: `requirements.txt` (including multi-file audits), `poetry.lock`, `pylock.toml`, `Pipfile.lock`, `Pipfile`, and — inside `pyproject.toml` — extras and PEP 735 dependency groups.
+
+#### Maintenance Checks Skip Non-Registry Dependencies
+
+PEP 792 maintenance status checks no longer query PyPI for Git, path, and URL dependencies that cannot exist there — fewer wasted requests and no meaningless "not found" results.
+
+#### Own Supply Chain Hardening
+
+Release assets now ship with a `SHA256SUMS` file, verified by the GitHub Action before running the binary. The project's own `cargo audit` CI job is pinned and runs against a reviewed, commented ignore list, and `quinn-proto` was bumped to 0.11.15 (RUSTSEC-2026-0185).
+
+#### OSV and PyPI Clients Identify Themselves
+
+Both clients now send a `pysentry/{version}` user-agent, matching the rest of the codebase.
+
+### 🐛 Bug Fixes
+
+- **SARIF: multi-file requirements audits emitted a bogus URI.** Auditing several requirements files produced `artifactLocation.uri` values like `"requirements.txt, dev-requirements.txt"`; each finding now resolves to its own real file.
+- **SARIF: substring package matching.** Location scanning could anchor `jinja2` to a `flask-jinja2` line; names are now compared through full PEP 503 normalization.
+- **Advisory aliases were double-reported in single-source audits.** Aliased advisories (e.g. the same CVE under GHSA and PYSEC IDs) are collapsed into one finding.
+
 ## v0.4.7 "Hardening"
 
 ### ✨ New Features

@@ -22,6 +22,12 @@ use futures::future::try_join_all;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Findings at/above the `fail_on` threshold (or failing maintenance issues)
+pub const EXIT_VULNERABILITIES_FOUND: i32 = 1;
+/// System errors (bad config, network failure, parse failure) — distinguishable
+/// from findings so CI can tell "vulnerable" from "audit never ran"
+pub const EXIT_ERROR: i32 = 2;
+
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn audit(
     audit_args: &AuditArgs,
@@ -38,7 +44,7 @@ pub async fn audit(
         Ok(sources) => sources,
         Err(e) => {
             eprintln!("Error: Invalid vulnerability sources: {e}");
-            return Ok(1);
+            return Ok(EXIT_ERROR);
         }
     };
 
@@ -88,7 +94,7 @@ pub async fn audit(
         Ok(result) => result,
         Err(e) => {
             eprintln!("Error: Audit failed: {e}");
-            return Ok(1);
+            return Ok(EXIT_ERROR);
         }
     };
 
@@ -206,7 +212,7 @@ pub async fn audit(
     let fail_maintenance = report.should_fail_on_maintenance(&maintenance_config);
 
     if fail_vulns || fail_maintenance {
-        Ok(1)
+        Ok(EXIT_VULNERABILITIES_FOUND)
     } else {
         Ok(0)
     }
