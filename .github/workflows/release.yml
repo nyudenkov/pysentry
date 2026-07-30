@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
       - name: Create Release
         id: create_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
@@ -127,7 +127,7 @@ jobs:
   upload-release-assets:
     name: Upload Release Assets
     runs-on: ubuntu-latest
-    needs: build-binaries
+    needs: [create-release, build-binaries]
     permissions:
       contents: write
     steps:
@@ -147,13 +147,22 @@ jobs:
           sha256sum *.tar.gz *.zip > SHA256SUMS
           cat SHA256SUMS
 
+      # Upload by release id, NOT by tag: drafts are not tag-associated, so a
+      # tag lookup creates a second, published release — which under immutable
+      # releases can never receive assets (422, broke v0.4.8). The draft stays
+      # mutable until update-release publishes it with everything attached.
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: binaries/*
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in binaries/*; do
+            name=$(basename "$file")
+            echo "Uploading $name"
+            gh api --method POST \
+              -H "Content-Type: application/octet-stream" \
+              "https://uploads.github.com/repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}/assets?name=$name" \
+              --input "$file" > /dev/null
+          done
 
   verify-all-builds:
     name: Verify All Builds Complete
@@ -338,13 +347,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    needs: [publish-crates, publish-pypi]
+    needs: [create-release, publish-crates, publish-pypi]
     if: success()
     steps:
+      # Publish the draft by id (see the upload job comment): assets are already
+      # attached, so the release becomes immutable in its complete state
       - name: Mark release as published
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH \
+            "repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.release_id }}" \
+            -F draft=false
