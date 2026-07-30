@@ -30,7 +30,7 @@ PySentry audits Python projects for known security vulnerabilities. It reads you
 
 ## Used by
 
-PySentry runs in CI pipelines at [Genkit](https://github.com/genkit-ai/genkit) (Google), [OVD-Info](https://ovd.info/en), [activist.org](https://activist.org), and [To Be Precise](https://tochno.st) (@tochno-st), among others.
+PySentry runs in CI pipelines at [Genkit](https://github.com/genkit-ai/genkit) (Google), [OVD-Info](https://ovd.info/en), [activist.org](https://activist.org), and [To Be Precise](https://tochno.st), among others.
 
 ## Installation
 
