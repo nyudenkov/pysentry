@@ -632,19 +632,17 @@ async fn perform_audit(
 
     let databases = vuln_result?;
 
-    let database = if databases.len() == 1 {
-        // invariant: guarded by len() == 1, so the first element always exists.
-        #[allow(clippy::unwrap_used)]
-        databases.into_iter().next().unwrap()
-    } else {
-        if !audit_args.is_quiet() {
-            eprintln!(
-                "Merging vulnerability data from {} sources...",
-                databases.len()
-            );
-        }
-        VulnerabilityDatabase::merge(databases)
-    };
+    if databases.len() > 1 && !audit_args.is_quiet() {
+        eprintln!(
+            "Merging vulnerability data from {} sources...",
+            databases.len()
+        );
+    }
+    // Always merge, even for a single source: a source can report the same
+    // vulnerability under aliased advisory IDs (e.g. PyPI lists GHSA and PYSEC
+    // entries separately). merge collapses aliases per package, so the count
+    // reflects distinct vulnerabilities instead of double-counting aliases.
+    let database = VulnerabilityDatabase::merge(databases);
 
     if audit_args.is_verbose() {
         eprintln!("Matching against vulnerability database...");
