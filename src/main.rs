@@ -18,7 +18,9 @@ async fn main() -> ExitCode {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
             eprintln!("Error: {e}");
-            ExitCode::FAILURE
+            // invariant: EXIT_ERROR is 2, which fits u8
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            ExitCode::from(pysentry::audit::pipeline::EXIT_ERROR as u8)
         }
     }
 }
@@ -33,7 +35,9 @@ async fn run() -> Result<u8> {
                 Ok(result) => result,
                 Err(e) => {
                     eprintln!("Configuration error: {e}");
-                    return Ok(1);
+                    // invariant: EXIT_ERROR is 2, which fits u8
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    return Ok(pysentry::audit::pipeline::EXIT_ERROR as u8);
                 }
             };
 
