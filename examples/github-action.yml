@@ -1,0 +1,31 @@
+# Example: audit Python dependencies with PySentry on every push and PR,
+# uploading results to GitHub Code Scanning (Security tab).
+#
+# Copy this file to .github/workflows/pysentry.yml in your repository.
+
+name: Dependency Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  # Required for SARIF upload to Code Scanning
+  security-events: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PySentry audit
+        uses: nyudenkov/pysentry@v0.4.8
+        with:
+          # All inputs are optional; these are the common ones:
+          fail-on: high            # fail the job on high/critical findings
+          # sources: osv           # limit vulnerability sources
+          # ignore: GHSA-xxxx-yyyy # space-separated IDs to suppress
+          # upload-sarif: 'false'  # disable the Code Scanning upload

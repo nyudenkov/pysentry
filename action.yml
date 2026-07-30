@@ -1,0 +1,168 @@
+name: 'PySentry Security Audit'
+description: 'Audit Python dependencies for known vulnerabilities. Supports uv.lock, poetry.lock, Pipfile.lock, requirements.txt, pyproject.toml.'
+author: 'Nikita Iudenkov'
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: 'Path to the project to audit'
+    required: false
+    default: '.'
+  version:
+    description: 'PySentry version to use (e.g. v0.4.8). Defaults to the version matching the action tag, or latest.'
+    required: false
+    default: ''
+  fail-on:
+    description: 'Minimum severity that causes a non-zero exit (low, medium, high, critical). Uses PySentry default when empty.'
+    required: false
+    default: ''
+  sources:
+    description: 'Space-separated vulnerability sources (pypa, pypi, osv). Uses PySentry default when empty.'
+    required: false
+    default: ''
+  format:
+    description: 'Report format (sarif, json, markdown, human)'
+    required: false
+    default: 'sarif'
+  output:
+    description: 'Report output file'
+    required: false
+    default: 'pysentry-results.sarif'
+  ignore:
+    description: 'Space-separated vulnerability IDs to ignore'
+    required: false
+    default: ''
+  upload-sarif:
+    description: 'Upload the SARIF report to GitHub Code Scanning (requires security-events: write permission)'
+    required: false
+    default: 'true'
+  category:
+    description: 'GitHub Code Scanning category for the uploaded SARIF'
+    required: false
+    default: 'pysentry'
+  args:
+    description: 'Extra raw CLI arguments passed through to pysentry'
+    required: false
+    default: ''
+
+outputs:
+  exit-code:
+    description: 'PySentry exit code (0 = no findings at/above fail-on threshold)'
+    value: ${{ steps.scan.outputs.exit-code }}
+  output-file:
+    description: 'Path to the generated report'
+    value: ${{ steps.scan.outputs.output-file }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install PySentry
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          # Default: the binary tag matching the action tag; branch refs fall back to latest
+          case "$ACTION_REF" in
+            v[0-9]*.[0-9]*.[0-9]*) version="$ACTION_REF" ;;
+            *) version="latest" ;;
+          esac
+        fi
+
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)     platform="linux-x64";   ext="tar.gz" ;;
+          Linux-ARM64)   platform="linux-arm64"; ext="tar.gz" ;;
+          macOS-X64)     platform="macos-x64";   ext="tar.gz" ;;
+          macOS-ARM64)   platform="macos-arm64"; ext="tar.gz" ;;
+          Windows-X64)   platform="windows-x64"; ext="zip" ;;
+          *) echo "::error::Unsupported runner: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+        esac
+
+        if [ "$version" = "latest" ]; then
+          base_url="https://github.com/nyudenkov/pysentry/releases/latest/download"
+        else
+          base_url="https://github.com/nyudenkov/pysentry/releases/download/$version"
+        fi
+        asset="pysentry-$platform.$ext"
+
+        install_dir="$RUNNER_TEMP/pysentry-install"
+        mkdir -p "$install_dir"
+        cd "$install_dir"
+
+        echo "Downloading $asset ($version)"
+        curl -fsSL --retry 3 -O "$base_url/$asset"
+        curl -fsSL --retry 3 -O "$base_url/SHA256SUMS"
+
+        grep "  $asset\$" SHA256SUMS > checksum.txt
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum -c checksum.txt
+        else
+          shasum -a 256 -c checksum.txt
+        fi
+
+        if [ "$ext" = "zip" ]; then
+          python3 -m zipfile -e "$asset" .
+        else
+          tar -xzf "$asset"
+        fi
+
+        echo "$install_dir/pysentry-$platform" >> "$GITHUB_PATH"
+
+    - name: Run PySentry
+      id: scan
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_SOURCES: ${{ inputs.sources }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_IGNORE: ${{ inputs.ignore }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: |
+        set -uo pipefail
+
+        args=("$INPUT_PATH" --format "$INPUT_FORMAT" --output "$INPUT_OUTPUT")
+        if [ -n "$INPUT_FAIL_ON" ]; then
+          args+=(--fail-on "$INPUT_FAIL_ON")
+        fi
+        for source in $INPUT_SOURCES; do
+          args+=(--sources "$source")
+        done
+        for id in $INPUT_IGNORE; do
+          args+=(--ignore "$id")
+        done
+        if [ -n "$INPUT_ARGS" ]; then
+          # shellcheck disable=SC2206 # word-splitting the raw passthrough is intentional
+          args+=($INPUT_ARGS)
+        fi
+
+        exit_code=0
+        pysentry "${args[@]}" || exit_code=$?
+
+        echo "exit-code=$exit_code" >> "$GITHUB_OUTPUT"
+        echo "output-file=$INPUT_OUTPUT" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to Code Scanning
+      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && steps.scan.outputs.exit-code != '' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.output }}
+        category: ${{ inputs.category }}
+
+    - name: Report scan result
+      shell: bash
+      env:
+        SCAN_EXIT_CODE: ${{ steps.scan.outputs.exit-code }}
+      run: |
+        if [ "$SCAN_EXIT_CODE" != "0" ]; then
+          echo "::error::PySentry found vulnerabilities at or above the fail-on threshold (exit code $SCAN_EXIT_CODE)"
+        fi
+        exit "$SCAN_EXIT_CODE"
