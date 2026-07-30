@@ -149,6 +149,9 @@ pub async fn audit(
     }
 
     if !audit_args.is_quiet() {
+        #[cfg(feature = "hotpath")]
+        let _hp_notices =
+            hotpath::MeasurementGuardSync::new("audit::post_audit_notices", false, false);
         let audit_cache = AuditCache::new(cache_dir.to_path_buf());
 
         // Show feedback message (once per day) — suppressed in CI
@@ -249,6 +252,7 @@ pub(crate) fn evaluate_fail_condition(
     (matches, fail_vulns)
 }
 
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 async fn perform_audit(
     audit_args: &AuditArgs,
     cache_dir: &Path,

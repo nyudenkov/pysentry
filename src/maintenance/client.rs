@@ -75,6 +75,7 @@ impl SimpleIndexClient {
     ///
     /// Returns a list of maintenance issues found for packages that have
     /// non-active status markers (archived, deprecated, or quarantined).
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn check_maintenance_status(
         &self,
         dependencies: &[ScannedDependency],

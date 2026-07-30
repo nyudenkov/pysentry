@@ -19,6 +19,7 @@ use std::path::Path;
 /// child → sorted top-level deps that reach it. `direct` is the set of declared direct
 /// dependencies (taken from the already-scanned deps, so it reuses each parser's own
 /// is_direct logic rather than re-deriving it). `parser_name` selects the lock reader.
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
 pub async fn build_transitive_roots(
     project_dir: &Path,
     parser_name: &str,

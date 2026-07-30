@@ -195,6 +195,7 @@ impl ParserRegistry {
 
     /// Parse dependencies from a project directory using the best available parser
     /// Returns dependencies, skipped packages, and parser name
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn parse_project(
         &self,
         project_path: &Path,
