@@ -170,6 +170,7 @@ impl OsvSource {
         vulnerability_ttl: u64,
     ) -> Self {
         let client = reqwest::Client::builder()
+            .user_agent(format!("pysentry/{}", env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(http_config.timeout))
             .connect_timeout(std::time::Duration::from_secs(http_config.connect_timeout))
             .build()
