@@ -89,32 +89,84 @@ impl SarifGenerator {
         Ok(json_output)
     }
 
+    /// Candidate files to scan/look up for a match's source location. A lock file
+    /// derives from its companion manifest, so the manifest is included too — its
+    /// line is where users actually fix the dependency. `None` keeps the historical
+    /// pyproject.toml + uv.lock fallback.
+    fn candidate_files(source_file: Option<&str>) -> Vec<String> {
+        let Some(source_file) = source_file else {
+            return vec!["pyproject.toml".to_string(), "uv.lock".to_string()];
+        };
+
+        let mut candidates: Vec<String> = Vec::new();
+        if source_file == "uv.lock"
+            || source_file == "poetry.lock"
+            || source_file.starts_with("pylock.")
+        {
+            candidates.push("pyproject.toml".to_string());
+        } else if source_file == "Pipfile.lock" {
+            candidates.push("Pipfile".to_string());
+        }
+        // Multi-file requirements audits join file names with ", "
+        // (see requirements.rs `combine_explicit_files` label)
+        for name in source_file.split(", ") {
+            if !candidates.iter().any(|existing| existing == name) {
+                candidates.push(name.to_string());
+            }
+        }
+        candidates
+    }
+
     /// Pre-process file locations for better mapping
     fn preprocess_locations(&mut self, matches: &[VulnerabilityMatch]) {
         let mut packages_to_locate: HashSet<PackageName> = HashSet::new();
+        let mut source_files: HashSet<String> = HashSet::new();
 
         for m in matches {
             packages_to_locate.insert(m.package_name.clone());
+            source_files.extend(Self::candidate_files(m.source_file.as_deref()));
         }
 
         debug!(
-            "Pre-processing locations for {} packages",
-            packages_to_locate.len()
+            "Pre-processing locations for {} packages across {} files",
+            packages_to_locate.len(),
+            source_files.len()
         );
 
-        if let Ok(locations) = self.parse_pyproject_locations(&packages_to_locate) {
-            for (package, locs) in locations {
-                self.location_cache
-                    .insert(format!("pyproject.toml:{package}"), locs);
-            }
-        }
+        for file_name in source_files {
+            let locations = if file_name == "pyproject.toml" {
+                self.parse_pyproject_locations(&packages_to_locate)
+            } else if file_name.ends_with(".py") {
+                // PEP 723 scripts report their own artifact directly (see the
+                // is_script_source guard in create_locations_for_match)
+                continue;
+            } else if file_name == "Pipfile.lock" {
+                self.parse_pipfile_lock_locations(&packages_to_locate)
+            } else if file_name.ends_with(".lock") || file_name.ends_with(".toml") {
+                // uv.lock, poetry.lock, pylock*.toml all declare packages as
+                // `name = "..."`
+                self.parse_toml_name_locations(&file_name, &packages_to_locate)
+            } else {
+                // requirements-style: one requirement per line (also covers
+                // Pipfile's `package = "spec"` entries by their leading token)
+                self.parse_requirements_locations(&file_name, &packages_to_locate)
+            };
 
-        if let Ok(locations) = self.parse_lock_locations(&packages_to_locate) {
-            for (package, locs) in locations {
-                self.location_cache
-                    .insert(format!("uv.lock:{package}"), locs);
+            if let Ok(locations) = locations {
+                for (package, locs) in locations {
+                    self.location_cache
+                        .insert(format!("{file_name}:{package}"), locs);
+                }
             }
         }
+    }
+
+    /// Leading distribution-name token of a PEP 508 requirement string, if any
+    fn requirement_name(spec: &str) -> Option<&str> {
+        let end = spec
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+            .unwrap_or(spec.len());
+        spec.get(..end).filter(|name| !name.is_empty())
     }
 
     /// Parse pyproject.toml to find dependency locations
@@ -131,59 +183,63 @@ impl SarifGenerator {
             .map_err(|e| AuditError::Cache(anyhow::Error::from(e)))?;
 
         let mut locations = HashMap::new();
-        let lines: Vec<&str> = content.lines().collect();
 
-        let mut in_dependencies = false;
-        let mut current_section = None;
+        // Mirror the sections parsers/pyproject.rs actually reads dependencies from:
+        // [project].dependencies, [project.optional-dependencies].*, [dependency-groups].*.
+        // Known ceiling: multi-line arrays only — a single-line `dev = ["pytest"]`
+        // gets no location, matching the scanner's historical behavior.
+        let mut current_section = String::new();
+        let mut in_requirement_array = false;
 
-        for (line_idx, line) in lines.iter().enumerate() {
+        for (line_idx, line) in content.lines().enumerate() {
             let line_num = u32::try_from(line_idx + 1).unwrap_or(0);
             let trimmed = line.trim();
 
             if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                in_dependencies = false;
+                current_section = trimmed.to_string();
+                in_requirement_array = false;
+                continue;
+            }
 
-                if trimmed == "[project]" {
-                    current_section = Some(trimmed.to_string());
-                    continue;
+            if !in_requirement_array {
+                let section_holds_requirements = current_section
+                    == "[project.optional-dependencies]"
+                    || current_section == "[dependency-groups]";
+                let opens_array = trimmed.contains('=') && trimmed.ends_with('[');
+                if (current_section == "[project]" && trimmed == "dependencies = [")
+                    || (section_holds_requirements && opens_array)
+                {
+                    in_requirement_array = true;
                 }
-
-                current_section = Some(trimmed.to_string());
                 continue;
             }
 
-            if current_section.as_deref() == Some("[project]") && trimmed == "dependencies = [" {
-                in_dependencies = true;
+            if trimmed == "]" {
+                in_requirement_array = false;
                 continue;
             }
 
-            if in_dependencies && trimmed == "]" {
-                in_dependencies = false;
+            // Array entries are quoted PEP 508 strings; non-string entries such as
+            // dependency-group `{include-group = "..."}` tables are skipped here
+            let Some(spec) = trimmed.strip_prefix('"') else {
                 continue;
-            }
-
-            if in_dependencies && !trimmed.is_empty() && !trimmed.starts_with('#') {
-                for package in packages {
-                    let package_str = package.to_string();
-
-                    if trimmed.contains(&package_str) {
-                        if let Some(col) = line.find(&package_str) {
-                            let location = LocationInfo {
-                                file_path: "pyproject.toml".to_string(),
-                                line: Some(line_num),
-                                column: Some(u32::try_from(col + 1).unwrap_or(0)),
-                                context: Some(format!(
-                                    "Dependency declaration in {}",
-                                    current_section.as_deref().unwrap_or("unknown section")
-                                )),
-                            };
-
-                            locations
-                                .entry(package.clone())
-                                .or_insert_with(Vec::new)
-                                .push(location);
-                        }
-                    }
+            };
+            let Some(name_token) = Self::requirement_name(spec) else {
+                continue;
+            };
+            // invariant: compare via PackageName, never raw strings (CLAUDE.md) —
+            // substring matching made `jinja2` hit `flask-jinja2` lines
+            if let Some(package) = packages.get(&PackageName::new(name_token)) {
+                if let Some(col) = line.find(name_token) {
+                    locations
+                        .entry(package.clone())
+                        .or_insert_with(Vec::new)
+                        .push(LocationInfo {
+                            file_path: "pyproject.toml".to_string(),
+                            line: Some(line_num),
+                            column: Some(u32::try_from(col + 1).unwrap_or(0)),
+                            context: Some(format!("Dependency declaration in {current_section}")),
+                        });
                 }
             }
         }
@@ -195,12 +251,14 @@ impl SarifGenerator {
         Ok(locations)
     }
 
-    /// Parse uv.lock to find dependency locations
-    fn parse_lock_locations(
+    /// Parse a TOML lock file (uv.lock, poetry.lock, pylock*.toml) for package
+    /// declaration locations via their shared `name = "..."` syntax
+    fn parse_toml_name_locations(
         &self,
+        file_name: &str,
         packages: &HashSet<PackageName>,
     ) -> Result<HashMap<PackageName, Vec<LocationInfo>>> {
-        let lock_path = self.project_root.join("uv.lock");
+        let lock_path = self.project_root.join(file_name);
         if !lock_path.exists() {
             return Ok(HashMap::new());
         }
@@ -209,36 +267,161 @@ impl SarifGenerator {
             .map_err(|e| AuditError::Cache(anyhow::Error::from(e)))?;
 
         let mut locations = HashMap::new();
-        let lines: Vec<&str> = content.lines().collect();
 
-        for (line_idx, line) in lines.iter().enumerate() {
+        for (line_idx, line) in content.lines().enumerate() {
             let line_num = u32::try_from(line_idx + 1).unwrap_or(0);
             let trimmed = line.trim();
 
-            if let Some(name_start) = trimmed.find("name = \"") {
-                if let Some(name_end) = trimmed[name_start + 8..].find('"') {
-                    let package_name_str = &trimmed[name_start + 8..name_start + 8 + name_end];
+            if let Some(rest) = trimmed.strip_prefix("name = \"") {
+                if let Some(name_end) = rest.find('"') {
+                    let Some(package_name_str) = rest.get(..name_end) else {
+                        continue;
+                    };
 
-                    for package in packages {
-                        if package.to_string() == package_name_str {
-                            let location = LocationInfo {
-                                file_path: "uv.lock".to_string(),
+                    if let Some(package) = packages.get(&PackageName::new(package_name_str)) {
+                        let column = line.find(package_name_str).map(|c| c + 1).unwrap_or(0);
+                        locations
+                            .entry(package.clone())
+                            .or_insert_with(Vec::new)
+                            .push(LocationInfo {
+                                file_path: file_name.to_string(),
                                 line: Some(line_num),
-                                column: Some(u32::try_from(name_start + 8 + 1).unwrap_or(0)),
+                                column: Some(u32::try_from(column).unwrap_or(0)),
                                 context: Some("Package declaration in lock file".to_string()),
-                            };
-
-                            locations
-                                .entry(package.clone())
-                                .or_insert_with(Vec::new)
-                                .push(location);
-                        }
+                            });
                     }
                 }
             }
         }
 
-        debug!("Found {} package locations in uv.lock", locations.len());
+        debug!("Found {} package locations in {file_name}", locations.len());
+        Ok(locations)
+    }
+
+    /// Parse Pipfile.lock (JSON) for package declaration locations. Package names
+    /// are the object keys directly under the top-level "default"/"develop"
+    /// sections (see parsers/pipfile_lock.rs `PipfileLock`)
+    fn parse_pipfile_lock_locations(
+        &self,
+        packages: &HashSet<PackageName>,
+    ) -> Result<HashMap<PackageName, Vec<LocationInfo>>> {
+        let lock_path = self.project_root.join("Pipfile.lock");
+        if !lock_path.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let content = fs_err::read_to_string(&lock_path)
+            .map_err(|e| AuditError::Cache(anyhow::Error::from(e)))?;
+
+        let mut locations = HashMap::new();
+
+        // serde_json gives no spans, so line-scan pretty-printed JSON (the only
+        // form pipenv writes) tracking brace depth inside the package sections
+        let mut in_package_section = false;
+        let mut section_depth = 0u32;
+
+        for (line_idx, line) in content.lines().enumerate() {
+            let line_num = u32::try_from(line_idx + 1).unwrap_or(0);
+            let trimmed = line.trim();
+
+            if !in_package_section {
+                if trimmed.starts_with("\"default\": {") || trimmed.starts_with("\"develop\": {") {
+                    in_package_section = true;
+                    section_depth = 1;
+                }
+                continue;
+            }
+
+            // A package entry key opens a nested object: `"jinja2": {`
+            if section_depth == 1 && trimmed.ends_with('{') {
+                if let Some(rest) = trimmed.strip_prefix('"') {
+                    if let Some(name_end) = rest.find('"') {
+                        if let Some(package_name_str) = rest.get(..name_end) {
+                            if let Some(package) = packages.get(&PackageName::new(package_name_str))
+                            {
+                                let column =
+                                    line.find(package_name_str).map(|c| c + 1).unwrap_or(0);
+                                locations
+                                    .entry(package.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(LocationInfo {
+                                        file_path: "Pipfile.lock".to_string(),
+                                        line: Some(line_num),
+                                        column: Some(u32::try_from(column).unwrap_or(0)),
+                                        context: Some(
+                                            "Package declaration in lock file".to_string(),
+                                        ),
+                                    });
+                            }
+                        }
+                    }
+                }
+            }
+
+            for ch in trimmed.chars() {
+                match ch {
+                    '{' => section_depth += 1,
+                    '}' => {
+                        section_depth = section_depth.saturating_sub(1);
+                        if section_depth == 0 {
+                            in_package_section = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        debug!(
+            "Found {} package locations in Pipfile.lock",
+            locations.len()
+        );
+        Ok(locations)
+    }
+
+    /// Parse a requirements-style file (one requirement per line) for dependency locations
+    fn parse_requirements_locations(
+        &self,
+        file_name: &str,
+        packages: &HashSet<PackageName>,
+    ) -> Result<HashMap<PackageName, Vec<LocationInfo>>> {
+        let requirements_path = self.project_root.join(file_name);
+        if !requirements_path.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let content = fs_err::read_to_string(&requirements_path)
+            .map_err(|e| AuditError::Cache(anyhow::Error::from(e)))?;
+
+        let mut locations = HashMap::new();
+
+        for (line_idx, line) in content.lines().enumerate() {
+            let line_num = u32::try_from(line_idx + 1).unwrap_or(0);
+            let trimmed = line.trim();
+
+            // Skip comments, section headers (Pipfile), and pip options (-r, --hash, …)
+            if trimmed.is_empty() || trimmed.starts_with(['#', '[', '-']) {
+                continue;
+            }
+
+            let Some(name_token) = Self::requirement_name(trimmed) else {
+                continue;
+            };
+            if let Some(package) = packages.get(&PackageName::new(name_token)) {
+                let column = line.find(name_token).map(|c| c + 1).unwrap_or(0);
+                locations
+                    .entry(package.clone())
+                    .or_insert_with(Vec::new)
+                    .push(LocationInfo {
+                        file_path: file_name.to_string(),
+                        line: Some(line_num),
+                        column: Some(u32::try_from(column).unwrap_or(0)),
+                        context: Some("Requirement declaration".to_string()),
+                    });
+            }
+        }
+
+        debug!("Found {} package locations in {file_name}", locations.len());
         Ok(locations)
     }
 
@@ -824,30 +1007,30 @@ impl SarifGenerator {
             .is_some_and(|file| file.ends_with(".py"));
 
         if !is_script_source {
-            if let Some(pyproject_locations) = self
-                .location_cache
-                .get(&format!("pyproject.toml:{package_name}"))
-            {
-                for loc_info in pyproject_locations {
-                    locations.push(Self::create_location_from_info(loc_info, m));
-                }
-            }
-
-            if let Some(lock_locations) =
-                self.location_cache.get(&format!("uv.lock:{package_name}"))
-            {
-                for loc_info in lock_locations {
-                    locations.push(Self::create_location_from_info(loc_info, m));
+            for file_name in Self::candidate_files(m.source_file.as_deref()) {
+                if let Some(file_locations) = self
+                    .location_cache
+                    .get(&format!("{file_name}:{package_name}"))
+                {
+                    for loc_info in file_locations {
+                        locations.push(Self::create_location_from_info(loc_info, m));
+                    }
                 }
             }
         }
 
         if locations.is_empty() {
-            let file_path = m.source_file.as_deref().unwrap_or(if m.is_direct {
-                "pyproject.toml"
-            } else {
-                "uv.lock"
-            });
+            // Multi-file requirements labels are comma-joined file names — take the
+            // first real file rather than emitting the whole label as a bogus uri
+            let file_path = m
+                .source_file
+                .as_deref()
+                .and_then(|source_file| source_file.split(", ").next())
+                .unwrap_or(if m.is_direct {
+                    "pyproject.toml"
+                } else {
+                    "uv.lock"
+                });
 
             let physical_location = SarifPhysicalLocation::builder()
                 .artifact_location(Self::artifact_location(file_path))
@@ -1374,6 +1557,204 @@ dev = [
             assert_eq!(test_package_locations[0].file_path, "pyproject.toml");
             assert!(test_package_locations[0].line.is_some());
         }
+    }
+
+    #[test]
+    fn test_requirements_locations_no_substring_match() {
+        // Regression: `jinja2` must anchor to its own line, not the
+        // `flask-jinja2` line above it (substring matching), and requirements
+        // files must produce regions at all
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("requirements.txt"),
+            "flask-jinja2==1.0\njinja2==2.10\n",
+        )
+        .unwrap();
+
+        let generator = SarifGenerator::new(temp_dir.path());
+        let mut packages = HashSet::new();
+        packages.insert(PackageName::from_str("jinja2").unwrap());
+
+        let locations = generator
+            .parse_requirements_locations("requirements.txt", &packages)
+            .unwrap();
+
+        let jinja2_locations = &locations[&PackageName::from_str("jinja2").unwrap()];
+        assert_eq!(jinja2_locations.len(), 1);
+        assert_eq!(jinja2_locations[0].line, Some(2));
+        assert_eq!(jinja2_locations[0].file_path, "requirements.txt");
+    }
+
+    #[test]
+    fn test_pyproject_locations_cover_groups_and_extras() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("pyproject.toml"),
+            r#"[project]
+name = "demo"
+dependencies = [
+    "requests>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "jinja2==2.10",
+]
+
+[dependency-groups]
+test = [
+    {include-group = "dev"},
+    "pyyaml==5.1",
+]
+"#,
+        )
+        .unwrap();
+
+        let generator = SarifGenerator::new(temp_dir.path());
+        let packages: HashSet<PackageName> = ["requests", "jinja2", "pyyaml"]
+            .iter()
+            .map(|name| PackageName::from_str(name).unwrap())
+            .collect();
+
+        let locations = generator.parse_pyproject_locations(&packages).unwrap();
+
+        let line_of = |name: &str| {
+            locations[&PackageName::from_str(name).unwrap()][0]
+                .line
+                .unwrap()
+        };
+        assert_eq!(line_of("requests"), 4);
+        assert_eq!(line_of("jinja2"), 9); // [project.optional-dependencies]
+        assert_eq!(line_of("pyyaml"), 15); // [dependency-groups], past the include-group entry
+    }
+
+    #[test]
+    fn test_poetry_lock_locations() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("poetry.lock"),
+            "[[package]]\nname = \"jinja2\"\nversion = \"2.10\"\n",
+        )
+        .unwrap();
+
+        let generator = SarifGenerator::new(temp_dir.path());
+        let mut packages = HashSet::new();
+        packages.insert(PackageName::from_str("jinja2").unwrap());
+
+        let locations = generator
+            .parse_toml_name_locations("poetry.lock", &packages)
+            .unwrap();
+
+        let jinja2_locations = &locations[&PackageName::from_str("jinja2").unwrap()];
+        assert_eq!(jinja2_locations[0].line, Some(2));
+        assert_eq!(jinja2_locations[0].file_path, "poetry.lock");
+    }
+
+    #[test]
+    fn test_pipfile_lock_locations() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("Pipfile.lock"),
+            r#"{
+    "_meta": {
+        "hash": {
+            "sha256": "abc"
+        },
+        "pipfile-spec": 6
+    },
+    "default": {
+        "flask-jinja2": {
+            "hashes": [
+                "sha256:jinja2-lookalike-inside-a-string"
+            ],
+            "version": "==1.0"
+        },
+        "jinja2": {
+            "version": "==2.10"
+        }
+    },
+    "develop": {
+        "pytest": {
+            "version": "==6.0"
+        }
+    }
+}"#,
+        )
+        .unwrap();
+
+        let generator = SarifGenerator::new(temp_dir.path());
+        let packages: HashSet<PackageName> = ["jinja2", "pytest"]
+            .iter()
+            .map(|name| PackageName::from_str(name).unwrap())
+            .collect();
+
+        let locations = generator.parse_pipfile_lock_locations(&packages).unwrap();
+
+        // Exact key match only — not the flask-jinja2 key nor the hash string
+        let jinja2_locations = &locations[&PackageName::from_str("jinja2").unwrap()];
+        assert_eq!(jinja2_locations.len(), 1);
+        assert_eq!(jinja2_locations[0].line, Some(15));
+        // develop section is scanned too
+        let pytest_locations = &locations[&PackageName::from_str("pytest").unwrap()];
+        assert_eq!(pytest_locations[0].line, Some(20));
+    }
+
+    #[test]
+    fn test_multi_file_requirements_uri_and_region() {
+        // Regression: multi-file audits label source_file as
+        // "requirements.txt, dev-requirements.txt" — each match must resolve to
+        // its own real file, and unlocatable ones must not emit the joined
+        // label as a uri
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("requirements.txt"), "jinja2==2.10\n").unwrap();
+        std::fs::write(
+            temp_dir.path().join("dev-requirements.txt"),
+            "pyyaml==5.1\n",
+        )
+        .unwrap();
+
+        let mut generator = SarifGenerator::new(temp_dir.path());
+        let label = "requirements.txt, dev-requirements.txt";
+        let mut pyyaml_match = create_test_match();
+        pyyaml_match.package_name = PackageName::from_str("pyyaml").unwrap();
+        pyyaml_match.source_file = Some(label.to_string());
+        let mut unlocatable_match = create_test_match();
+        unlocatable_match.package_name = PackageName::from_str("transitive-dep").unwrap();
+        unlocatable_match.source_file = Some(label.to_string());
+
+        generator.preprocess_locations(&[pyyaml_match.clone(), unlocatable_match.clone()]);
+
+        let uri_of = |locations: &[SarifLocation]| {
+            locations[0]
+                .physical_location
+                .as_ref()
+                .unwrap()
+                .artifact_location
+                .as_ref()
+                .unwrap()
+                .uri
+                .clone()
+                .unwrap()
+        };
+
+        let located = generator.create_locations_for_match(&pyyaml_match);
+        assert_eq!(uri_of(&located), "dev-requirements.txt");
+        assert!(located[0]
+            .physical_location
+            .as_ref()
+            .unwrap()
+            .region
+            .is_some());
+
+        // Not textually present in either file → file-level fallback with a real path
+        let fallback = generator.create_locations_for_match(&unlocatable_match);
+        assert_eq!(uri_of(&fallback), "requirements.txt");
+        assert!(fallback[0]
+            .physical_location
+            .as_ref()
+            .unwrap()
+            .region
+            .is_none());
     }
 
     #[test]
