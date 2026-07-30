@@ -11,7 +11,7 @@ inputs:
     required: false
     default: '.'
   version:
-    description: 'PySentry version to use (e.g. v0.4.8). Defaults to the version matching the action tag, or latest.'
+    description: 'PySentry version to use (e.g. v0.4.9). Defaults to the version matching the action tag, or latest.'
     required: false
     default: ''
   fail-on:

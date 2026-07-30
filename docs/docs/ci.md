@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: nyudenkov/pysentry@v0.4.8
+      - uses: nyudenkov/pysentry@v0.4.9
         with:
           fail-on: high
 ```
