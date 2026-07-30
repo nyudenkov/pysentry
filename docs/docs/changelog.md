@@ -4,7 +4,7 @@ sidebar_position: 5
 
 # Changelog
 
-## v0.4.8 "CI-native"
+## v0.4.9 "CI-native"
 
 ### ✨ New Features
 
@@ -18,7 +18,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: nyudenkov/pysentry@v0.4.8
+  - uses: nyudenkov/pysentry@v0.4.9
     with:
       fail-on: high
 ```
