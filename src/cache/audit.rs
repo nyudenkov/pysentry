@@ -132,7 +132,7 @@ impl AuditCache {
 
         format!(
             "{}-py{}-{}-{}",
-            resolver_type, python_version, platform, &content_hash
+            resolver_type, python_version, platform, content_hash
         )
     }
 
