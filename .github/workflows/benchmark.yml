@@ -87,7 +87,7 @@ jobs:
       - name: Run benchmark suite
         run: |
           cd benchmarks
-          uv run python main.py --skip-build
+          uv run python main.py
 
           ls -la results/
 

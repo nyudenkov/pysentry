@@ -103,7 +103,7 @@ jobs:
       - name: Run benchmark suite
         run: |
           cd benchmarks
-          uv run python main.py --skip-build --output-dir /tmp/bench-results
+          uv run python main.py --output-dir /tmp/bench-results
 
       - name: Locate result JSON
         id: result
