@@ -82,6 +82,23 @@ repos:
         # args: ['--compact']  # terser output for hook runs
 ```
 
+## CI
+
+The GitHub Action downloads a checksum-verified binary, audits the project, and uploads a SARIF report to GitHub Code Scanning:
+
+```yaml
+permissions:
+  security-events: write # for the SARIF upload
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: nyudenkov/pysentry@v0.4.8
+    with:
+      fail-on: high
+```
+
+On any other CI system, `pysentry-rs --fail-on high` exits non-zero when findings reach the threshold. Details in the [CI guide](https://docs.pysentry.com/ci).
+
 ## Configuration
 
 Project defaults live in `.pysentry.toml` or `pyproject.toml`; CLI flags always take precedence:

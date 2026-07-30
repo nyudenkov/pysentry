@@ -18,6 +18,7 @@ const sidebars: SidebarsConfig = {
         "configuration/cli-options",
       ],
     },
+    "ci",
     "troubleshooting",
     "changelog",
   ],
