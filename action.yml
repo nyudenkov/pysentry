@@ -1,5 +1,5 @@
 name: 'PySentry Security Audit'
-description: 'Audit Python dependencies for known vulnerabilities. Supports uv.lock, poetry.lock, Pipfile.lock, requirements.txt, pyproject.toml.'
+description: 'Audit Python dependencies for known vulnerabilities and upload SARIF results to GitHub Code Scanning'
 author: 'Nikita Iudenkov'
 branding:
   icon: 'shield'
