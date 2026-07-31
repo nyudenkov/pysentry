@@ -84,7 +84,7 @@ repos:
 
 ## CI
 
-The GitHub Action downloads a checksum-verified binary, audits the project, and uploads a SARIF report to GitHub Code Scanning:
+The [GitHub Action](https://github.com/marketplace/actions/pysentry-security-audit) downloads a checksum-verified binary, audits the project, and uploads a SARIF report to GitHub Code Scanning:
 
 ```yaml
 permissions:

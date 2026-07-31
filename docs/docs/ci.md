@@ -8,7 +8,7 @@ PySentry is built for CI: it exits non-zero when findings reach the `--fail-on` 
 
 ## GitHub Action
 
-The first-party action downloads a prebuilt binary (verified against the release checksums), runs the audit, and uploads a SARIF report to GitHub Code Scanning, so findings appear in the repository Security tab and on pull requests.
+The first-party action ([Marketplace listing](https://github.com/marketplace/actions/pysentry-security-audit)) downloads a prebuilt binary (verified against the release checksums), runs the audit, and uploads a SARIF report to GitHub Code Scanning, so findings appear in the repository Security tab and on pull requests.
 
 ```yaml
 name: Dependency Audit
