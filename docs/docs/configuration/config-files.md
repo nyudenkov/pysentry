@@ -162,6 +162,7 @@ quiet = false
 | Option | Type | Description | Default |
 |--------|------|-------------|---------|
 | `enabled` | array | Vulnerability sources to use | `["pypa", "pypi", "osv"]` |
+| `service_url` | string | Override the OSV API base URL (custom/self-hosted OSV-compatible endpoint). Only valid when `enabled` is exactly `["osv"]` | public OSV API |
 
 ### `[resolver]`
 

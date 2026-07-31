@@ -28,6 +28,7 @@ Complete reference for all PySentry command line options.
 |--------|-------------|---------|
 | `--fail-on` | Fail (exit non-zero) on vulnerabilities >= severity | `medium` |
 | `--sources` | Vulnerability sources: `pypa`, `pypi`, `osv` (multiple) | `pypa,pypi,osv` |
+| `--service-url` | Override the OSV API base URL (custom/self-hosted OSV-compatible endpoint). Only valid with `--sources osv` | public OSV API |
 | `--exclude-extra` | Exclude extra dependencies (dev, optional, etc) | `false` |
 | `--group` | Audit only the named dependency group(s) plus main dependencies (repeatable, comma-separated). Requires a lock file. Conflicts with `--exclude-extra` | `[]` |
 | `--include-scripts` | Also scan PEP 723 Python scripts found under the project directory | `false` |
@@ -183,6 +184,9 @@ pysentry-rs --fail-on critical
 
 # Use specific vulnerability sources
 pysentry-rs --sources pypa --sources osv
+
+# Use a self-hosted OSV-compatible mirror (air-gapped / corporate CI)
+pysentry-rs --sources osv --service-url https://osv.internal.example.com
 
 # Audit only the "dev" group plus main deps (requires a lock file)
 pysentry-rs --group dev
