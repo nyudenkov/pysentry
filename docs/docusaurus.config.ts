@@ -11,7 +11,7 @@ const config: Config = {
     v4: true,
   },
 
-  url: 'https://docs.pysentry.com',
+  url: 'https://nyudenkov.github.io/pysentry',
   baseUrl: '/',
 
   organizationName: 'nyudenkov',
