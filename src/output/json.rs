@@ -20,6 +20,8 @@ pub(crate) fn generate_json_report(
         fix_suggestions: &report.fix_analysis.fix_suggestions,
         warnings: &report.warnings,
         maintenance_issues: &report.maintenance_issues,
+        partial: !report.failed_sources.is_empty(),
+        failed_sources: &report.failed_sources,
     };
     Ok(serde_json::to_string_pretty(&view)?)
 }
@@ -40,6 +42,10 @@ struct JsonReportView<'a> {
     fix_suggestions: &'a [FixSuggestion],
     warnings: &'a [String],
     maintenance_issues: &'a [MaintenanceIssue],
+    /// True when one or more vulnerability sources failed to fetch — findings are incomplete.
+    partial: bool,
+    /// Names of the sources that failed to fetch (empty on a full scan).
+    failed_sources: &'a [String],
 }
 
 #[cfg(test)]
@@ -177,6 +183,37 @@ mod tests {
 
         assert_eq!(json["vulnerabilities"][0]["is_direct"], true);
         assert_eq!(json["vulnerabilities"][1]["is_direct"], false);
+    }
+
+    #[test]
+    fn test_json_suppression_and_partial_surfaced() {
+        use crate::vulnerability::database::SuppressionReason;
+        let mut report = create_test_report();
+        report.matches[0].suppressed = Some(SuppressionReason::IgnoredPackage);
+        let report = report.with_failed_sources(vec!["osv".to_string()]);
+
+        let output = generate_json_report(&report).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        // Suppressed findings stay in the list (never dropped) and are tagged.
+        assert_eq!(json["vulnerabilities"].as_array().unwrap().len(), 1);
+        assert_eq!(json["total_vulnerabilities"], 1);
+        assert_eq!(json["vulnerabilities"][0]["suppressed"], "ignored_package");
+
+        // Partial-scan state is always present (false/empty on a clean scan).
+        assert_eq!(json["partial"], true);
+        assert_eq!(json["failed_sources"][0], "osv");
+    }
+
+    #[test]
+    fn test_json_partial_defaults_present_on_clean_scan() {
+        let report = create_test_report();
+        let output = generate_json_report(&report).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(json["partial"], false);
+        assert_eq!(json["failed_sources"].as_array().unwrap().len(), 0);
+        // Not suppressed → field omitted entirely.
+        assert!(json["vulnerabilities"][0]["suppressed"].is_null());
     }
 
     #[test]

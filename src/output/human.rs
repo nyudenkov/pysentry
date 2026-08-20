@@ -33,6 +33,22 @@ fn type_column_budget(
         .max("transitive".len())
 }
 
+/// " (SUPPRESSED)" tag for a policy-suppressed finding, styled dim, or "" when not suppressed.
+/// Its unstyled width is `SUPPRESSED_TAG_WIDTH` (needed by the grid column-width calc).
+const SUPPRESSED_TAG: &str = " (SUPPRESSED)";
+const SUPPRESSED_TAG_WIDTH: usize = SUPPRESSED_TAG.len();
+
+fn suppressed_tag(
+    m: &crate::vulnerability::database::VulnerabilityMatch,
+    styles: &OutputStyles,
+) -> String {
+    if m.suppressed.is_some() {
+        SUPPRESSED_TAG.style(styles.dimmed).to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Truncate a cell's visible text to `budget` characters, appending '…' when cut. Keeps the
 /// variable-length Type cell from forcing the whole grid table past the terminal width.
 fn truncate_cell(text: &str, budget: usize) -> String {
@@ -154,7 +170,8 @@ pub(crate) fn generate_human_report(
             let mut sev_w = "Severity".chars().count();
             for m in &report.matches {
                 let id_len = m.vulnerability.id.chars().count()
-                    + usize::from(m.vulnerability.withdrawn.is_some()) * " (WITHDRAWN)".len();
+                    + usize::from(m.vulnerability.withdrawn.is_some()) * " (WITHDRAWN)".len()
+                    + usize::from(m.suppressed.is_some()) * SUPPRESSED_TAG_WIDTH;
                 id_w = id_w.max(id_len);
                 pkg_w = pkg_w.max(m.package_name.to_string().chars().count());
                 ver_w = ver_w.max(format!("v{}", m.installed_version).chars().count());
@@ -166,12 +183,17 @@ pub(crate) fn generate_human_report(
             for m in &report.matches {
                 let id_field = if m.vulnerability.withdrawn.is_some() {
                     format!(
-                        "{} {}",
+                        "{} {}{}",
                         m.vulnerability.id.style(styles.vuln_id),
-                        "(WITHDRAWN)".style(styles.withdrawn_tag)
+                        "(WITHDRAWN)".style(styles.withdrawn_tag),
+                        suppressed_tag(m, styles)
                     )
                 } else {
-                    m.vulnerability.id.style(styles.vuln_id).to_string()
+                    format!(
+                        "{}{}",
+                        m.vulnerability.id.style(styles.vuln_id),
+                        suppressed_tag(m, styles)
+                    )
                 };
                 let dep_type = if m.is_direct {
                     format!(
@@ -223,9 +245,10 @@ pub(crate) fn generate_human_report(
                 };
                 writeln!(
                     output,
-                    "  {}{}  {} v{}  [{}] {}",
+                    "  {}{}{}  {} v{}  [{}] {}",
                     m.vulnerability.id.style(styles.vuln_id),
                     withdrawn_tag,
+                    suppressed_tag(m, styles),
                     m.package_name.to_string().style(styles.package),
                     m.installed_version,
                     m.vulnerability
@@ -268,10 +291,11 @@ pub(crate) fn generate_human_report(
 
                 writeln!(
                     output,
-                    " {}. {}{}  {} v{}  [{}] {}{}",
+                    " {}. {}{}{}  {} v{}  [{}] {}{}",
                     i + 1,
                     m.vulnerability.id.style(styles.vuln_id),
                     withdrawn_tag,
+                    suppressed_tag(m, styles),
                     m.package_name.to_string().style(styles.package),
                     m.installed_version,
                     m.vulnerability
@@ -751,6 +775,32 @@ mod tests {
         .unwrap();
         assert!(output.contains("PARTIAL SCAN"), "output: {output}");
         assert!(output.contains("osv"), "output: {output}");
+    }
+
+    #[test]
+    fn test_suppressed_finding_tagged_in_all_arms() {
+        use crate::vulnerability::database::SuppressionReason;
+        let mut report = create_test_report();
+        report.matches.first_mut().unwrap().suppressed = Some(SuppressionReason::IgnoredPackage);
+
+        for (detail, display) in [
+            (DetailLevel::Compact, DisplayMode::Table),
+            (DetailLevel::Compact, DisplayMode::Text),
+            (DetailLevel::Normal, DisplayMode::Text),
+            (DetailLevel::Detailed, DisplayMode::Text),
+        ] {
+            let output =
+                generate_human_report(&report, detail, display, &OutputStyles::default()).unwrap();
+            // Suppressed finding is still listed (never dropped) and marked.
+            assert!(
+                output.contains("SUPPRESSED"),
+                "missing tag for {detail:?}/{display:?}: {output}"
+            );
+            assert!(
+                output.contains("GHSA-test-1234"),
+                "finding dropped for {detail:?}/{display:?}: {output}"
+            );
+        }
     }
 
     #[test]

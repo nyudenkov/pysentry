@@ -34,6 +34,15 @@ pub(crate) fn generate_markdown_report(
     )?;
     writeln!(output)?;
 
+    if !report.failed_sources.is_empty() {
+        writeln!(
+            output,
+            "> ⚠️ **Partial scan:** source(s) failed to fetch: {}. Findings may be incomplete.",
+            report.failed_sources.join(", ")
+        )?;
+        writeln!(output)?;
+    }
+
     if !summary.severity_counts.is_empty() {
         writeln!(output, "## 🚨 Severity Breakdown")?;
         writeln!(output)?;
@@ -88,13 +97,20 @@ pub(crate) fn generate_markdown_report(
                 ""
             };
 
+            let suppressed_tag = if m.suppressed.is_some() {
+                " *(suppressed)*"
+            } else {
+                ""
+            };
+
             writeln!(
                 output,
-                "### {}. {} `{}`{}{}",
+                "### {}. {} `{}`{}{}{}",
                 i + 1,
                 icon,
                 m.vulnerability.id,
                 withdrawn_tag,
+                suppressed_tag,
                 source_tag
             )?;
             writeln!(output)?;
@@ -320,6 +336,23 @@ mod tests {
         assert!(output.contains("Use new-lib instead"));
         // Maintenance issue is_direct = true → "direct" label
         assert!(output.contains("- **Type:** direct"));
+    }
+
+    #[test]
+    fn test_markdown_suppression_and_partial() {
+        use crate::vulnerability::database::SuppressionReason;
+        let mut report = create_test_report();
+        report.matches.first_mut().unwrap().suppressed = Some(SuppressionReason::IgnoredPackage);
+        let report = report.with_failed_sources(vec!["osv".to_string()]);
+
+        let output = generate_markdown_report(&report).unwrap();
+
+        // Suppressed finding kept and tagged.
+        assert!(output.contains("GHSA-test-1234"));
+        assert!(output.contains("*(suppressed)*"));
+        // Partial-scan callout naming the failed source.
+        assert!(output.contains("Partial scan"));
+        assert!(output.contains("osv"));
     }
 
     #[test]

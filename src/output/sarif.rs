@@ -16,9 +16,11 @@ use serde_json::{json, Value};
 use serde_sarif::sarif::{
     ArtifactLocation as SarifArtifactLocation, Invocation as SarifInvocation,
     Location as SarifLocation, LogicalLocation as SarifLogicalLocation, Message as SarifMessage,
-    MultiformatMessageString, PhysicalLocation as SarifPhysicalLocation, PropertyBag,
-    Region as SarifRegion, ReportingConfiguration, ReportingDescriptor, Result as SarifResult,
-    ResultLevel, Run as SarifRun, Sarif, Tool as SarifTool, ToolComponent as SarifToolComponent,
+    MultiformatMessageString, Notification as SarifNotification,
+    PhysicalLocation as SarifPhysicalLocation, PropertyBag, Region as SarifRegion,
+    ReportingConfiguration, ReportingDescriptor, Result as SarifResult, ResultLevel,
+    Run as SarifRun, Sarif, Suppression as SarifSuppression, Tool as SarifTool,
+    ToolComponent as SarifToolComponent,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -80,6 +82,7 @@ impl SarifGenerator {
             &report.dependency_stats,
             &report.database_stats,
             &report.warnings,
+            &report.failed_sources,
             start_time,
         )?;
 
@@ -969,6 +972,15 @@ impl SarifGenerator {
                 result.rule_index = Some(idx);
             }
 
+            // Policy-suppressed findings stay in the report but are marked suppressed.
+            // The suppression source (a config file) is external to the scanned artifact.
+            if let Some(reason) = m.suppressed {
+                result.suppressions = Some(vec![SarifSuppression::builder()
+                    .kind(json!("external"))
+                    .justification(reason.label().to_string())
+                    .build()]);
+            }
+
             results.push(result);
         }
 
@@ -1097,6 +1109,7 @@ impl SarifGenerator {
         dependency_stats: &DependencyStats,
         database_stats: &DatabaseStats,
         warnings: &[String],
+        failed_sources: &[String],
         start_time: DateTime<Utc>,
     ) -> Result<Sarif> {
         // originalUriBaseIds enables portable path resolution across CI environments.
@@ -1119,14 +1132,31 @@ impl SarifGenerator {
                 .build(),
         );
 
+        // A partial scan (one or more sources failed to fetch) is an incomplete run:
+        // executionSuccessful=false, with a notification naming the failed sources so the
+        // incompleteness is never silent in SARIF consumers (GitHub/GitLab Security).
+        let partial = !failed_sources.is_empty();
+
         let end_time = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mut invocation = SarifInvocation::builder()
-            .execution_successful(true)
+            .execution_successful(!partial)
             .command_line("pysentry".to_string())
             .start_time_utc(start_time.to_rfc3339_opts(SecondsFormat::Secs, true))
             .exit_code(i64::from(!results.is_empty()))
             .build();
         invocation.end_time_utc = Some(end_time);
+
+        if partial {
+            let message = format!(
+                "Partial scan: {} source(s) failed to fetch ({}). Findings may be incomplete.",
+                failed_sources.len(),
+                failed_sources.join(", ")
+            );
+            invocation.tool_execution_notifications = Some(vec![SarifNotification::builder()
+                .message(SarifMessage::builder().text(message).build())
+                .level(json!("error"))
+                .build()]);
+        }
 
         let mut scan_stats: BTreeMap<String, Value> = BTreeMap::new();
         scan_stats.insert(
@@ -1483,6 +1513,46 @@ mod tests {
                 "Results should have partialFingerprints"
             );
         }
+    }
+
+    #[test]
+    fn test_sarif_suppression_and_partial_surfaced() {
+        use crate::vulnerability::database::SuppressionReason;
+        let mut report = create_test_report();
+        report.matches[0].suppressed = Some(SuppressionReason::IgnoredPackage);
+        let report = report.with_failed_sources(vec!["osv".to_string()]);
+
+        let temp_dir = TempDir::new().unwrap();
+        let mut generator = SarifGenerator::new(temp_dir.path());
+        let sarif: serde_json::Value =
+            serde_json::from_str(&generator.generate_report(&report).unwrap()).unwrap();
+
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        // Suppressed findings stay in results (never dropped) and carry a suppressions entry.
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["suppressions"][0]["kind"], "external");
+
+        // Partial scan → executionSuccessful=false + a toolExecutionNotification.
+        let invocation = &sarif["runs"][0]["invocations"][0];
+        assert_eq!(invocation["executionSuccessful"], false);
+        let notifications = invocation["toolExecutionNotifications"].as_array().unwrap();
+        assert!(notifications[0]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("osv"));
+    }
+
+    #[test]
+    fn test_sarif_clean_scan_execution_successful() {
+        let report = create_test_report();
+        let temp_dir = TempDir::new().unwrap();
+        let mut generator = SarifGenerator::new(temp_dir.path());
+        let sarif: serde_json::Value =
+            serde_json::from_str(&generator.generate_report(&report).unwrap()).unwrap();
+        let invocation = &sarif["runs"][0]["invocations"][0];
+        assert_eq!(invocation["executionSuccessful"], true);
+        // No suppression on a non-suppressed finding.
+        assert!(sarif["runs"][0]["results"][0]["suppressions"].is_null());
     }
 
     #[test]
