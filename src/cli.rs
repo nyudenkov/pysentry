@@ -219,6 +219,20 @@ pub struct AuditArgs {
     #[arg(skip)]
     pub config_quiet: bool,
 
+    /// Package names to suppress entirely, from `[ignore].packages` (config-only).
+    #[arg(skip)]
+    pub ignore_packages: Vec<String>,
+
+    /// Per-group fail thresholds from `[groups.<name>]` (config-only), keyed by the
+    /// PEP 735-normalized group name so lookups match graph attribution.
+    #[arg(skip)]
+    pub group_fail_on: std::collections::BTreeMap<String, SeverityLevel>,
+
+    /// Continue with the sources that succeeded instead of failing when a
+    /// vulnerability source cannot be fetched (default: fail-closed on any error).
+    #[arg(long = "no-fail-on-partial")]
+    pub no_fail_on_partial: bool,
+
     /// Show detailed vulnerability descriptions (full text instead of truncated)
     #[arg(long, conflicts_with = "compact")]
     pub detailed: bool,
@@ -538,6 +552,25 @@ impl From<SeverityLevel> for crate::SeverityLevel {
             SeverityLevel::Medium => crate::SeverityLevel::Medium,
             SeverityLevel::High => crate::SeverityLevel::High,
             SeverityLevel::Critical => crate::SeverityLevel::Critical,
+        }
+    }
+}
+
+impl std::str::FromStr for SeverityLevel {
+    type Err = String;
+
+    /// Parses the canonical level strings (the same set `Config::validate_level`
+    /// accepts). Single source of truth for level parsing — do not hand-roll the
+    /// string match elsewhere.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "critical" => Ok(Self::Critical),
+            other => Err(format!(
+                "invalid severity level '{other}' (expected low, medium, high, or critical)"
+            )),
         }
     }
 }

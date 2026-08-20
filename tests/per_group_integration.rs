@@ -159,6 +159,55 @@ async fn test_exclude_extra_regression() {
     );
 }
 
+/// Wiring check for `build_group_attribution` (v0.5.0 policy plan, Phase 1): drives it
+/// against the same real uv.lock + pyproject.toml fixture used above, through the parser's
+/// real `name()` string ("uv.lock") rather than a copy of the match-arm literal — the same
+/// seam `build_transitive_roots_dispatches_poetry_by_parser_name` guards for the sibling
+/// transitive-roots feature. Proves the dispatch, the edge reader, and the reachability walk
+/// agree end to end, independent of `build_group_attribution`'s own unit tests.
+#[tokio::test]
+async fn test_group_attribution_tags_prod_and_dev_from_real_fixture() {
+    use pysentry::parsers::graph::build_group_attribution;
+
+    let attribution = build_group_attribution(Path::new(FIXTURE_DIR), "uv.lock").await;
+
+    // prod = ["httpx"]; httpcore is httpx's exclusive transitive (not shared with the
+    // main-only `requests` dependency), so it only shows up via the prod closure.
+    let prod: HashSet<String> = attribution
+        .get(&pysentry::types::PackageName::new("httpcore"))
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        prod.contains("prod"),
+        "httpcore (httpx transitive) must be tagged prod, got: {prod:?}"
+    );
+
+    let dev: HashSet<String> = attribution
+        .get(&pysentry::types::PackageName::new("pytest"))
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        dev.contains("dev"),
+        "pytest must be tagged dev, got: {dev:?}"
+    );
+
+    assert!(
+        attribution
+            .get(&pysentry::types::PackageName::new("iniconfig"))
+            .is_some_and(|g| g.contains("dev")),
+        "iniconfig (pytest transitive) must be tagged dev"
+    );
+
+    // requests is main-only (not declared by any group), so its exclusive transitives
+    // must get no attribution entry at all.
+    assert!(
+        attribution
+            .get(&pysentry::types::PackageName::new("urllib3"))
+            .is_none_or(|g| g.is_empty()),
+        "urllib3 (requests-only transitive) must not be attributed to any group"
+    );
+}
+
 /// (d) --group unknown_group: binary exits non-zero; stderr contains "available groups:".
 #[test]
 fn test_unknown_group_errors() {

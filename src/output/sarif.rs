@@ -1269,6 +1269,8 @@ mod tests {
             vulnerability: create_test_vulnerability(),
             is_direct: true,
             source_file: None,
+            groups: std::collections::BTreeSet::new(),
+            suppressed: None,
         }
     }
 
@@ -1401,6 +1403,8 @@ mod tests {
             vulnerability: vuln,
             is_direct: true,
             source_file: None,
+            groups: std::collections::BTreeSet::new(),
+            suppressed: None,
         };
 
         generator.generate_rules(&[test_match]);
@@ -1888,6 +1892,8 @@ test = [
             vulnerability: vuln,
             is_direct: true,
             source_file: None,
+            groups: std::collections::BTreeSet::new(),
+            suppressed: None,
         };
 
         generator.generate_rules(std::slice::from_ref(&test_match));

@@ -8,7 +8,9 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +47,19 @@ pub struct Config {
 
     #[serde(default)]
     pub output: OutputConfig,
+
+    /// Per-group fail thresholds, keyed by dependency-group name (`[groups.<name>]`).
+    /// Consumed by the policy engine (strictest-wins).
+    #[serde(default)]
+    pub groups: BTreeMap<String, GroupPolicy>,
+}
+
+/// Per-group policy overriding the global `fail_on` threshold for packages
+/// reachable from that dependency group.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupPolicy {
+    pub fail_on: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +108,11 @@ pub struct SourcesConfig {
     /// Override the OSV API base URL (custom/self-hosted OSV-compatible endpoint).
     #[serde(default)]
     pub service_url: Option<String>,
+
+    /// Fail (exit 2) if any vulnerability source fails to fetch. Default `true`
+    /// (fail-closed). `false` continues with the sources that succeeded.
+    #[serde(default = "default_fail_on_partial")]
+    pub fail_on_partial: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +148,11 @@ pub struct IgnoreConfig {
 
     #[serde(default)]
     pub while_no_fix: Vec<String>,
+
+    /// Package names to suppress entirely (all versions). PEP 503 normalized at
+    /// the comparison site, never compared as raw strings.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -572,10 +597,33 @@ impl Config {
 
         self.validate_level(&self.defaults.fail_on, "defaults.fail_on")?;
 
+        // Group config keys are raw TOML strings, but attribution (graph.rs) tags
+        // packages with PEP 735-normalized group names. Reject two keys that
+        // normalize to the same name — otherwise one silently shadows the other in
+        // the policy lookup. Mirrors list_group_names' ambiguity rejection.
+        let mut seen_groups: BTreeMap<String, String> = BTreeMap::new();
+        for (name, policy) in &self.groups {
+            self.validate_level(&policy.fail_on, &format!("groups.{name}.fail_on"))?;
+            let normalized = crate::parsers::manifest_reader::normalize_group_name(name);
+            if let Some(existing) = seen_groups.insert(normalized.clone(), name.clone()) {
+                anyhow::bail!(
+                    "ambiguous group policy: [groups.{existing}] and [groups.{name}] normalize to the same name '{normalized}'"
+                );
+            }
+        }
+
         if self.defaults.compact && self.defaults.detailed {
             anyhow::bail!(
                 "Cannot set both 'compact' and 'detailed' to true. These options are mutually exclusive."
             );
+        }
+
+        // Validate ignore.packages entries up-front so a malformed name fails loudly at
+        // load rather than silently matching nothing and reading as a no-op warning later.
+        for package in &self.ignore.packages {
+            crate::types::PackageName::from_str(package).map_err(|e| {
+                anyhow::anyhow!("Invalid package name '{package}' in ignore.packages: {e}")
+            })?;
         }
 
         match self.defaults.display.as_str() {
@@ -676,6 +724,7 @@ impl Default for Config {
             maintenance: MaintenanceConfig::default(),
             notifications: NotificationsConfig::default(),
             output: OutputConfig::default(),
+            groups: BTreeMap::new(),
         }
     }
 }
@@ -703,6 +752,7 @@ impl Default for SourcesConfig {
         Self {
             enabled: default_sources(),
             service_url: None,
+            fail_on_partial: default_fail_on_partial(),
         }
     }
 }
@@ -769,6 +819,9 @@ fn default_scope() -> String {
 }
 fn default_display() -> String {
     "table".to_string()
+}
+fn default_fail_on_partial() -> bool {
+    true
 }
 fn default_sources() -> Vec<String> {
     vec!["pypa".to_string(), "pypi".to_string(), "osv".to_string()]
@@ -1293,6 +1346,70 @@ format = "json"
         config.defaults.display = "invalid".to_string();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("Invalid display mode"));
+    }
+
+    #[test]
+    fn test_policy_config_round_trips() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".pysentry.toml");
+
+        let content = r#"
+version = 1
+
+[sources]
+fail_on_partial = false
+
+[ignore]
+packages = ["internal-pkg"]
+
+[groups.dev]
+fail_on = "critical"
+"#;
+        fs::write(&config_path, content).unwrap();
+        let loader = ConfigLoader::load_from_file(&config_path).unwrap();
+        assert!(!loader.config.sources.fail_on_partial);
+        assert_eq!(loader.config.ignore.packages, vec!["internal-pkg"]);
+        assert_eq!(
+            loader.config.groups.get("dev").map(|g| g.fail_on.as_str()),
+            Some("critical")
+        );
+    }
+
+    #[test]
+    fn test_fail_on_partial_defaults_true() {
+        assert!(Config::default().sources.fail_on_partial);
+    }
+
+    #[test]
+    fn test_invalid_group_fail_on_level_rejected() {
+        let mut config = Config::default();
+        config.groups.insert(
+            "dev".to_string(),
+            GroupPolicy {
+                fail_on: "bogus".to_string(),
+            },
+        );
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("groups.dev.fail_on"));
+    }
+
+    #[test]
+    fn test_ambiguous_group_names_rejected() {
+        let mut config = Config::default();
+        config.groups.insert(
+            "my_group".to_string(),
+            GroupPolicy {
+                fail_on: "high".to_string(),
+            },
+        );
+        config.groups.insert(
+            "my-group".to_string(),
+            GroupPolicy {
+                fail_on: "low".to_string(),
+            },
+        );
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ambiguous group policy"));
     }
 
     #[test]

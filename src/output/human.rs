@@ -1223,6 +1223,8 @@ mod tests {
             vulnerability,
             is_direct: true,
             source_file: None,
+            groups: std::collections::BTreeSet::new(),
+            suppressed: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -1297,6 +1299,8 @@ mod tests {
             vulnerability: withdrawn_vuln,
             is_direct: true,
             source_file: None,
+            groups: std::collections::BTreeSet::new(),
+            suppressed: None,
         }];
 
         let fix_analysis = FixAnalysis {

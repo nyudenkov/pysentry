@@ -163,6 +163,108 @@ pub async fn read_direct_deps_with_extras_from_pyproject(
     Ok(Some((names, extras_map)))
 }
 
+/// Read only the dependencies declared directly under one named group — excluding the
+/// project's unconditional main dependencies ([project].dependencies /
+/// [tool.poetry.dependencies]) that `read_direct_deps_from_pyproject` always folds in.
+///
+/// Used to seed per-group reachability for policy attribution (see
+/// `parsers::graph::build_group_attribution`). Seeding from the union of main + group
+/// (as `read_direct_deps_from_pyproject(Some({group}))` returns) and then subtracting
+/// the main-only seed would erase any package the group declares that is *also* a main
+/// dependency, silently dropping that package's group-only transitives from attribution —
+/// the same shared-transitive trap `identify_optional_packages` already guards against.
+/// Returns Ok(empty set) if the file or the group section does not exist.
+pub async fn read_group_only_deps_from_pyproject(
+    path: &Path,
+    group: &str,
+) -> Result<HashSet<PackageName>> {
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let doc: toml::Value = toml::from_str(&content)?;
+    read_group_only_deps_from_value(&doc, group)
+}
+
+/// Value-level core of [`read_group_only_deps_from_pyproject`], operating on an
+/// already-parsed document so a caller iterating many groups (e.g.
+/// `graph::build_group_attribution`) parses `pyproject.toml` once instead of per group.
+pub(crate) fn read_group_only_deps_from_value(
+    doc: &toml::Value,
+    group: &str,
+) -> Result<HashSet<PackageName>> {
+    let filter: HashSet<String> = std::iter::once(group.to_string()).collect();
+
+    let mut names: HashSet<PackageName> = HashSet::new();
+    let mut extras_map: HashMap<PackageName, HashSet<String>> = HashMap::new();
+
+    // PEP 621: [project.optional-dependencies]
+    if let Some(project) = doc.get("project") {
+        if let Some(optional) = project
+            .get("optional-dependencies")
+            .and_then(|v| v.as_table())
+        {
+            for (group_name, group_deps) in optional {
+                if !group_passes_filter(Some(&filter), group_name) {
+                    continue;
+                }
+                if let Some(dep_arr) = group_deps.as_array() {
+                    for dep in dep_arr {
+                        if let Some(dep_str) = dep.as_str() {
+                            record_pep508(dep_str, &mut names, &mut extras_map);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // PEP 735: [dependency-groups], resolves include-group.
+    if let Some(dep_groups) = doc.get("dependency-groups") {
+        if let Some(table) = dep_groups.as_table() {
+            let mut resolved = Vec::new();
+            for (group_name, entries) in table {
+                if !group_passes_filter(Some(&filter), group_name) {
+                    continue;
+                }
+                if let Some(entry_arr) = entries.as_array() {
+                    let mut current_path = Vec::new();
+                    collect_group_deps(entry_arr, dep_groups, &mut current_path, &mut resolved)?;
+                }
+            }
+            for dep_str in &resolved {
+                record_pep508(dep_str, &mut names, &mut extras_map);
+            }
+        }
+    }
+
+    // Poetry: [tool.poetry.group.<name>.dependencies]
+    if let Some(tool) = doc.get("tool") {
+        if let Some(poetry) = tool.get("poetry") {
+            if let Some(poetry_groups) = poetry.get("group").and_then(|v| v.as_table()) {
+                for (group_name, group_val) in poetry_groups {
+                    if !group_passes_filter(Some(&filter), group_name) {
+                        continue;
+                    }
+                    if let Some(group_deps) =
+                        group_val.get("dependencies").and_then(|v| v.as_table())
+                    {
+                        collect_poetry_table_deps_with_extras(
+                            group_deps,
+                            false,
+                            &mut names,
+                            &mut extras_map,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(names)
+}
+
 fn record_pep508(
     dep_str: &str,
     names: &mut HashSet<PackageName>,
@@ -393,7 +495,12 @@ pub async fn list_group_names(path: &Path) -> Result<HashSet<String>> {
         Err(e) => return Err(e.into()),
     };
     let doc: toml::Value = toml::from_str(&content)?;
+    list_group_names_from_value(&doc)
+}
 
+/// Value-level core of [`list_group_names`], operating on an already-parsed document so a
+/// caller that also reads per-group deps parses `pyproject.toml` only once.
+pub(crate) fn list_group_names_from_value(doc: &toml::Value) -> Result<HashSet<String>> {
     let mut raw_names: Vec<String> = Vec::new();
 
     // PEP 621: [project.optional-dependencies] keys
@@ -1417,5 +1524,59 @@ black = "^24"
         let result = list_group_names(file.path()).await.unwrap();
         assert!(result.contains("dev"));
         assert_eq!(result.len(), 1);
+    }
+
+    // requests is declared in BOTH main and the dev group. The group-only reader must
+    // still return it — dropping it here is exactly the shared-transitive bug the union
+    // helper (`read_direct_deps_from_pyproject`) would silently reintroduce if a caller
+    // tried to derive "group-only" by subtracting the main seed after the fact.
+    #[tokio::test]
+    async fn test_read_group_only_deps_keeps_shared_main_dependency() {
+        let file = write_toml(
+            r#"
+[project]
+name = "myproject"
+dependencies = ["requests>=2.31", "httpx>=0.27"]
+
+[dependency-groups]
+dev = ["pytest>=8", "requests>=2.31"]
+"#,
+        );
+        let result = read_group_only_deps_from_pyproject(file.path(), "dev")
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            HashSet::from([PackageName::new("pytest"), PackageName::new("requests")]),
+            "must contain the group's own deps, including one shared with main"
+        );
+        assert!(
+            !result.contains(&PackageName::new("httpx")),
+            "main-only dependency must not leak into a group-only read"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_group_only_deps_missing_group_is_empty() {
+        let file = write_toml(
+            r#"
+[project]
+name = "myproject"
+dependencies = ["httpx>=0.27"]
+"#,
+        );
+        let result = read_group_only_deps_from_pyproject(file.path(), "dev")
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_read_group_only_deps_missing_file_is_empty() {
+        let result =
+            read_group_only_deps_from_pyproject(Path::new("/nonexistent/pyproject.toml"), "dev")
+                .await
+                .unwrap();
+        assert!(result.is_empty());
     }
 }

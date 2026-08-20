@@ -84,6 +84,11 @@ fn every_config_field_reaches_effective_settings() {
 
     // ----- Group A: [sources] -----
     assert_eq!(merged.sources, vec!["osv"], "sources.enabled: {WIRING}");
+    // fail_on_partial = false surfaces as no_fail_on_partial = true.
+    assert!(
+        merged.no_fail_on_partial,
+        "sources.fail_on_partial: {WIRING}"
+    );
 
     // ----- Group A: [resolver] -----
     assert_eq!(
@@ -116,6 +121,11 @@ fn every_config_field_reaches_effective_settings() {
         merged.ignore_while_no_fix,
         vec!["GHSA-aaaa-bbbb-cccc"],
         "ignore.while_no_fix: {WIRING}"
+    );
+    assert_eq!(
+        merged.ignore_packages,
+        vec!["internal-pkg"],
+        "ignore.packages: {WIRING}"
     );
 
     // ----- Group A: [maintenance] (the AuditArgs-bound subset) -----
@@ -176,6 +186,14 @@ fn every_config_field_reaches_effective_settings() {
     assert!(
         !config.notifications.enabled,
         "notifications.enabled: {WIRING}"
+    );
+
+    // [groups.*] has no CLI flag, but merge normalizes its keys into group_fail_on
+    // (keyed by PEP 735-normalized name) for the policy engine.
+    assert_eq!(
+        merged.group_fail_on.get("dev"),
+        Some(&SeverityLevel::Critical),
+        "groups.dev.fail_on: {WIRING}"
     );
 }
 

@@ -125,6 +125,33 @@ impl AuditArgs {
         ignore_while_no_fix.extend(config.ignore.while_no_fix.clone());
         merged.ignore_while_no_fix = ignore_while_no_fix;
 
+        let mut ignore_packages = self.ignore_packages.clone();
+        ignore_packages.extend(config.ignore.packages.clone());
+        merged.ignore_packages = ignore_packages;
+
+        // fail_on_partial defaults to true (fail-closed); the CLI flag and config
+        // can only relax it, matching the "flags turn ON" idiom (cf. no_fail_on_unknown).
+        if !self.no_fail_on_partial && !config.sources.fail_on_partial {
+            merged.no_fail_on_partial = true;
+        }
+
+        // Per-group fail thresholds (config-only). Normalize keys to PEP 735 form so
+        // they compare against graph attribution's normalized group names. Levels were
+        // validated at config load; the fallback keeps this infallible.
+        merged.group_fail_on = config
+            .groups
+            .iter()
+            .map(|(name, policy)| {
+                // invariant: levels were validated in Config::validate at load, so parse
+                // cannot fail here; the fallback keeps this map infallible without a panic.
+                let level = policy.fail_on.parse().unwrap_or(SeverityLevel::Medium);
+                (
+                    crate::parsers::manifest_reader::normalize_group_name(name),
+                    level,
+                )
+            })
+            .collect();
+
         // CLI -v flag overrides config quiet. Only apply config quiet when not explicitly verbose.
         if config.output.quiet && !crate::logging::is_verbose(&self.verbosity) {
             merged.config_quiet = true;
@@ -394,6 +421,60 @@ mod tests {
         let config = crate::config::Config::default();
         let merged = args.merge_with_config(&config);
         assert!(merged.direct_only);
+    }
+
+    #[test]
+    fn test_fail_on_partial_config_relaxes_default() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.sources.fail_on_partial = false;
+        let merged = args.merge_with_config(&config);
+        assert!(merged.no_fail_on_partial);
+    }
+
+    #[test]
+    fn test_fail_on_partial_strict_by_default() {
+        let args = parse_audit_args(&["."]);
+        let config = crate::config::Config::default(); // fail_on_partial = true
+        let merged = args.merge_with_config(&config);
+        assert!(!merged.no_fail_on_partial);
+    }
+
+    #[test]
+    fn test_cli_no_fail_on_partial_overrides_config_strict() {
+        let args = parse_audit_args(&["--no-fail-on-partial", "."]);
+        let config = crate::config::Config::default(); // fail_on_partial = true
+        let merged = args.merge_with_config(&config);
+        assert!(merged.no_fail_on_partial);
+    }
+
+    #[test]
+    fn test_ignore_packages_merged_from_config() {
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.ignore.packages = vec!["internal-pkg".to_string()];
+        let merged = args.merge_with_config(&config);
+        assert_eq!(merged.ignore_packages, vec!["internal-pkg"]);
+    }
+
+    // compact-XOR-detailed must hold on the merged/effective config (#174/Q16).
+    // No guard exists in perform_audit: Config::validate rejects both-true at load,
+    // and merge's precedence clears the loser. These cases pin that invariant.
+    #[test]
+    fn test_compact_detailed_mutually_exclusive_post_merge() {
+        // CLI --compact + config detailed.
+        let args = parse_audit_args(&["--compact", "."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.detailed = true;
+        let merged = args.merge_with_config(&config);
+        assert!(!(merged.compact && merged.detailed));
+
+        // CLI --detailed + config compact.
+        let args = parse_audit_args(&["--detailed", "."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.compact = true;
+        let merged = args.merge_with_config(&config);
+        assert!(!(merged.compact && merged.detailed));
     }
 
     #[test]

@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_json_maintenance_issue_type_lowercase() {
-        // Regression test: Phase 3 switched from Display (.to_string() → "DEPRECATED")
+        // Regression test: serialization switched from Display (.to_string() → "DEPRECATED")
         // to direct serde serialization (→ "deprecated"). Verifies the serde path.
         let dependency_stats = DependencyStats {
             total_packages: 3,

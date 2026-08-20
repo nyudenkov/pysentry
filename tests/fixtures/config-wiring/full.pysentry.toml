@@ -25,6 +25,7 @@ include_scripts = true      # default: false
 
 [sources]
 enabled = ["osv"]           # default: ["pypa", "pypi", "osv"]
+fail_on_partial = false     # default: true
 
 [resolver]
 type = "pip-tools"          # default: uv
@@ -39,6 +40,7 @@ vulnerability_ttl = 99      # default: 48
 [ignore]
 ids = ["PYSEC-2024-0001"]               # default: []
 while_no_fix = ["GHSA-aaaa-bbbb-cccc"]  # default: []
+packages = ["internal-pkg"]             # default: []
 
 [http]
 timeout = 99                # default: 120
@@ -62,3 +64,6 @@ enabled = false             # default: true
 
 [output]
 quiet = true                # default: false
+
+[groups.dev]                # default: {} (consumed by policy engine in Phase 3)
+fail_on = "critical"

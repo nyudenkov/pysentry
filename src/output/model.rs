@@ -290,6 +290,8 @@ pub(crate) mod test_helpers {
             vulnerability,
             is_direct: true,
             source_file: None,
+            groups: std::collections::BTreeSet::new(),
+            suppressed: None,
         }];
 
         let fix_analysis = FixAnalysis {
@@ -375,6 +377,8 @@ pub(crate) mod test_helpers {
                 vulnerability: direct_vulnerability,
                 is_direct: true,
                 source_file: None,
+                groups: std::collections::BTreeSet::new(),
+                suppressed: None,
             },
             VulnerabilityMatch {
                 package_name: PackageName::from_str("transitive-package").unwrap(),
@@ -382,6 +386,8 @@ pub(crate) mod test_helpers {
                 vulnerability: transitive_vulnerability,
                 is_direct: false,
                 source_file: None,
+                groups: std::collections::BTreeSet::new(),
+                suppressed: None,
             },
         ];
 
