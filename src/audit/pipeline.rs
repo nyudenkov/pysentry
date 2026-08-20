@@ -330,9 +330,8 @@ fn effective_threshold(
 /// strictest-wins; `main_reachable` gates whether the global threshold floors a finding
 /// (see [`effective_threshold`]). Pass an empty map for global-threshold-only behavior.
 /// This selects the exit condition ONLY — it never filters what is reported (the fail_on
-/// invariant).
-/// Whether any finding triggers the fail_on exit condition. Production derives this from
-/// [`count_failing_findings`] (`count > 0`); kept as the readable predicate for tests.
+/// invariant). Production reads the count and threshold from [`summarize_failing_findings`]
+/// directly; this bool wrapper is kept as the readable predicate for tests.
 #[cfg(test)]
 pub(crate) fn evaluate_fail_condition(
     matches: &[VulnerabilityMatch],
@@ -341,41 +340,69 @@ pub(crate) fn evaluate_fail_condition(
     main_reachable: &HashSet<PackageName>,
     fail_on_unknown: bool,
 ) -> bool {
-    count_failing_findings(
+    summarize_failing_findings(
         matches,
         global_fail_on,
         group_thresholds,
         main_reachable,
         fail_on_unknown,
-    ) > 0
+    )
+    .0 > 0
 }
 
-/// How many findings trigger the fail_on exit condition — the count behind
-/// [`evaluate_fail_condition`], for the human "why it failed" line.
-pub(crate) fn count_failing_findings(
+/// Lowercase label for the loosest threshold that tripped the run. Reuses `fail_on_label`
+/// as the sole owner of the level strings; `None` (only unknown-severity findings failed)
+/// and the never-reached `Unknown` both fall back to the global level's label.
+fn failing_threshold_label(threshold: Option<Severity>, global: &crate::SeverityLevel) -> String {
+    let level = match threshold {
+        Some(Severity::Low) => crate::SeverityLevel::Low,
+        Some(Severity::Medium) => crate::SeverityLevel::Medium,
+        Some(Severity::High) => crate::SeverityLevel::High,
+        Some(Severity::Critical) => crate::SeverityLevel::Critical,
+        Some(Severity::Unknown) | None => global.clone(),
+    };
+    fail_on_label(&level).to_string()
+}
+
+/// The findings that trip the exit condition: their count, plus the *loosest* effective
+/// severity threshold that actually tripped (the min over the non-unknown failing
+/// findings). Under per-group policy the effective threshold varies per finding, so a
+/// single global label would misreport why the run failed (#151: dev=low failing a
+/// MEDIUM while global=critical). Every failing finding is at or above this loosest
+/// threshold, so the "at or above X" line stays truthful. The threshold is `None` when
+/// nothing fails, or when every failing finding is unknown-severity (those fail on
+/// `fail_on_unknown`, not a severity bar) — the caller falls back to the global label.
+fn summarize_failing_findings(
     matches: &[VulnerabilityMatch],
     global_fail_on: &crate::SeverityLevel,
     group_thresholds: &BTreeMap<String, Severity>,
     main_reachable: &HashSet<PackageName>,
     fail_on_unknown: bool,
-) -> usize {
+) -> (usize, Option<Severity>) {
     let global_db = severity_level_to_db(global_fail_on);
-    matches
-        .iter()
-        .filter(|m| {
-            finding_triggers_fail(
-                m,
-                global_db,
-                group_thresholds,
-                main_reachable,
-                fail_on_unknown,
-            )
-        })
-        .count()
+    let mut count = 0;
+    let mut loosest: Option<Severity> = None;
+    for m in matches {
+        if !finding_triggers_fail(
+            m,
+            global_db,
+            group_thresholds,
+            main_reachable,
+            fail_on_unknown,
+        ) {
+            continue;
+        }
+        count += 1;
+        if !m.vulnerability.is_level_unknown() {
+            let threshold = effective_threshold(m, global_db, group_thresholds, main_reachable);
+            loosest = Some(loosest.map_or(threshold, |current| current.min(threshold)));
+        }
+    }
+    (count, loosest)
 }
 
 /// Whether a single finding triggers the fail_on exit condition (shared by
-/// [`evaluate_fail_condition`] and [`count_failing_findings`]).
+/// [`evaluate_fail_condition`] and [`summarize_failing_findings`]).
 fn finding_triggers_fail(
     m: &VulnerabilityMatch,
     global_db: Severity,
@@ -910,7 +937,7 @@ async fn perform_audit(
         .iter()
         .map(|(name, level)| (name.clone(), severity_level_to_db(&level.clone().into())))
         .collect();
-    let failing_count = count_failing_findings(
+    let (failing_count, failing_threshold) = summarize_failing_findings(
         &display_matches,
         &fail_on_level,
         &group_thresholds,
@@ -918,8 +945,15 @@ async fn perform_audit(
         !audit_args.no_fail_on_unknown,
     );
     let fail_vulns = failing_count > 0;
-    let fail_summary =
-        (failing_count > 0).then(|| (failing_count, fail_on_label(&fail_on_level).to_string()));
+    // Report the loosest threshold that actually tripped (not the global one) so per-group
+    // policy failures name the bar that caused them; fall back to global when only
+    // unknown-severity findings failed (they carry no threshold).
+    let fail_summary = (failing_count > 0).then(|| {
+        (
+            failing_count,
+            failing_threshold_label(failing_threshold, &fail_on_level),
+        )
+    });
 
     let database_stats = matcher.get_database_stats();
     let fix_analysis = matcher.analyze_fixes(&display_matches);
@@ -1089,7 +1123,8 @@ fn should_skip_script_dir(name: &str) -> bool {
 mod tests {
     use super::{
         apply_package_ignores, build_matcher_config, evaluate_fail_condition,
-        partial_scan_should_fail, scan_pep723_scripts, write_github_step_summary,
+        failing_threshold_label, partial_scan_should_fail, scan_pep723_scripts,
+        summarize_failing_findings, write_github_step_summary,
     };
     use crate::types::PackageName;
     use crate::vulnerability::database::SuppressionReason;
@@ -1392,6 +1427,48 @@ mod tests {
         assert!(
             fail,
             "MEDIUM meets prod's medium (strictest reaching group)"
+        );
+    }
+
+    // The "why it failed" line must name the bar that actually tripped, not the global one:
+    // a dev=low threshold failing a MEDIUM finding while global=critical reports "low",
+    // never "critical".
+    #[test]
+    fn test_fail_summary_names_tripped_group_threshold() {
+        let matches = vec![make_grouped_match(Severity::Medium, &["dev"])];
+        let thresholds = BTreeMap::from([("dev".to_string(), Severity::Low)]);
+        let (count, threshold) = summarize_failing_findings(
+            &matches,
+            &crate::SeverityLevel::Critical,
+            &thresholds,
+            &no_main(),
+            true,
+        );
+        assert_eq!(count, 1);
+        assert_eq!(
+            failing_threshold_label(threshold, &crate::SeverityLevel::Critical),
+            "low",
+            "must name the effective bar (dev=low), not global (critical)"
+        );
+    }
+
+    // Unknown-severity findings fail on fail_on_unknown, not a severity bar, so the label
+    // falls back to the global threshold rather than inventing one.
+    #[test]
+    fn test_fail_summary_unknown_only_falls_back_to_global() {
+        let matches = vec![make_match(Severity::Unknown)];
+        let (count, threshold) = summarize_failing_findings(
+            &matches,
+            &crate::SeverityLevel::High,
+            &no_groups(),
+            &no_main(),
+            true,
+        );
+        assert_eq!(count, 1);
+        assert_eq!(threshold, None, "unknown findings carry no threshold");
+        assert_eq!(
+            failing_threshold_label(threshold, &crate::SeverityLevel::High),
+            "high",
         );
     }
 
