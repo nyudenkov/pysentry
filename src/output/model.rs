@@ -81,6 +81,9 @@ pub struct AuditReport {
     /// "transitive (via X)" display. Empty unless scanned from a lock file that records
     /// dependency edges (uv.lock, poetry.lock, pylock.toml).
     pub transitive_roots: HashMap<crate::types::PackageName, Vec<crate::types::PackageName>>,
+    /// Vulnerability sources that failed to fetch. Non-empty means the scan is incomplete
+    /// (partial): findings reflect only the sources that succeeded. Empty on a full scan.
+    pub failed_sources: Vec<String>,
     cached_summary: OnceLock<AuditSummary>,
 }
 
@@ -95,6 +98,7 @@ impl Clone for AuditReport {
             warnings: self.warnings.clone(),
             maintenance_issues: self.maintenance_issues.clone(),
             transitive_roots: self.transitive_roots.clone(),
+            failed_sources: self.failed_sources.clone(),
             cached_summary: OnceLock::new(),
         }
     }
@@ -119,8 +123,16 @@ impl AuditReport {
             warnings,
             maintenance_issues,
             transitive_roots: HashMap::new(),
+            failed_sources: Vec::new(),
             cached_summary: OnceLock::new(),
         }
+    }
+
+    /// Record the vulnerability sources that failed to fetch (partial scan). Empty = full scan.
+    #[must_use]
+    pub fn with_failed_sources(mut self, failed_sources: Vec<String>) -> Self {
+        self.failed_sources = failed_sources;
+        self
     }
 
     /// Attach the child → top-level-deps map used for "transitive (via X)" display.

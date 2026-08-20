@@ -19,7 +19,7 @@ use crate::{
     VulnerabilityMatch, VulnerabilityMatcher, VulnerabilitySource,
 };
 use anyhow::Result;
-use futures::future::try_join_all;
+use futures::future::join_all;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -212,6 +212,16 @@ pub async fn audit(
     let maintenance_config = audit_args.maintenance_check_config();
     let fail_maintenance = report.should_fail_on_maintenance(&maintenance_config);
 
+    // Partial scan under strict `fail_on_partial` (the default): a source failed, so the scan
+    // is incomplete. Fail-closed with a system error (exit 2) — the report was already printed
+    // with the partial marker above, so the incompleteness is visible before we exit.
+    if partial_scan_should_fail(
+        !report.failed_sources.is_empty(),
+        audit_args.no_fail_on_partial,
+    ) {
+        return Ok(EXIT_ERROR);
+    }
+
     if fail_vulns || fail_maintenance {
         Ok(EXIT_VULNERABILITIES_FOUND)
     } else {
@@ -233,6 +243,12 @@ fn build_matcher_config(audit_args: &AuditArgs) -> MatcherConfig {
         audit_args.direct_only,
         audit_args.include_withdrawn,
     )
+}
+
+/// Whether a partial scan (at least one source failed to fetch) should exit with a system
+/// error. Fail-closed by default: leniency (`no_fail_on_partial`) is opt-in.
+fn partial_scan_should_fail(has_failed_sources: bool, no_fail_on_partial: bool) -> bool {
+    has_failed_sources && !no_fail_on_partial
 }
 
 fn severity_level_to_db(level: &crate::SeverityLevel) -> Severity {
@@ -675,7 +691,10 @@ async fn perform_audit(
 
     let fetch_tasks = vuln_sources.into_iter().map(|source| {
         let packages = packages.clone();
-        async move { source.fetch_vulnerabilities(&packages).await }
+        async move {
+            let name = source.name();
+            (name, source.fetch_vulnerabilities(&packages).await)
+        }
     });
 
     // Fetch maintenance status (PEP 792) in parallel if enabled
@@ -706,11 +725,47 @@ async fn perform_audit(
         }
     };
 
-    // Run vulnerability fetching and maintenance checks in parallel
-    let (vuln_result, maintenance_issues) =
-        tokio::join!(try_join_all(fetch_tasks), maintenance_future);
+    // Run vulnerability fetching and maintenance checks in parallel. Sources are collected
+    // per-source (not `try_join_all` + `?`) so a single source failure does not abort the
+    // whole audit: it becomes a "partial" scan whose handling depends on `fail_on_partial`.
+    let (fetch_results, maintenance_issues) =
+        tokio::join!(join_all(fetch_tasks), maintenance_future);
 
-    let databases = vuln_result?;
+    let mut databases = Vec::new();
+    let mut failures: Vec<(&'static str, anyhow::Error)> = Vec::new();
+    for (name, result) in fetch_results {
+        match result {
+            Ok(db) => databases.push(db),
+            Err(e) => failures.push((name, e.into())),
+        }
+    }
+
+    // Total failure (every source down, or the only source in a single-source run) is always
+    // a hard error regardless of `fail_on_partial` — there is nothing to report on.
+    if databases.is_empty() {
+        return match failures.into_iter().next() {
+            Some((name, err)) => {
+                Err(err.context(format!("all vulnerability sources failed (first: {name})")))
+            }
+            // Unreachable: an empty `databases` implies >= 1 failed source, since there is
+            // always >= 1 configured source. A defensive error, never a panic.
+            None => Err(anyhow::anyhow!("no vulnerability data could be fetched")),
+        };
+    }
+
+    // Partial scan: some sources failed but at least one succeeded. Warn loudly and carry the
+    // failed-source names into the report; the exit gate (`no_fail_on_partial`) is applied by
+    // the caller after the report — an incomplete scan is never silent.
+    let failed_sources: Vec<String> = failures
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+    for (name, err) in &failures {
+        tracing::warn!("vulnerability source '{name}' failed to fetch: {err}");
+        if !audit_args.is_quiet() {
+            eprintln!("Warning: vulnerability source '{name}' failed to fetch: {err}");
+        }
+    }
 
     if databases.len() > 1 && !audit_args.is_quiet() {
         eprintln!(
@@ -809,7 +864,8 @@ async fn perform_audit(
         warnings,
         maintenance_issues,
     )
-    .with_transitive_roots(transitive_roots);
+    .with_transitive_roots(transitive_roots)
+    .with_failed_sources(failed_sources);
 
     let summary = report.summary();
     let maint_summary = report.maintenance_summary();
@@ -955,13 +1011,25 @@ fn should_skip_script_dir(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_package_ignores, build_matcher_config, evaluate_fail_condition, scan_pep723_scripts,
+        apply_package_ignores, build_matcher_config, evaluate_fail_condition,
+        partial_scan_should_fail, scan_pep723_scripts,
     };
     use crate::types::PackageName;
     use crate::vulnerability::database::SuppressionReason;
     use crate::{Severity, VulnerabilityMatch};
     use std::collections::{BTreeMap, HashSet};
     use std::str::FromStr;
+
+    #[test]
+    fn test_partial_scan_strict_fails_and_lenient_continues() {
+        // Strict (default): a failed source is an incomplete scan → fail (exit 2).
+        assert!(partial_scan_should_fail(true, false));
+        // Lenient (--no-fail-on-partial): continue by findings despite the failed source.
+        assert!(!partial_scan_should_fail(true, true));
+        // No failures: the knob is irrelevant, never fail on this account.
+        assert!(!partial_scan_should_fail(false, false));
+        assert!(!partial_scan_should_fail(false, true));
+    }
 
     // Calling --group on a project with no pyproject.toml must return a clear error
     // before any dependency scanning begins.

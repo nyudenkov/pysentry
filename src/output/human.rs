@@ -119,6 +119,16 @@ pub(crate) fn generate_human_report(
         writeln!(output)?;
     }
 
+    if !report.failed_sources.is_empty() {
+        writeln!(
+            output,
+            "{}: scan incomplete — source(s) failed to fetch: {}. Findings may be missing.",
+            "PARTIAL SCAN".style(styles.header),
+            report.failed_sources.join(", ")
+        )?;
+        writeln!(output)?;
+    }
+
     if !report.warnings.is_empty() {
         writeln!(output, "{}", "WARNINGS".style(styles.header))?;
         for warning in &report.warnings {
@@ -703,6 +713,44 @@ mod tests {
         )
         .unwrap();
         assert!(output.contains("No vulnerabilities found"));
+    }
+
+    #[test]
+    fn test_partial_scan_renders_failed_sources() {
+        let report = crate::output::model::AuditReport::new(
+            DependencyStats {
+                total_packages: 1,
+                direct_packages: 1,
+                transitive_packages: 0,
+                by_source: HashMap::new(),
+            },
+            DatabaseStats {
+                total_vulnerabilities: 0,
+                total_packages: 0,
+                severity_counts: HashMap::new(),
+                packages_with_most_vulns: vec![],
+            },
+            vec![],
+            FixAnalysis {
+                total_matches: 0,
+                fixable: 0,
+                unfixable: 0,
+                fix_suggestions: vec![],
+            },
+            vec![],
+            Vec::new(),
+        )
+        .with_failed_sources(vec!["osv".to_string()]);
+
+        let output = generate_human_report(
+            &report,
+            DetailLevel::Normal,
+            DisplayMode::Table,
+            &OutputStyles::default(),
+        )
+        .unwrap();
+        assert!(output.contains("PARTIAL SCAN"), "output: {output}");
+        assert!(output.contains("osv"), "output: {output}");
     }
 
     #[test]
