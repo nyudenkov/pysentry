@@ -4,6 +4,63 @@ sidebar_position: 5
 
 # Changelog
 
+## v0.5.0 "Policy"
+
+This release is built around one thesis: **PySentry should never silently report less than it should.** It adds a small security-policy layer (per-group thresholds, package-wide ignores, an explicit partial-scan policy), fixes a silent OSV truncation, and ships a quality-of-life pass over the human and CI output.
+
+### 🛡️ Security Policy & Completeness
+
+#### Per-Group Fail Thresholds
+
+You can now set a `fail_on` threshold per dependency group, overriding the global one for findings that reach that group (config-only; requires a group-aware lock file — `uv.lock`, `poetry.lock`, or `pylock.toml`):
+
+```toml
+[defaults]
+fail_on = "medium"      # production default
+
+[groups.dev]
+fail_on = "critical"    # tolerate lower-severity advisories in dev-only deps
+```
+
+Thresholds resolve **strictest-wins per context**: a finding's effective threshold is the lowest across every context that reaches it. A group-only package takes its group threshold outright (so it can be *looser* than global — this is what lets a medium-severity dev-only advisory pass while production still fails on medium), while a package that also ships to production keeps the global `fail_on` as a floor a permissive group can only tighten. Closes [#151](https://github.com/nyudenkov/pysentry/issues/151).
+
+#### Ignore an Entire Package
+
+`[ignore].packages` suppresses every finding for the named packages — useful for first-party or internal packages you vendor. Names are compared with full PEP 503 normalization. Suppressed findings are **still reported** (tagged as suppressed in every format) but never trigger the non-zero exit:
+
+```toml
+[ignore]
+packages = ["internal-first-party-lib"]
+```
+
+Closes [#149](https://github.com/nyudenkov/pysentry/issues/149).
+
+#### Explicit Partial-Scan Policy
+
+When a vulnerability source fails to fetch but at least one other succeeds, the scan is incomplete. PySentry now treats this as a first-class, **fail-closed** condition: by default the run prints its findings plus a partial-scan marker and exits `2`. Pass `--no-fail-on-partial` (or set `[sources].fail_on_partial = false`) to continue on the sources that succeeded. If every source fails, the run is always a hard error.
+
+### 🔧 Improvements
+
+#### OSV Pagination — No Silent Truncation
+
+The OSV provider now follows every `next_page_token` page. Previously a package with many advisories could be silently truncated to the first page — a false negative. Correctness is prioritized over speed here: all pages are always collected.
+
+#### Compact Output by Default
+
+Human output is now **compact by default** — a summary plus a one-line table row per finding. Pass `--detailed` for the full descriptions, CVSS, and references (the previous intermediate "normal" level has been removed). JSON, SARIF, and Markdown output are unchanged.
+
+#### "Why It Failed" and Suppression Summary Lines
+
+The human, Markdown, and JSON reports now state *why* the run exits non-zero: how many findings met the effective `fail_on` threshold, and which threshold tripped. A separate line reports how many findings were suppressed by policy. This makes CI logs self-explanatory.
+
+#### Smarter Fix Recommendation
+
+For advisories fixed on multiple release lines, the recommended upgrade is now the **smallest version strictly greater than the installed one** (the least-disruptive safe upgrade) instead of an arbitrary branch. Backport-only advisories are noted as such.
+
+#### Compact Job Summary in GitHub Actions
+
+When running in GitHub Actions, PySentry writes a compact Markdown report to the run's job summary (scan counts, severity breakdown, policy/partial state, and a findings table). This is the primary results surface on pull requests, where the SARIF upload is now skipped by default — fork PRs get a read-only token that cannot upload to Code Scanning, and dependency findings do not map to a PR diff. Set `upload-sarif-on-pr: 'true'` to re-enable it for same-repo PRs.
+
 ## v0.4.9 "CI-native"
 
 ### ✨ New Features

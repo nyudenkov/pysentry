@@ -72,6 +72,18 @@ cargo build --release
 
 The binary will be available at `target/release/pysentry`.
 
+## GitHub Action (CI)
+
+For GitHub workflows, use the first-party action instead of installing manually — it downloads the prebuilt binary (verified against the release checksums) and runs the audit:
+
+```yaml
+- uses: nyudenkov/pysentry@v0.5.0
+  with:
+    fail-on: high
+```
+
+On push it uploads a SARIF report to Code Scanning; on pull requests it writes a compact report to the job summary. See the [CI guide](/ci) for all inputs and behavior.
+
 ## Requirements
 
 | Method | Requirements |

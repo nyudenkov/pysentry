@@ -55,8 +55,11 @@ PyPI [quarantines malicious packages](https://blog.pypi.org/posts/2025-12-31-pyp
 
 - **Multiple sources**: PyPA, PyPI, OSV.dev vulnerability databases
 - **PEP 792**: Detects quarantined, deprecated, and archived packages
+- **Transitive visibility**: Flags transitive findings and names the top-level dependency that pulled them in
 - **Performance**: Rust implementation, sub-second scans
-- **Output formats**: JSON, Markdown, human-readable
+- **Output formats**: human-readable, JSON, SARIF, and Markdown
+- **CI-native**: First-party [GitHub Action](/ci) with SARIF upload to Code Scanning and a compact job-summary report
+- **Security policy**: Per-group `fail_on` thresholds and package ignores, with a fail-closed policy for incomplete scans so results are never silently partial
 
 ## Next Steps
 

@@ -34,12 +34,17 @@ Complete reference for all PySentry command line options.
 | `--include-scripts` | Also scan PEP 723 Python scripts found under the project directory | `false` |
 | `--direct-only` | Check only direct dependencies | `false` |
 | `--detailed` | Show full vulnerability descriptions (summary + full text) | `false` |
-| `--compact` | Compact output: summary line + one-liner per vulnerability, no descriptions or fix suggestions | `false` |
+| `--compact` | Compact output: summary line + one-liner per vulnerability, no descriptions or fix suggestions (this is the default) | `false` |
 | `--display` | Output display style: `text` or `table`. Applies to compact mode only | `table` |
 | `--no-fail-on-unknown` | Don't fail on vulnerabilities with unknown severity | `false` |
+| `--no-fail-on-partial` | Continue on the sources that succeeded instead of failing when a vulnerability source cannot be fetched | `false` |
 
 ::: note
-`--compact` and `--detailed` are mutually exclusive. Using both together will cause an error.
+Human output is **compact by default** (since v0.5.0) and shows each finding's severity level. Pass `--detailed` for full descriptions, numeric CVSS scores, and references. `--compact` and `--detailed` are mutually exclusive — using both together causes an error.
+:::
+
+::: note
+By default a partial scan (one source fetched, another failed) exits `2` because results are incomplete — the findings and a partial-scan marker are still printed first. `--no-fail-on-partial` continues on the sources that succeeded. If **every** source fails, the run is always a hard error.
 :::
 
 ### Dependency Group Filtering (`--group`)

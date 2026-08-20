@@ -84,6 +84,10 @@ pysentry-rs --maintenance-cache-ttl 6
 # Don't fail on vulnerabilities with unknown severity
 pysentry-rs --no-fail-on-unknown
 
+# Continue on the sources that succeeded instead of failing when one can't be fetched
+# (by default an incomplete/partial scan exits 2)
+pysentry-rs --no-fail-on-partial
+
 # Disable caching for CI environments
 pysentry-rs --no-cache
 
@@ -93,11 +97,15 @@ pysentry-rs --color always
 # Disable colors (useful in plain-text environments or scripts)
 pysentry-rs --color never
 
-# Compact output with table layout (default)
-pysentry-rs --compact
+# Compact output is the default (summary + one line per finding)
+pysentry-rs
 
-# Compact output with traditional text layout
-pysentry-rs --compact --display text
+# Full descriptions, numeric CVSS scores, and references
+# (compact already shows the severity level for every finding)
+pysentry-rs --detailed
+
+# Compact output with traditional text layout instead of a table
+pysentry-rs --display text
 
 # Verbose output for debugging (-v for warnings, -vv for info, -vvv for debug)
 pysentry-rs -v
@@ -145,9 +153,9 @@ PySentry reports vulnerabilities with:
 |------|---------|
 | 0 | No vulnerabilities found at or above the `--fail-on` threshold |
 | 1 | Vulnerabilities found at or above the `--fail-on` threshold |
-| 2 | Error: the audit did not complete (bad configuration, network failure, parse failure) |
+| 2 | Error: the audit did not complete (bad configuration, network failure, parse failure), or a partial scan under the default fail-closed policy |
 
-CI can rely on the distinction: `1` means "vulnerable", `2` means "the audit never ran" — gate on any non-zero, or handle them separately.
+CI can rely on the distinction: `1` means "vulnerable", `2` means "the audit never ran or ran incompletely" — gate on any non-zero, or handle them separately. A partial scan (one source fetched, another failed) exits `2` by default; pass `--no-fail-on-partial` to continue on the sources that succeeded.
 
 ## Next Steps
 

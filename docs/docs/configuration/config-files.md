@@ -150,7 +150,7 @@ quiet = false
 | `no_ci_detect` | bool | Disable automatic CI environment detection | `false` |
 
 :::note
-`compact` and `detailed` are mutually exclusive. Setting both to `true` in your configuration file will cause a validation error.
+Human output is **compact by default** (since v0.5.0): a summary plus a one-line table row per finding (including its severity level). Set `detailed = true` (or pass `--detailed`) for full descriptions, numeric CVSS scores, and references. `compact` and `detailed` are mutually exclusive — setting both to `true` in your configuration file causes a validation error.
 :::
 
 :::note
@@ -163,6 +163,9 @@ quiet = false
 |--------|------|-------------|---------|
 | `enabled` | array | Vulnerability sources to use | `["pypa", "pypi", "osv"]` |
 | `service_url` | string | Override the OSV API base URL (custom/self-hosted OSV-compatible endpoint). Only valid when `enabled` is exactly `["osv"]` | public OSV API |
+| `fail_on_partial` | bool | When a source fails but at least one succeeds, fail the run (exit 2) because the scan is incomplete. Set `false` (or pass `--no-fail-on-partial`) to continue on the sources that succeeded | `true` |
+
+When `fail_on_partial` is `true` (the default, fail-closed) a partial scan still prints its full findings **and** a partial-scan marker before exiting `2`, so the incompleteness is visible. If every source fails, the run is always a hard error regardless of this setting.
 
 ### `[resolver]`
 
@@ -186,8 +189,37 @@ quiet = false
 |--------|------|-------------|---------|
 | `ids` | array | Vulnerability IDs or aliases to always ignore | `[]` |
 | `while_no_fix` | array | Vulnerability IDs or aliases to ignore while no fix exists | `[]` |
+| `packages` | array | Package names whose findings are suppressed entirely (config-only) | `[]` |
 
 Ignore entries match the advisory's primary ID and aliases, so a CVE suppression can match a GHSA or PYSEC advisory for the same vulnerability. PySentry logs a warning when an ignore entry did not match any advisory during the run.
+
+`packages` suppresses every finding for the named packages — names are compared with full PEP 503 normalization, so `zope.interface`, `Zope_Interface`, and `zope-interface` are equivalent. Suppressed findings are **still reported** (tagged as suppressed in every format) but never trigger the non-zero exit. A `packages` entry that matches nothing logs a warning, mirroring `ids`.
+
+```toml
+[ignore]
+packages = ["internal-first-party-lib"]
+```
+
+### `[groups.<name>]`
+
+Set a per-group `fail_on` threshold that overrides the global one for findings reaching a specific dependency group (config-only; there is no CLI flag). Requires a group-aware lock file (`uv.lock`, `poetry.lock`, or `pylock.toml`) — PySentry warns and ignores the thresholds otherwise.
+
+| Option | Type | Description | Default |
+|--------|------|-------------|---------|
+| `fail_on` | string | Minimum severity that fails the run for this group (`low`, `medium`, `high`, `critical`) | global `fail_on` |
+
+```toml
+[defaults]
+fail_on = "medium"      # global default
+
+[groups.dev]
+fail_on = "critical"    # be lenient on dev-only dependencies
+
+[groups.benchmark]
+fail_on = "critical"
+```
+
+Thresholds resolve **strictest-wins per context**: a finding's effective threshold is the lowest (strictest) across every context that reaches it. A group-only package (never pulled into your main/production dependencies) takes its group threshold outright, so it can be *looser* than global — that is how `[groups.dev] fail_on = "critical"` lets a medium-severity dev-only advisory pass while production still fails on medium. A package that also ships to production keeps the global `fail_on` as a floor that a permissive group can only tighten, never loosen.
 
 ### `[output]`
 
