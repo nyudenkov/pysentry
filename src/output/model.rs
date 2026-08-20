@@ -40,6 +40,16 @@ pub fn script_source_suffix(source_file: Option<&str>) -> String {
     }
 }
 
+/// The smallest fixed version strictly greater than `installed` — the least-disruptive safe
+/// upgrade across a possibly multi-branch `fixed_versions` list. `None` means every recorded
+/// fix is on an older release line (a backport), so no forward upgrade applies here.
+pub fn minimal_safe_upgrade<'a>(
+    fixed_versions: &'a [crate::types::Version],
+    installed: &crate::types::Version,
+) -> Option<&'a crate::types::Version> {
+    fixed_versions.iter().filter(|v| *v > installed).min()
+}
+
 /// Controls how much detail is included in the human-readable report
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailLevel {

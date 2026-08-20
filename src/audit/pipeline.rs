@@ -153,6 +153,14 @@ pub async fn audit(
         } else {
             crate::ci::github_notice(&annotation_message);
         }
+
+        // Surface a compact report in the run's Job Summary so results are visible in the CI
+        // tab itself — the primary channel when the SARIF upload is skipped (e.g. on PRs).
+        if let Some(path) = std::env::var_os("GITHUB_STEP_SUMMARY") {
+            if let Err(e) = write_github_step_summary(&report, Path::new(&path)) {
+                tracing::warn!("Failed to write GitHub step summary: {e}");
+            }
+        }
     }
 
     if !audit_args.is_quiet() {
@@ -259,6 +267,20 @@ fn fail_on_label(level: &crate::SeverityLevel) -> &'static str {
         crate::SeverityLevel::High => "high",
         crate::SeverityLevel::Critical => "critical",
     }
+}
+
+/// Append a compact markdown report to the GitHub Actions Job Summary file. Appends (never
+/// truncates) so it coexists with summaries other workflow steps write.
+fn write_github_step_summary(report: &AuditReport, path: &Path) -> Result<()> {
+    use std::io::Write;
+    let markdown = crate::output::markdown::generate_markdown_summary(report)
+        .map_err(|e| anyhow::anyhow!("failed to render step summary: {e}"))?;
+    let mut file = fs_err::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{markdown}")?;
+    Ok(())
 }
 
 fn severity_level_to_db(level: &crate::SeverityLevel) -> Severity {
@@ -1067,7 +1089,7 @@ fn should_skip_script_dir(name: &str) -> bool {
 mod tests {
     use super::{
         apply_package_ignores, build_matcher_config, evaluate_fail_condition,
-        partial_scan_should_fail, scan_pep723_scripts,
+        partial_scan_should_fail, scan_pep723_scripts, write_github_step_summary,
     };
     use crate::types::PackageName;
     use crate::vulnerability::database::SuppressionReason;
@@ -1084,6 +1106,25 @@ mod tests {
         // No failures: the knob is irrelevant, never fail on this account.
         assert!(!partial_scan_should_fail(false, false));
         assert!(!partial_scan_should_fail(false, true));
+    }
+
+    #[test]
+    fn test_write_github_step_summary_appends_markdown() {
+        let report = crate::output::model::test_helpers::create_test_report();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("step-summary.md");
+        // A prior step already wrote to the summary file — we must append, not truncate.
+        std::fs::write(&path, "existing\n").unwrap();
+
+        write_github_step_summary(&report, &path).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            contents.starts_with("existing\n"),
+            "must not truncate: {contents}"
+        );
+        assert!(contents.contains("## 🛡️ PySentry"));
+        assert!(contents.contains("GHSA-test-1234"));
     }
 
     // Calling --group on a project with no pyproject.toml must return a clear error

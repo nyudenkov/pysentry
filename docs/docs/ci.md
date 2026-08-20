@@ -8,7 +8,7 @@ PySentry is built for CI: it exits non-zero when findings reach the `--fail-on` 
 
 ## GitHub Action
 
-The first-party action ([Marketplace listing](https://github.com/marketplace/actions/pysentry-security-audit)) downloads a prebuilt binary (verified against the release checksums), runs the audit, and uploads a SARIF report to GitHub Code Scanning, so findings appear in the repository Security tab and on pull requests.
+The first-party action ([Marketplace listing](https://github.com/marketplace/actions/pysentry-security-audit)) downloads a prebuilt binary (verified against the release checksums), runs the audit, and — on push to the default branch — uploads a SARIF report to GitHub Code Scanning so findings appear in the repository Security tab. On pull requests the SARIF upload is skipped by default (fork PRs get a read-only token, so the upload would fail); instead PySentry writes a compact report to the run's **job summary**, which it does whenever it runs in GitHub Actions.
 
 ```yaml
 name: Dependency Audit
@@ -46,6 +46,7 @@ All inputs are optional and map to CLI flags.
 | `output` | `pysentry-results.sarif` | Report file path |
 | `ignore` | — | Space-separated vulnerability IDs to suppress |
 | `upload-sarif` | `true` | Upload the report to Code Scanning |
+| `upload-sarif-on-pr` | `false` | Also upload on `pull_request` events (off by default; fork PRs can't get the write token) |
 | `category` | `pysentry` | Code Scanning category |
 | `args` | — | Extra raw CLI arguments |
 
@@ -56,7 +57,7 @@ All inputs are optional and map to CLI flags.
 | `exit-code` | PySentry exit code |
 | `output-file` | Path to the generated report |
 
-The SARIF report is uploaded even when the audit fails, so findings always reach the Security tab; the job then fails with the audit's exit code.
+On push, the SARIF report is uploaded even when the audit fails, so findings always reach the Security tab; the job then fails with the audit's exit code. On pull requests, the job summary shows the compact report and the job still fails on findings at or above `fail-on`.
 
 ## Other CI systems
 

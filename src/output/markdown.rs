@@ -69,6 +69,32 @@ pub(crate) fn generate_markdown_report(
         writeln!(output)?;
     }
 
+    let suppressed = report
+        .matches
+        .iter()
+        .filter(|m| m.suppressed.is_some())
+        .count();
+    if suppressed > 0 {
+        writeln!(
+            output,
+            "🔕 **{} suppressed by policy** (reported, excluded from the exit condition)",
+            count_noun(suppressed, "finding", "findings")
+        )?;
+        writeln!(output)?;
+    }
+
+    if let Some((failing, ref threshold)) = report.fail_summary {
+        if failing > 0 {
+            writeln!(
+                output,
+                "❌ **{} at or above `{}` — exit non-zero**",
+                count_noun(failing, "finding", "findings"),
+                threshold
+            )?;
+            writeln!(output)?;
+        }
+    }
+
     if !report.warnings.is_empty() {
         writeln!(output, "## ⚠️ Warnings")?;
         writeln!(output)?;
@@ -281,6 +307,161 @@ pub(crate) fn generate_markdown_report(
     Ok(output)
 }
 
+/// "{n} {singular}" for n == 1, else "{n} {plural}".
+fn count_noun(n: usize, singular: &str, plural: &str) -> String {
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
+/// A compact markdown summary for CI surfaces (e.g. a GitHub Actions step summary): the scan
+/// counts, policy/partial state, and a single findings table — no per-finding descriptions.
+/// The verbose per-finding view stays in [`generate_markdown_report`] and the SARIF upload.
+pub(crate) fn generate_markdown_summary(
+    report: &AuditReport,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut output = String::new();
+    let summary = report.summary();
+
+    writeln!(output, "## 🛡️ PySentry")?;
+    writeln!(output)?;
+    writeln!(
+        output,
+        "**{}** scanned • **{}** vulnerable • **{}** found",
+        count_noun(summary.total_packages_scanned, "package", "packages"),
+        summary.vulnerable_packages,
+        count_noun(
+            summary.total_vulnerabilities,
+            "vulnerability",
+            "vulnerabilities"
+        ),
+    )?;
+    writeln!(output)?;
+
+    if !summary.severity_counts.is_empty() {
+        let breakdown = [
+            Severity::Critical,
+            Severity::High,
+            Severity::Medium,
+            Severity::Low,
+            Severity::Unknown,
+        ]
+        .iter()
+        .filter_map(|s| {
+            summary
+                .severity_counts
+                .get(s)
+                .map(|c| format!("{} {} {}", severity_icon(s), c, s))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+        writeln!(output, "{breakdown}")?;
+        writeln!(output)?;
+    }
+
+    if report.fix_analysis.total_matches > 0 {
+        writeln!(
+            output,
+            "🔧 {} fixable · {} unfixable",
+            report.fix_analysis.fixable, report.fix_analysis.unfixable
+        )?;
+        writeln!(output)?;
+    }
+
+    let suppressed = report
+        .matches
+        .iter()
+        .filter(|m| m.suppressed.is_some())
+        .count();
+    if suppressed > 0 {
+        writeln!(
+            output,
+            "🔕 {} suppressed by policy (reported, excluded from the exit condition)",
+            count_noun(suppressed, "finding", "findings")
+        )?;
+        writeln!(output)?;
+    }
+
+    if let Some((failing, ref threshold)) = report.fail_summary {
+        if failing > 0 {
+            writeln!(
+                output,
+                "❌ **{} at or above `{}` — exit non-zero**",
+                count_noun(failing, "finding", "findings"),
+                threshold
+            )?;
+            writeln!(output)?;
+        }
+    }
+
+    if !report.failed_sources.is_empty() {
+        writeln!(
+            output,
+            "> ⚠️ **Partial scan:** source(s) failed to fetch: {}. Findings may be incomplete.",
+            report.failed_sources.join(", ")
+        )?;
+        writeln!(output)?;
+    }
+
+    if report.matches.is_empty() {
+        writeln!(output, "✅ No vulnerabilities found.")?;
+        writeln!(output)?;
+    } else {
+        let mut builder = Builder::new();
+        builder.push_record(["ID", "Package", "Version", "Severity", "Type", "Fix"]);
+        for m in &report.matches {
+            let id = if m.suppressed.is_some() {
+                format!("{} _(suppressed)_", m.vulnerability.id)
+            } else {
+                m.vulnerability.id.clone()
+            };
+            let dep_type = if m.is_direct {
+                "direct".to_string()
+            } else {
+                format!(
+                    "transitive{}",
+                    crate::output::model::via_suffix(report.roots_of(&m.package_name))
+                )
+            };
+            let fix = if m.vulnerability.fixed_versions.is_empty() {
+                "—".to_string()
+            } else {
+                match crate::output::model::minimal_safe_upgrade(
+                    &m.vulnerability.fixed_versions,
+                    &m.installed_version,
+                ) {
+                    Some(v) => format!("→ {v}"),
+                    None => "other release line".to_string(),
+                }
+            };
+            builder.push_record([
+                id,
+                m.package_name.to_string(),
+                format!("v{}", m.installed_version),
+                m.vulnerability.severity.to_string(),
+                dep_type,
+                fix,
+            ]);
+        }
+        let table = builder.build().with(Style::markdown()).to_string();
+        writeln!(output, "{table}")?;
+        writeln!(output)?;
+    }
+
+    if report.has_maintenance_issues() {
+        let maint = report.maintenance_summary();
+        writeln!(
+            output,
+            "🔧 **Maintenance:** {} ({} archived, {} deprecated, {} quarantined)",
+            count_noun(maint.total_issues, "issue", "issues"),
+            maint.archived_count,
+            maint.deprecated_count,
+            maint.quarantined_count
+        )?;
+        writeln!(output)?;
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +488,66 @@ mod tests {
         assert!(output.contains("~~~"));
         assert!(output.contains("A test vulnerability for unit testing"));
         assert!(output.contains("*Scan completed at"));
+    }
+
+    #[test]
+    fn test_markdown_report_surfaces_failing_and_suppressed() {
+        use crate::vulnerability::database::SuppressionReason;
+        let mut report = create_test_report().with_fail_summary(Some((2, "high".to_string())));
+        report.matches.first_mut().unwrap().suppressed = Some(SuppressionReason::IgnoredPackage);
+        let output = generate_markdown_report(&report).unwrap();
+
+        assert!(
+            output.contains("2 findings at or above `high`"),
+            "output: {output}"
+        );
+        assert!(
+            output.contains("1 finding suppressed by policy"),
+            "output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_summary_is_compact_table_no_descriptions() {
+        let report = create_test_report();
+        let output = generate_markdown_summary(&report).unwrap();
+
+        // Compact: a findings table with the finding, but no per-finding prose/descriptions.
+        assert!(output.contains("## 🛡️ PySentry"));
+        assert!(
+            output.contains("| ID "),
+            "expected a markdown table header: {output}"
+        );
+        assert!(output.contains("GHSA-test-1234"));
+        assert!(output.contains("test-package"));
+        assert!(
+            !output.contains("A test vulnerability for unit testing"),
+            "summary must not embed descriptions: {output}"
+        );
+        assert!(!output.contains("~~~"));
+        // Pluralization: one vulnerable package / one vulnerability.
+        assert!(
+            output.contains("**1 vulnerability** found"),
+            "output: {output}"
+        );
+    }
+
+    #[test]
+    fn test_markdown_summary_surfaces_failing_and_suppressed_state() {
+        use crate::vulnerability::database::SuppressionReason;
+        let mut report = create_test_report().with_fail_summary(Some((2, "high".to_string())));
+        report.matches.first_mut().unwrap().suppressed = Some(SuppressionReason::IgnoredPackage);
+        let output = generate_markdown_summary(&report).unwrap();
+
+        assert!(
+            output.contains("2 findings at or above `high`"),
+            "output: {output}"
+        );
+        assert!(
+            output.contains("1 finding suppressed by policy"),
+            "output: {output}"
+        );
+        assert!(output.contains("_(suppressed)_"), "output: {output}");
     }
 
     #[test]

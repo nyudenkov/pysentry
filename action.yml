@@ -38,6 +38,10 @@ inputs:
     description: 'Upload the SARIF report to GitHub Code Scanning (requires security-events: write permission)'
     required: false
     default: 'true'
+  upload-sarif-on-pr:
+    description: 'Also upload SARIF on pull_request events. Off by default: fork PRs get a read-only token so the upload fails, and dependency findings do not map to the PR diff. On PRs the results show in the job summary instead.'
+    required: false
+    default: 'false'
   category:
     description: 'GitHub Code Scanning category for the uploaded SARIF'
     required: false
@@ -151,7 +155,10 @@ runs:
         echo "output-file=$INPUT_OUTPUT" >> "$GITHUB_OUTPUT"
 
     - name: Upload SARIF to Code Scanning
-      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && steps.scan.outputs.exit-code != '' }}
+      # Skip on pull_request by default: fork PRs cannot get security-events: write (the upload
+      # would fail), and PR results are surfaced in the job summary instead. Set
+      # upload-sarif-on-pr: 'true' to force it for same-repo PRs.
+      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && steps.scan.outputs.exit-code != '' && (github.event_name != 'pull_request' || inputs.upload-sarif-on-pr == 'true') }}
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: ${{ inputs.output }}

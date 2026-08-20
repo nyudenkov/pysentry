@@ -22,6 +22,13 @@ pub(crate) fn generate_json_report(
         maintenance_issues: &report.maintenance_issues,
         partial: !report.failed_sources.is_empty(),
         failed_sources: &report.failed_sources,
+        failing: report
+            .fail_summary
+            .as_ref()
+            .map(|(count, threshold)| FailingView {
+                count: *count,
+                threshold,
+            }),
     };
     Ok(serde_json::to_string_pretty(&view)?)
 }
@@ -46,6 +53,16 @@ struct JsonReportView<'a> {
     partial: bool,
     /// Names of the sources that failed to fetch (empty on a full scan).
     failed_sources: &'a [String],
+    /// Why the run exits non-zero on vulnerabilities: how many findings met the `fail_on`
+    /// threshold, and the threshold itself. `null` when nothing triggered the exit condition.
+    failing: Option<FailingView<'a>>,
+}
+
+/// The vulnerability exit reason surfaced to machine consumers (mirrors the human "FAILING" line).
+#[derive(Serialize)]
+struct FailingView<'a> {
+    count: usize,
+    threshold: &'a str,
 }
 
 #[cfg(test)]
@@ -214,6 +231,17 @@ mod tests {
         assert_eq!(json["failed_sources"].as_array().unwrap().len(), 0);
         // Not suppressed → field omitted entirely.
         assert!(json["vulnerabilities"][0]["suppressed"].is_null());
+        // No fail_on trigger → failing is present but null.
+        assert!(json["failing"].is_null());
+    }
+
+    #[test]
+    fn test_json_failing_reason_surfaced() {
+        let report = create_test_report().with_fail_summary(Some((2, "high".to_string())));
+        let output = generate_json_report(&report).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(json["failing"]["count"], 2);
+        assert_eq!(json["failing"]["threshold"], "high");
     }
 
     #[test]

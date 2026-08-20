@@ -80,16 +80,6 @@ fn dep_type_label(
     }
 }
 
-/// The smallest fixed version strictly greater than `installed` — the least-disruptive safe
-/// upgrade across a possibly multi-branch `fixed_versions` list. `None` means every recorded
-/// fix is on an older release line (a backport), so no forward upgrade applies here.
-fn minimal_safe_upgrade<'a>(
-    fixed_versions: &'a [crate::types::Version],
-    installed: &crate::types::Version,
-) -> Option<&'a crate::types::Version> {
-    fixed_versions.iter().filter(|v| *v > installed).min()
-}
-
 /// Truncate a cell's visible text to `budget` characters, appending '…' when cut. Keeps the
 /// variable-length Type cell from forcing the whole grid table past the terminal width.
 fn truncate_cell(text: &str, budget: usize) -> String {
@@ -375,7 +365,7 @@ pub(crate) fn generate_human_report(
                     // Multi-branch advisories record fixes on several release lines; recommend
                     // the smallest that actually moves the installed version forward. A pure
                     // backport list (all fixes ≤ installed) has no forward upgrade to offer.
-                    match minimal_safe_upgrade(
+                    match crate::output::model::minimal_safe_upgrade(
                         &m.vulnerability.fixed_versions,
                         &m.installed_version,
                     ) {
@@ -1484,7 +1474,7 @@ mod tests {
             Version::from_str("2.3.2").unwrap(),
         ];
         assert_eq!(
-            minimal_safe_upgrade(&fixes, &installed),
+            crate::output::model::minimal_safe_upgrade(&fixes, &installed),
             Some(&Version::from_str("2.3.2").unwrap())
         );
 
@@ -1493,7 +1483,10 @@ mod tests {
             Version::from_str("2.3.1").unwrap(),
             Version::from_str("2.2.0").unwrap(),
         ];
-        assert_eq!(minimal_safe_upgrade(&backports, &installed), None);
+        assert_eq!(
+            crate::output::model::minimal_safe_upgrade(&backports, &installed),
+            None
+        );
     }
 
     #[test]

@@ -1,5 +1,9 @@
-# Example: audit Python dependencies with PySentry on every push and PR,
-# uploading results to GitHub Code Scanning (Security tab).
+# Example: audit Python dependencies with PySentry on every push and PR.
+#
+# On push to the default branch, results are uploaded to GitHub Code Scanning
+# (Security tab). On pull requests the upload is skipped automatically — fork PRs
+# can't get the write token, so results appear in the run's job summary instead
+# (PySentry writes a compact report there whenever it runs in Actions).
 #
 # Copy this file to .github/workflows/pysentry.yml in your repository.
 
@@ -12,7 +16,7 @@ on:
 
 permissions:
   contents: read
-  # Required for SARIF upload to Code Scanning
+  # Required for the SARIF upload to Code Scanning (used on push, not on PRs)
   security-events: write
 
 jobs:
@@ -28,4 +32,5 @@ jobs:
           fail-on: high            # fail the job on high/critical findings
           # sources: osv           # limit vulnerability sources
           # ignore: GHSA-xxxx-yyyy # space-separated IDs to suppress
-          # upload-sarif: 'false'  # disable the Code Scanning upload
+          # upload-sarif: 'false'  # disable the Code Scanning upload entirely
+          # upload-sarif-on-pr: 'true' # also upload on same-repo PRs (off by default)
