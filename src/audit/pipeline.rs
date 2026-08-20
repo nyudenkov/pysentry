@@ -251,6 +251,16 @@ fn partial_scan_should_fail(has_failed_sources: bool, no_fail_on_partial: bool) 
     has_failed_sources && !no_fail_on_partial
 }
 
+/// Lowercase label for the `fail_on` threshold, for the human "why it failed" line.
+fn fail_on_label(level: &crate::SeverityLevel) -> &'static str {
+    match level {
+        crate::SeverityLevel::Low => "low",
+        crate::SeverityLevel::Medium => "medium",
+        crate::SeverityLevel::High => "high",
+        crate::SeverityLevel::Critical => "critical",
+    }
+}
+
 fn severity_level_to_db(level: &crate::SeverityLevel) -> Severity {
     match level {
         crate::SeverityLevel::Low => Severity::Low,
@@ -299,6 +309,9 @@ fn effective_threshold(
 /// (see [`effective_threshold`]). Pass an empty map for global-threshold-only behavior.
 /// This selects the exit condition ONLY — it never filters what is reported (the fail_on
 /// invariant).
+/// Whether any finding triggers the fail_on exit condition. Production derives this from
+/// [`count_failing_findings`] (`count > 0`); kept as the readable predicate for tests.
+#[cfg(test)]
 pub(crate) fn evaluate_fail_condition(
     matches: &[VulnerabilityMatch],
     global_fail_on: &crate::SeverityLevel,
@@ -306,25 +319,63 @@ pub(crate) fn evaluate_fail_condition(
     main_reachable: &HashSet<PackageName>,
     fail_on_unknown: bool,
 ) -> bool {
-    let global_db = severity_level_to_db(global_fail_on);
+    count_failing_findings(
+        matches,
+        global_fail_on,
+        group_thresholds,
+        main_reachable,
+        fail_on_unknown,
+    ) > 0
+}
 
-    matches.iter().any(|m| {
-        if m.suppressed.is_some() {
-            return false;
-        }
-        // Unknown severity ignores thresholds entirely (pre-policy behavior). Short-circuit
-        // BEFORE the min computation: `Unknown` is the lowest Severity variant, so folding it
-        // into the effective threshold would collapse any policied finding to fail-on-everything.
-        if m.vulnerability.is_level_unknown() {
-            return fail_on_unknown;
-        }
-        m.vulnerability.meets_level(effective_threshold(
-            m,
-            global_db,
-            group_thresholds,
-            main_reachable,
-        ))
-    })
+/// How many findings trigger the fail_on exit condition — the count behind
+/// [`evaluate_fail_condition`], for the human "why it failed" line.
+pub(crate) fn count_failing_findings(
+    matches: &[VulnerabilityMatch],
+    global_fail_on: &crate::SeverityLevel,
+    group_thresholds: &BTreeMap<String, Severity>,
+    main_reachable: &HashSet<PackageName>,
+    fail_on_unknown: bool,
+) -> usize {
+    let global_db = severity_level_to_db(global_fail_on);
+    matches
+        .iter()
+        .filter(|m| {
+            finding_triggers_fail(
+                m,
+                global_db,
+                group_thresholds,
+                main_reachable,
+                fail_on_unknown,
+            )
+        })
+        .count()
+}
+
+/// Whether a single finding triggers the fail_on exit condition (shared by
+/// [`evaluate_fail_condition`] and [`count_failing_findings`]).
+fn finding_triggers_fail(
+    m: &VulnerabilityMatch,
+    global_db: Severity,
+    group_thresholds: &BTreeMap<String, Severity>,
+    main_reachable: &HashSet<PackageName>,
+    fail_on_unknown: bool,
+) -> bool {
+    if m.suppressed.is_some() {
+        return false;
+    }
+    // Unknown severity ignores thresholds entirely (pre-policy behavior). Short-circuit
+    // BEFORE the min computation: `Unknown` is the lowest Severity variant, so folding it
+    // into the effective threshold would collapse any policied finding to fail-on-everything.
+    if m.vulnerability.is_level_unknown() {
+        return fail_on_unknown;
+    }
+    m.vulnerability.meets_level(effective_threshold(
+        m,
+        global_db,
+        group_thresholds,
+        main_reachable,
+    ))
 }
 
 /// Suppress findings whose package matches an `[ignore].packages` entry — marked, never
@@ -837,13 +888,16 @@ async fn perform_audit(
         .iter()
         .map(|(name, level)| (name.clone(), severity_level_to_db(&level.clone().into())))
         .collect();
-    let fail_vulns = evaluate_fail_condition(
+    let failing_count = count_failing_findings(
         &display_matches,
         &fail_on_level,
         &group_thresholds,
         &main_reachable,
         !audit_args.no_fail_on_unknown,
     );
+    let fail_vulns = failing_count > 0;
+    let fail_summary =
+        (failing_count > 0).then(|| (failing_count, fail_on_label(&fail_on_level).to_string()));
 
     let database_stats = matcher.get_database_stats();
     let fix_analysis = matcher.analyze_fixes(&display_matches);
@@ -865,7 +919,8 @@ async fn perform_audit(
         maintenance_issues,
     )
     .with_transitive_roots(transitive_roots)
-    .with_failed_sources(failed_sources);
+    .with_failed_sources(failed_sources)
+    .with_fail_summary(fail_summary);
 
     let summary = report.summary();
     let maint_summary = report.maintenance_summary();

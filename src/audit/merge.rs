@@ -252,6 +252,20 @@ mod tests {
     }
 
     #[test]
+    fn test_config_both_compact_and_detailed_resolves_to_detailed() {
+        // clap's conflicts_with only guards CLI flags; a config file can set both bools with
+        // no CLI flag to override them. detail_level must still resolve deterministically —
+        // detailed wins — never panic or fall back to a dropped Normal level.
+        let args = parse_audit_args(&["."]);
+        let mut config = crate::config::Config::default();
+        config.defaults.compact = true;
+        config.defaults.detailed = true;
+        let merged = args.merge_with_config(&config);
+        assert!(merged.compact && merged.detailed);
+        assert_eq!(merged.detail_level(), DetailLevel::Detailed);
+    }
+
+    #[test]
     fn test_display_config_overrides_default() {
         let args = parse_audit_args(&["."]);
         let mut config = crate::config::Config::default();

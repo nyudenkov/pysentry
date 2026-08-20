@@ -312,13 +312,14 @@ pub struct AuditArgs {
 
 impl AuditArgs {
     /// Resolve the effective detail level from --compact / --detailed flags.
+    /// Compact is the default; `--detailed` is the only opt-in (clap keeps them mutually
+    /// exclusive on the CLI, and `detail_level` resolves detailed-wins if both survive a
+    /// config merge).
     pub fn detail_level(&self) -> crate::DetailLevel {
-        if self.compact {
-            crate::DetailLevel::Compact
-        } else if self.detailed {
+        if self.detailed {
             crate::DetailLevel::Detailed
         } else {
-            crate::DetailLevel::Normal
+            crate::DetailLevel::Compact
         }
     }
 
@@ -614,9 +615,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detail_level_defaults_to_normal() {
+    fn test_detail_level_defaults_to_compact() {
         let args = parse_audit_args(&["."]);
-        assert_eq!(args.detail_level(), DetailLevel::Normal);
+        assert_eq!(args.detail_level(), DetailLevel::Compact);
     }
 
     #[test]

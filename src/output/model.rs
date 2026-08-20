@@ -43,10 +43,8 @@ pub fn script_source_suffix(source_file: Option<&str>) -> String {
 /// Controls how much detail is included in the human-readable report
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailLevel {
-    /// Summary + one-liner per vulnerability, no descriptions
+    /// Summary + one-liner per vulnerability, no descriptions (default)
     Compact,
-    /// Standard output (default)
-    Normal,
     /// Full vulnerability descriptions
     Detailed,
 }
@@ -84,6 +82,10 @@ pub struct AuditReport {
     /// Vulnerability sources that failed to fetch. Non-empty means the scan is incomplete
     /// (partial): findings reflect only the sources that succeeded. Empty on a full scan.
     pub failed_sources: Vec<String>,
+    /// (failing-finding count, `fail_on` threshold label) when the run exits non-zero on
+    /// vulnerabilities. `None` means no vulnerability triggered the exit condition. Drives the
+    /// human "why it failed" line only — never serialized.
+    pub fail_summary: Option<(usize, String)>,
     cached_summary: OnceLock<AuditSummary>,
 }
 
@@ -99,6 +101,7 @@ impl Clone for AuditReport {
             maintenance_issues: self.maintenance_issues.clone(),
             transitive_roots: self.transitive_roots.clone(),
             failed_sources: self.failed_sources.clone(),
+            fail_summary: self.fail_summary.clone(),
             cached_summary: OnceLock::new(),
         }
     }
@@ -124,6 +127,7 @@ impl AuditReport {
             maintenance_issues,
             transitive_roots: HashMap::new(),
             failed_sources: Vec::new(),
+            fail_summary: None,
             cached_summary: OnceLock::new(),
         }
     }
@@ -132,6 +136,14 @@ impl AuditReport {
     #[must_use]
     pub fn with_failed_sources(mut self, failed_sources: Vec<String>) -> Self {
         self.failed_sources = failed_sources;
+        self
+    }
+
+    /// Record how many findings trigger the `fail_on` exit condition, and the threshold label,
+    /// for the human "why it failed" line. Pass `None` (or a zero count) when nothing fails.
+    #[must_use]
+    pub fn with_fail_summary(mut self, fail_summary: Option<(usize, String)>) -> Self {
+        self.fail_summary = fail_summary;
         self
     }
 

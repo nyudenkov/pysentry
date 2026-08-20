@@ -54,7 +54,7 @@ mod tests {
             &report,
             AuditFormat::Human,
             project_root,
-            DetailLevel::Normal,
+            DetailLevel::Detailed,
             DisplayMode::Table,
             &styles,
         )
@@ -66,7 +66,7 @@ mod tests {
             &report,
             AuditFormat::Json,
             project_root,
-            DetailLevel::Normal,
+            DetailLevel::Detailed,
             DisplayMode::Table,
             &styles,
         )
@@ -78,7 +78,7 @@ mod tests {
             &report,
             AuditFormat::Sarif,
             project_root,
-            DetailLevel::Normal,
+            DetailLevel::Detailed,
             DisplayMode::Table,
             &styles,
         )
@@ -90,7 +90,7 @@ mod tests {
             &report,
             AuditFormat::Markdown,
             project_root,
-            DetailLevel::Normal,
+            DetailLevel::Detailed,
             DisplayMode::Table,
             &styles,
         )
