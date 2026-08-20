@@ -11,7 +11,7 @@
 [![crates.io](https://img.shields.io/crates/v/pysentry)](https://crates.io/crates/pysentry)
 [![Downloads](https://static.pepy.tech/badge/pysentry-rs/week)](https://pepy.tech/projects/pysentry-rs)
 
-[**Documentation**](https://nyudenkov.github.io/pysentry/) · [**Benchmarks**](benchmarks/results/) · [Help test & improve](https://github.com/nyudenkov/pysentry/issues/12) · [Usage survey](https://tally.so/r/mYNPNv)
+[**Documentation**](https://docs.pysentry.com) · [**Benchmarks**](benchmarks/results/) · [Help test & improve](https://github.com/nyudenkov/pysentry/issues/12) · [Usage survey](https://tally.so/r/mYNPNv)
 
 </div>
 
@@ -43,7 +43,7 @@ pip install pysentry-rs    # PyPI
 cargo install pysentry     # crates.io
 ```
 
-Pre-built binaries are attached to [GitHub Releases](https://github.com/nyudenkov/pysentry/releases). See the [installation guide](https://nyudenkov.github.io/pysentry/getting-started/installation) for all options.
+Pre-built binaries are attached to [GitHub Releases](https://github.com/nyudenkov/pysentry/releases). See the [installation guide](https://docs.pysentry.com/getting-started/installation) for all options.
 
 > **Naming:** the Python package installs the binary as `pysentry-rs`; the Rust crate and release binaries are plain `pysentry`. Examples below use `pysentry-rs` — substitute accordingly.
 
@@ -69,7 +69,7 @@ pysentry-rs --format sarif --output results.sarif
 pysentry-rs --forbid-quarantined
 ```
 
-More examples in the [quickstart guide](https://nyudenkov.github.io/pysentry/getting-started/quickstart).
+More examples in the [quickstart guide](https://docs.pysentry.com/getting-started/quickstart).
 
 ## Pre-commit
 
@@ -97,7 +97,7 @@ steps:
       fail-on: high
 ```
 
-On any other CI system, `pysentry-rs --fail-on high` exits non-zero when findings reach the threshold. Details in the [CI guide](https://nyudenkov.github.io/pysentry/ci).
+On any other CI system, `pysentry-rs --fail-on high` exits non-zero when findings reach the threshold. Details in the [CI guide](https://docs.pysentry.com/ci).
 
 ## Configuration
 
@@ -117,17 +117,17 @@ enabled = ["pypa", "osv"]
 ids = ["CVE-2023-12345"]
 ```
 
-All options are covered in the [configuration guide](https://nyudenkov.github.io/pysentry/configuration/config-files).
+All options are covered in the [configuration guide](https://docs.pysentry.com/configuration/config-files).
 
 ## Documentation
 
-Full documentation lives at [https://nyudenkov.github.io/pysentry/](https://nyudenkov.github.io/pysentry):
-[Installation](https://nyudenkov.github.io/pysentry/getting-started/installation) ·
-[Quickstart](https://nyudenkov.github.io/pysentry/getting-started/quickstart) ·
-[CLI options](https://nyudenkov.github.io/pysentry/configuration/cli-options) ·
-[Configuration files](https://nyudenkov.github.io/pysentry/configuration/config-files) ·
-[Environment variables](https://nyudenkov.github.io/pysentry/configuration/environment-variables) ·
-[Troubleshooting](https://nyudenkov.github.io/pysentry/troubleshooting)
+Full documentation lives at [https://docs.pysentry.com](https://docs.pysentry.com):
+[Installation](https://docs.pysentry.com/getting-started/installation) ·
+[Quickstart](https://docs.pysentry.com/getting-started/quickstart) ·
+[CLI options](https://docs.pysentry.com/configuration/cli-options) ·
+[Configuration files](https://docs.pysentry.com/configuration/config-files) ·
+[Environment variables](https://docs.pysentry.com/configuration/environment-variables) ·
+[Troubleshooting](https://docs.pysentry.com/troubleshooting)
 
 ## Requirements
 
