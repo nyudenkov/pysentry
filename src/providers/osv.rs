@@ -709,6 +709,61 @@ impl OsvSource {
         (vuln_id, result)
     }
 
+    /// Process one page of a paginated OSV batch response.
+    ///
+    /// Returns the `(vuln_id, package_name)` pairs on this page plus the
+    /// follow-up queries for every result carrying a `next_page_token`. OSV
+    /// returns results in query order, so `queries[idx]` names result `idx`.
+    fn collect_page(
+        queries: &[OsvQuery],
+        response: OsvBatchResponse,
+    ) -> (Vec<(String, String)>, Vec<OsvQuery>) {
+        let mut collected = Vec::new();
+        let mut next_queries = Vec::new();
+
+        for (idx, result) in response.results.into_iter().enumerate() {
+            let Some(query) = queries.get(idx) else {
+                continue;
+            };
+            let package_name = query
+                .package
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            for vuln in result.vulns {
+                collected.push((vuln.id, package_name.clone()));
+            }
+
+            if let Some(token) = result.next_page_token {
+                let mut follow_up = query.clone();
+                follow_up.page_token = Some(token);
+                next_queries.push(follow_up);
+            }
+        }
+
+        (collected, next_queries)
+    }
+
+    /// Query an OSV batch, following `next_page_token` until every query is
+    /// exhausted. Unpaginated fetching silently truncates results = false
+    /// negatives, so there is no page cap (correctness over speed). A failed
+    /// page propagates rather than truncating: the source is marked partial by
+    /// the pipeline instead of silently reporting fewer vulnerabilities.
+    async fn query_batch_paginated(&self, batch: &[OsvQuery]) -> Result<Vec<(String, String)>> {
+        let mut collected = Vec::new();
+        let mut pending: Vec<OsvQuery> = batch.to_vec();
+
+        while !pending.is_empty() {
+            let response = self.query_batch(&pending).await?;
+            let (mut page, next_queries) = Self::collect_page(&pending, response);
+            collected.append(&mut page);
+            pending = next_queries;
+        }
+
+        Ok(collected)
+    }
+
     /// Query OSV batch API with retry logic
     async fn query_batch(&self, batch: &[OsvQuery]) -> Result<OsvBatchResponse> {
         let batch_len = batch.len();
@@ -822,6 +877,7 @@ impl VulnerabilityProvider for OsvSource {
                         purl: None,
                     }),
                     version: Some(version.clone()),
+                    page_token: None,
                 }
             })
             .collect();
@@ -855,41 +911,12 @@ impl VulnerabilityProvider for OsvSource {
         for batch in batches {
             debug!("Querying OSV API with {} packages", batch.len());
 
-            match self.query_batch(batch).await {
-                Ok(batch_response) => {
-                    debug!(
-                        "Successfully parsed batch response with {} results",
-                        batch_response.results.len()
-                    );
-
-                    // Collect vulnerability IDs and map them to packages
-                    for (idx, result) in batch_response.results.into_iter().enumerate() {
-                        let package_name = if let Some(query) = batch.get(idx) {
-                            query
-                                .package
-                                .as_ref()
-                                .map(|p| p.name.clone())
-                                .unwrap_or_else(|| "unknown".to_string())
-                        } else {
-                            "unknown".to_string()
-                        };
-
-                        for vuln in result.vulns {
-                            debug!(
-                                "Found vulnerability {} for package {}",
-                                vuln.id, package_name
-                            );
-                            all_vulnerability_ids.push(vuln.id.clone());
-                            package_vuln_mapping
-                                .entry(vuln.id)
-                                .or_default()
-                                .insert(package_name.clone());
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to query OSV batch: {}", e);
-                }
+            for (vuln_id, package_name) in self.query_batch_paginated(batch).await? {
+                all_vulnerability_ids.push(vuln_id.clone());
+                package_vuln_mapping
+                    .entry(vuln_id)
+                    .or_default()
+                    .insert(package_name);
             }
 
             // Update batch progress bar
@@ -1066,6 +1093,9 @@ struct OsvQuery {
     package: Option<OsvPackage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+    /// Continuation token from a prior page's `next_page_token`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_token: Option<String>,
 }
 
 /// OSV batch API response
@@ -1079,6 +1109,9 @@ struct OsvBatchResponse {
 struct OsvResult {
     #[serde(default)]
     vulns: Vec<OsvLightweightVuln>,
+    /// Present when this query has more results on a following page.
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 /// Lightweight vulnerability data from batch API
@@ -1715,6 +1748,61 @@ mod tests {
             .affected_versions
             .iter()
             .any(|range| range.contains(&Version::from_str("1.5.0").unwrap())));
+    }
+
+    #[test]
+    fn test_pagination_follows_next_page_token_across_pages() {
+        // Page 1: pkg-a paginates (token "t1"), pkg-b is complete.
+        let queries = vec![
+            OsvQuery {
+                package: Some(OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "pkg-a".to_string(),
+                    purl: None,
+                }),
+                version: Some("1.0".to_string()),
+                page_token: None,
+            },
+            OsvQuery {
+                package: Some(OsvPackage {
+                    ecosystem: "PyPI".to_string(),
+                    name: "pkg-b".to_string(),
+                    purl: None,
+                }),
+                version: Some("2.0".to_string()),
+                page_token: None,
+            },
+        ];
+        let page1: OsvBatchResponse = serde_json::from_str(
+            r#"{"results":[
+                {"vulns":[{"id":"VULN-A1"}],"next_page_token":"t1"},
+                {"vulns":[{"id":"VULN-B1"}]}
+            ]}"#,
+        )
+        .unwrap();
+
+        let (collected1, next_queries) = OsvSource::collect_page(&queries, page1);
+        assert_eq!(
+            collected1,
+            vec![
+                ("VULN-A1".to_string(), "pkg-a".to_string()),
+                ("VULN-B1".to_string(), "pkg-b".to_string()),
+            ]
+        );
+        // Only the paginating query is followed, and it carries the token.
+        assert_eq!(next_queries.len(), 1);
+        assert_eq!(next_queries[0].page_token.as_deref(), Some("t1"));
+        assert_eq!(next_queries[0].package.as_ref().unwrap().name, "pkg-a");
+
+        // Page 2: final page for pkg-a, no further token.
+        let page2: OsvBatchResponse =
+            serde_json::from_str(r#"{"results":[{"vulns":[{"id":"VULN-A2"}]}]}"#).unwrap();
+        let (collected2, done) = OsvSource::collect_page(&next_queries, page2);
+        assert_eq!(
+            collected2,
+            vec![("VULN-A2".to_string(), "pkg-a".to_string())]
+        );
+        assert!(done.is_empty(), "no token means pagination stops");
     }
 
     #[test]
