@@ -23,7 +23,7 @@ This method:
 
 ## From PyPI (Python Package)
 
-For Python 3.9-3.14 on Linux, macOS, and Windows:
+For Python 3.11-3.15 on Linux, macOS, and Windows:
 
 ```bash
 pip install pysentry-rs
@@ -82,31 +82,31 @@ For GitHub workflows, use the first-party action instead of installing manually 
     fail-on: high
 ```
 
-On push it uploads a SARIF report to Code Scanning; on pull requests it writes a compact report to the job summary. See the [CI guide](/ci) for all inputs and behavior.
+On push, it uploads a SARIF report to Code Scanning; on pull requests it writes a compact report to the job summary. See the [CI guide](/ci) for all inputs and behavior.
 
 ## Requirements
 
-| Method | Requirements |
-|--------|-------------|
-| uvx | Python 3.9-3.14 and [uv](https://docs.astral.sh/uv/) |
-| Binaries | No additional dependencies |
-| Python package | Python 3.9-3.14 |
-| Rust package / Source | Rust 1.79+ |
+| Method                | Requirements                                          |
+|-----------------------|-------------------------------------------------------|
+| uvx                   | Python 3.11-3.15 and [uv](https://docs.astral.sh/uv/) |
+| Binaries              | No additional dependencies                            |
+| Python package        | Python 3.11-3.15                                      |
+| Rust package / Source | Rust 1.79+                                            |
 
 ## Platform Support
 
 | Installation Method | Linux (x64) | Linux (ARM64) | macOS (x64) | macOS (ARM64) | Windows (x64) |
 |---------------------|-------------|---------------|-------------|---------------|---------------|
-| uvx | ✅ | ✅ | ✅ | ✅ | ✅ |
-| PyPI (pip) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Crates.io (cargo) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| GitHub Releases | ✅ | ✅ | ✅ | ✅ | ✅ |
-| From Source | ✅ | ✅ | ✅ | ✅ | ✅ |
+| uvx                 | ✅          | ✅            | ✅          | ✅            | ✅            |
+| PyPI (pip)          | ✅          | ✅            | ✅          | ✅            | ✅            |
+| Crates.io (cargo)   | ✅          | ✅            | ✅          | ✅            | ✅            |
+| GitHub Releases     | ✅          | ✅            | ✅          | ✅            | ✅            |
+| From Source         | ✅          | ✅            | ✅          | ✅            | ✅            |
 
-**Supported Python Versions**: 3.9, 3.10, 3.11, 3.12, 3.13, 3.14
+**Supported Python Versions**: 3.11, 3.12, 3.13, 3.14, 3.15
 
 :::note Free-threaded Python
-Prebuilt wheels are available for free-threaded **3.14t**, but not **3.13t** — PyO3's free-threaded support requires CPython 3.14 or later. On 3.13t, pip falls back to the source distribution (a Rust toolchain is required to build it).
+Prebuilt wheels are available for free-threaded **3.14t** and **3.15t**, but not **3.13t** — PyO3's free-threaded support requires CPython 3.15 or later. On 3.13t, pip falls back to the source distribution (a Rust toolchain is required to build it).
 :::
 
 **Supported Architectures**: x86_64 (x64), ARM64 (aarch64)

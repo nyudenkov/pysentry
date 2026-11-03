@@ -5,7 +5,7 @@ Thank you for your interest in contributing to PySentry.
 ## Prerequisites
 
 - Rust toolchain (stable) — install via [rustup](https://rustup.rs/)
-- Python 3.8+ (for Python bindings)
+- Python 3.11+ (for Python bindings)
 - [maturin](https://github.com/PyO3/maturin) for Python bindings development
 - [pre-commit](https://pre-commit.com/) for running hooks locally
 
