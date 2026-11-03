@@ -131,7 +131,7 @@ Full documentation lives at [https://docs.pysentry.com](https://docs.pysentry.co
 
 ## Requirements
 
-- **Python** 3.10–3.15 for the PyPI package
+- **Python** 3.11–3.15 for the PyPI package
 - **Rust** 1.79+ only for `cargo install` or building from source
 - **`uv`** (recommended) or **`pip-tools`** for scanning manifests without a lock file (`requirements.txt`, `pyproject.toml`, `Pipfile`) — auditing lock files needs no external tools
 
